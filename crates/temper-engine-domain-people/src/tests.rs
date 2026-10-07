@@ -328,7 +328,7 @@ fn provider_and_subject_identify_a_party_independent_of_display_fields() {
 
 #[test]
 fn all_roles_are_checked_and_refusals_are_saved() {
-    for role in [Role::Owner, Role::Maintainer, Role::Member, Role::Observer] {
+    for role in [Role::Owner, Role::Maintainer, Role::Member, Role::Observer, Role::Policy { role: 4 }] {
         let mut test = Test::new(LIMITS);
         test.member();
         test.send(Event::Roles { project: 1, holdings: Box::new([Holding { person: 1, role }]) });
@@ -343,6 +343,105 @@ fn all_roles_are_checked_and_refusals_are_saved() {
     let mut test = Test::new(LIMITS);
     test.member();
     assert_eq!(reply(&test.request(10, 1, ask(2))), Reply::Outcome(Outcome::Refused(Refusal::Role)));
+}
+
+#[test]
+fn policy_role_receives_shared_waiting_and_replays_its_key_after_restart() {
+    let mut live = Test::new(LIMITS);
+    live.signin(1, 10, identity(0, 1));
+    live.signin(2, 20, identity(0, 2));
+    let holdings = Box::new([
+        Holding { person: 1, role: Role::Policy { role: 4 } },
+        Holding { person: 2, role: Role::Policy { role: 4 } },
+    ]);
+    live.send(Event::Roles { project: 1, holdings: holdings.clone() });
+    let entry = Entry {
+        task: 7,
+        project: 1,
+        whom: Whom::Role { project: 1, role: 4 },
+        kind: EntryKind::PersonTask,
+        at: Wall::EPOCH,
+    };
+    live.send(Event::Waiting { task: 7, entries: Box::new([entry]) });
+    assert_eq!(live.d.cached_waiting(&LIMITS, 1).as_deref(), Some(&[entry][..]));
+    assert_eq!(live.d.cached_waiting(&LIMITS, 2).as_deref(), Some(&[entry][..]));
+    let ask = Ask::TakePerson { project: 1, task: 7 };
+    let request = route(&live.request(10, 1, ask.clone()));
+    let answered = live.send(Event::Decided { request, outcome: Outcome::PersonTaken { task: 7 } });
+    let saved = saved_answer(&answered);
+    live.send(Event::Waiting { task: 7, entries: Box::new([]) });
+    assert_eq!(live.d.cached_waiting(&LIMITS, 1).as_deref(), Some(&[][..]));
+    assert_eq!(live.d.cached_waiting(&LIMITS, 2).as_deref(), Some(&[][..]));
+
+    let mut cold = Test::new(LIMITS);
+    cold.d = Domain::new(&LIMITS, Box::new([]), 2);
+    cold.send(Event::Restore { record: Stored::Person { number: 1, identity: identity(0, 1) } });
+    cold.send(Event::Restore { record: Stored::Person { number: 2, identity: identity(0, 2) } });
+    cold.send(Event::Restore { record: Stored::Roles { project: 1, holdings } });
+    cold.send(Event::Restore {
+        record: Stored::SignIn { number: 10, person: 1, expires: Wall::from_nanos(Duration::from_secs(60).as_nanos()) },
+    });
+    cold.send(Event::Restore { record: saved });
+    cold.send(Event::Restored);
+    assert_eq!(reply(&cold.request(10, 1, ask)), Reply::Outcome(Outcome::PersonTaken { task: 7 }));
+}
+
+#[test]
+fn a_watch_key_is_volatile_and_replays_only_while_open() {
+    let mut test = Test::new(LIMITS);
+    test.member();
+    let ask = Ask::Watch { project: 1, subject: WatchSubject::Goals };
+    let request = route(&test.request(10, 13, ask.clone()));
+    let opened = test.send(Event::Decided { request, outcome: Outcome::Watching { watcher: Token::new(7) } });
+    assert_eq!(reply(&opened), Reply::Outcome(Outcome::Watching { watcher: Token::new(7) }));
+    assert!(!opened.iter().any(is_answer), "a watch has no durable answer row");
+    assert_eq!(reply(&test.request(10, 13, ask.clone())), Reply::Outcome(Outcome::Watching { watcher: Token::new(7) }));
+    assert!(test.send(Event::WatchClosed { watcher: Token::new(7) }).is_empty());
+    route(&test.request(10, 13, ask));
+}
+
+#[test]
+fn a_note_edit_checks_membership_then_retains_the_typed_refusal() {
+    let ask = Ask::EditNote {
+        project: 1,
+        name: 9,
+        scope: Box::new(NoteScope::Project),
+        change: Box::new(NoteChange::Delete { recalled: 1 }),
+    };
+    let mut member = Test::new(LIMITS);
+    member.member();
+    let request = route(&member.request(10, 14, ask.clone()));
+    let refused = member.send(Event::Decided { request, outcome: Outcome::Refused(Refusal::NotOffered) });
+    assert!(refused.iter().any(is_answer));
+    assert_eq!(reply(&member.request(10, 14, ask.clone())), Reply::Outcome(Outcome::Refused(Refusal::NotOffered)));
+
+    let mut observer = Test::new(LIMITS);
+    observer.member();
+    observer.send(Event::Roles { project: 1, holdings: Box::new([Holding { person: 1, role: Role::Observer }]) });
+    assert_eq!(reply(&observer.request(10, 14, ask)), Reply::Outcome(Outcome::Refused(Refusal::Role)));
+}
+
+#[test]
+fn only_held_policy_roles_consume_inbox_cache_room() {
+    let mut test = Test::new(Limits { holdings: 1, ..LIMITS });
+    test.member();
+    test.send(Event::Roles {
+        project: 1,
+        holdings: Box::new([Holding { person: 1, role: Role::Policy { role: 99 } }]),
+    });
+    let absent = Entry {
+        task: 7,
+        project: 1,
+        whom: Whom::Role { project: 1, role: 100 },
+        kind: EntryKind::PersonTask,
+        at: Wall::EPOCH,
+    };
+    test.send(Event::Waiting { task: 7, entries: Box::new([absent]) });
+    let held = Entry { task: 8, whom: Whom::Role { project: 1, role: 99 }, ..absent };
+    test.send(Event::Waiting { task: 8, entries: Box::new([held]) });
+    assert_eq!(test.d.cached_waiting(&test.env.limits, 1).as_deref(), Some(&[held][..]));
+    test.send(Event::Roles { project: 1, holdings: Box::new([]) });
+    assert_eq!(test.d.cached_waiting(&test.env.limits, 1).as_deref(), Some(&[][..]));
 }
 
 #[test]
@@ -864,7 +963,7 @@ fn authenticated_escalation_decisions_route_without_membership_and_io_pressure_i
     let ask = Ask::DecideEscalation { project: 1, task: 9, revision: 2, decision: EscalationDecision::Pass };
     let routed = test.request(10, 2, ask.clone());
     assert!(routed.iter().any(|row| match row {
-        Request::Route { person, role, ask: routed, .. } => *person == 1 && role.is_none() && *routed == ask,
+        Request::Route { person, role, ask: routed, .. } => *person == 1 && role.is_none() && **routed == ask,
         Request::Reply { .. }
         | Request::Save { .. }
         | Request::Erase { .. }

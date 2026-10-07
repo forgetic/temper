@@ -32,6 +32,12 @@ pub(crate) struct Pending {
     replies: List<ReplyTo>,
 }
 
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub(crate) struct OpenWatch {
+    ask: Ask,
+    watcher: Token,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Phase {
     Restoring,
@@ -56,6 +62,7 @@ pub struct Domain {
     roles: Map<u32, Box<[Holding]>>,
     owners: Box<[InitialOwner]>,
     answers: Map<RequestKey, Answered>,
+    open_watches: Map<RequestKey, OpenWatch>,
     answer_alarms: Deadlines<RequestKey>,
     pending: Slab<Pending>,
     flights: Map<RequestKey, Id<Pending>>,
@@ -98,7 +105,7 @@ impl Domain {
             waiting: Map::with_capacity(
                 limits
                     .people
-                    .checked_add(limits.projects.checked_mul(4).expect("role cache room"))
+                    .checked_add(limits.projects.checked_mul(limits.holdings).expect("role cache room"))
                     .expect("inbox cache room"),
             ),
             identities: Map::with_capacity(limits.people),
@@ -107,6 +114,7 @@ impl Domain {
             roles: Map::with_capacity(limits.projects),
             owners,
             answers: Map::with_capacity(limits.requests),
+            open_watches: Map::with_capacity(limits.requests),
             answer_alarms: Deadlines::with_capacity(limits.requests),
             pending: Slab::with_capacity(limits.pending),
             flights: Map::with_capacity(limits.pending),
@@ -391,6 +399,18 @@ pub fn max_out(limits: &Limits) -> u32 {
 /// targets for keyed replay.
 pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::WatchClosed { watcher } => {
+            let mut closed = None;
+            for (key, open) in &domain.open_watches {
+                if open.watcher == watcher {
+                    closed = Some(*key);
+                    break;
+                }
+            }
+            if let Some(key) = closed {
+                domain.open_watches.remove(&key);
+            }
+        }
         Event::MakeService { request, person } => make_service(domain, env, request, person, out),
         Event::Seed { project, collaborators } => seed(domain, &env.limits, project, &collaborators, out),
         Event::Waiting { task, entries } => replace_waiting(domain, &env.limits, task, &entries),
@@ -419,6 +439,7 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
                     out.push(Request::Save { record: Stored::Roles { project, holdings: holdings.clone() } });
                     let saved = domain.roles.insert(project, holdings);
                     assert!(saved.is_ok(), "roles admitted before mutation");
+                    prune_unheld_roles(domain, project);
                 }
                 Err(refusal) => out.push(Request::RolesRefused { project, refusal }),
             }
@@ -429,12 +450,7 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queu
 }
 
 fn role_number(role: Role) -> u32 {
-    match role {
-        Role::Owner => 0,
-        Role::Maintainer => 1,
-        Role::Member => 2,
-        Role::Observer => 3,
-    }
+    role.number()
 }
 
 fn newer(left: Entry, right: Entry) -> bool {
@@ -490,6 +506,16 @@ fn replace_waiting(domain: &mut Domain, limits: &Limits, task: u64, entries: &[E
         if entry.task != task || entry.project == 0 {
             continue;
         }
+        // A role with no holder has no party inbox to cache. The number of distinct held
+        // roles is bounded by holdings, even when a policy defines more roles.
+        match entry.whom {
+            Whom::Role { project, role } => {
+                if !held_role(domain, project, role) {
+                    continue;
+                }
+            }
+            Whom::Person(_) => {}
+        }
         let old = domain.waiting.remove(&entry.whom);
         let mut cached = List::with_capacity(limits.inbox_entries);
         if let Some(old) = old {
@@ -502,6 +528,35 @@ fn replace_waiting(domain: &mut Domain, limits: &Limits, task: u64, entries: &[E
             drop(domain.waiting.insert(entry.whom, cached.into_boxed()));
         }
     }
+}
+
+fn prune_unheld_roles(domain: &mut Domain, project: u32) {
+    let mut stale = List::with_capacity(domain.waiting.capacity());
+    for (whom, _) in &domain.waiting {
+        match *whom {
+            Whom::Role { project: entry_project, role } => {
+                if entry_project == project && !held_role(domain, project, role) {
+                    stale.push(*whom).expect("one cached role per waiting key");
+                }
+            }
+            Whom::Person(_) => {}
+        }
+    }
+    for whom in &stale {
+        domain.waiting.remove(whom);
+    }
+}
+
+fn held_role(domain: &Domain, project: u32, role: u32) -> bool {
+    let Some(holdings) = domain.roles.get(&project) else {
+        return false;
+    };
+    for holding in holdings {
+        if holding.role.number() == role {
+            return true;
+        }
+    }
+    false
 }
 
 /// One expiration per fire; other expirations stay due for later iterations. Expire at most one due
@@ -560,6 +615,8 @@ fn apply_roles(
     let project = match &flight.ask {
         Ask::SetRoles { project, .. } => *project,
         Ask::MakeService { .. }
+        | Ask::Watch { .. }
+        | Ask::EditNote { .. }
         | Ask::Adopt { .. }
         | Ask::ChangePolicy { .. }
         | Ask::SetPool { .. }
@@ -601,6 +658,8 @@ fn apply_roles(
             holdings.clone()
         }
         Ask::MakeService { .. }
+        | Ask::Watch { .. }
+        | Ask::EditNote { .. }
         | Ask::Adopt { .. }
         | Ask::ChangePolicy { .. }
         | Ask::SetPool { .. }
@@ -625,6 +684,7 @@ fn apply_roles(
     out.push(Request::Save { record: Stored::Roles { project, holdings: holdings.clone() } });
     let saved = domain.roles.insert(project, holdings);
     assert!(saved.is_ok(), "existing role row replaces without consuming capacity");
+    prune_unheld_roles(domain, project);
     Ok(())
 }
 
@@ -636,6 +696,10 @@ fn valid_roles(domain: &Domain, limits: &Limits, project: u32, holdings: &[Holdi
         return Err(Refusal::Busy);
     }
     for (at, holding) in holdings.iter().enumerate() {
+        match holding.role {
+            Role::Policy { role } if role <= 3 => return Err(Refusal::Limit),
+            Role::Owner | Role::Maintainer | Role::Member | Role::Observer | Role::Policy { .. } => {}
+        }
         for earlier in holdings.iter().take(at) {
             if earlier.person == holding.person {
                 return Err(Refusal::Limit);
@@ -694,7 +758,9 @@ fn make_service(domain: &mut Domain, env: &Env<Limits>, request: Token, person: 
     let flight = domain.pending.get(Id::from_token(request)).expect("service creation names a live keyed flight");
     let (project, name, service_role) = match &flight.ask {
         Ask::MakeService { project, name, role } => (*project, name.clone(), *role),
-        Ask::Adopt { .. }
+        Ask::Watch { .. }
+        | Ask::EditNote { .. }
+        | Ask::Adopt { .. }
         | Ask::SetGoal { .. }
         | Ask::Stop { .. }
         | Ask::Cancel { .. }
@@ -883,7 +949,9 @@ fn end_signin(domain: &mut Domain, number: u64, out: &mut Queue<Request>) {
 
 fn project(ask: &Ask) -> u32 {
     match ask {
-        Ask::MakeService { project, .. }
+        Ask::Watch { project, .. }
+        | Ask::EditNote { project, .. }
+        | Ask::MakeService { project, .. }
         | Ask::Adopt { project, .. }
         | Ask::SetRoles { project, .. }
         | Ask::ChangePolicy { project, .. }
@@ -906,6 +974,33 @@ fn project(ask: &Ask) -> u32 {
     }
 }
 
+fn watch_ask(ask: &Ask) -> bool {
+    match ask {
+        Ask::Watch { .. } => true,
+        Ask::EditNote { .. }
+        | Ask::MakeService { .. }
+        | Ask::Adopt { .. }
+        | Ask::SetRoles { .. }
+        | Ask::ChangePolicy { .. }
+        | Ask::SetPool { .. }
+        | Ask::StartChat { .. }
+        | Ask::DecideEscalation { .. }
+        | Ask::DecideProposal { .. }
+        | Ask::Say { .. }
+        | Ask::AnswerQuestion { .. }
+        | Ask::Prioritise { .. }
+        | Ask::Amend { .. }
+        | Ask::Move { .. }
+        | Ask::TakePerson { .. }
+        | Ask::HandBackPerson { .. }
+        | Ask::AnswerPerson { .. }
+        | Ask::Stop { .. }
+        | Ask::Cancel { .. }
+        | Ask::Release { .. }
+        | Ask::SetGoal { .. } => false,
+    }
+}
+
 fn valid_adoption(limits: &Limits, adoption: &crate::Adoption) -> bool {
     let Some(items) = adoption.resource.path.len().checked_add(adoption.options.len()) else { return false };
     let Some(mut bytes) = items.checked_mul(size_of::<Box<[u8]>>()) else { return false };
@@ -920,8 +1015,71 @@ fn valid_adoption(limits: &Limits, adoption: &crate::Adoption) -> bool {
     !adoption.resource.path.is_empty() && bytes <= usize::try_from(limits.amendment_bytes).expect("u32 fits usize")
 }
 
+fn note_pattern_bytes(pattern: &crate::Pattern) -> Option<usize> {
+    let mut bytes = pattern.segments.len().checked_mul(size_of::<Box<[u8]>>())?;
+    for segment in &pattern.segments {
+        bytes = bytes.checked_add(segment.len())?;
+    }
+    let last = match &pattern.last {
+        crate::Last::Exact(bytes) | crate::Last::Open(bytes) => bytes.len(),
+    };
+    bytes.checked_add(last)
+}
+
+fn valid_note(limits: &Limits, name: u64, scope: &crate::NoteScope, change: &crate::NoteChange) -> bool {
+    if name == 0 {
+        return false;
+    }
+    let scope_bytes = match scope {
+        crate::NoteScope::Deployment | crate::NoteScope::Project => 0,
+        crate::NoteScope::Goal { goal } => {
+            if *goal == 0 {
+                return false;
+            }
+            0
+        }
+        crate::NoteScope::Resources { pattern, .. } => {
+            let Some(bytes) = note_pattern_bytes(pattern) else { return false };
+            bytes
+        }
+    };
+    let change_bytes = match change {
+        crate::NoteChange::Correct { description, body, references, recalled } => {
+            if *recalled == 0 {
+                return false;
+            }
+            for number in references {
+                if *number == 0 {
+                    return false;
+                }
+            }
+            let Some(bytes) = description.len().checked_add(body.len()) else { return false };
+            let Some(ref_bytes) = references.len().checked_mul(size_of::<u64>()) else { return false };
+            let Some(total) = bytes.checked_add(ref_bytes) else { return false };
+            total
+        }
+        crate::NoteChange::Delete { recalled } => {
+            if *recalled == 0 {
+                return false;
+            }
+            0
+        }
+    };
+    match scope_bytes.checked_add(change_bytes) {
+        Some(bytes) => bytes <= usize::try_from(limits.amendment_bytes).expect("u32 fits usize"),
+        None => false,
+    }
+}
+
 fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
     match ask {
+        Ask::Watch { subject, .. } => match subject {
+            crate::WatchSubject::Run { task, attempt } => *task != 0 && *attempt != 0,
+            crate::WatchSubject::Tree { task } => *task != 0,
+            crate::WatchSubject::Goals => true,
+            crate::WatchSubject::Inbox { party } => *party != 0,
+        },
+        Ask::EditNote { name, scope, change, .. } => valid_note(limits, *name, scope, change),
         Ask::MakeService { name, .. } => {
             let Some(bytes) = name.len().checked_add(size_of::<u64>()) else {
                 return false;
@@ -1013,6 +1171,8 @@ fn valid_ask(limits: &Limits, ask: &Ask) -> bool {
 fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
     #[derive(PartialEq, Eq)]
     enum Expected {
+        Watch,
+        Note(u64),
         Service,
         Goal,
         Stop(u64),
@@ -1036,6 +1196,8 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
     }
 
     let expected = match ask {
+        Ask::Watch { .. } => Expected::Watch,
+        Ask::EditNote { name, .. } => Expected::Note(*name),
         Ask::MakeService { .. } => Expected::Service,
         Ask::Adopt { project, .. } => Expected::Adoption(*project),
         Ask::SetGoal { .. } => Expected::Goal,
@@ -1072,6 +1234,8 @@ fn valid_answer_shape(ask: &Ask, outcome: Outcome) -> bool {
     };
 
     match outcome {
+        Outcome::Watching { .. } => expected == Expected::Watch,
+        Outcome::NoteEdited { name } => expected == Expected::Note(name),
         Outcome::ServiceMade { person } => expected == Expected::Service && person != 0,
         Outcome::Adopted { project } => expected == Expected::Adoption(project),
         Outcome::GoalStarted { task } => expected == Expected::Goal && task != 0,
@@ -1135,6 +1299,10 @@ fn admit_ask(
     if let Some(answer) = domain.answers.get(&key)
         && (answer_expiry(answer.at, &env.limits) <= env.wall || answer.due <= env.now)
     {
+        if watch_ask(&ask) {
+            // Expiry housekeeping is a store decision of its own; opening a view writes nothing.
+            return refused(to, Refusal::Busy, out);
+        }
         let old = domain.answers.remove(&key);
         assert!(old.is_some(), "expired answer was retained");
         domain.answer_alarms.cancel(key);
@@ -1145,6 +1313,12 @@ fn admit_ask(
             return refused(to, Refusal::KeyConflict, out);
         }
         return out.push(Request::Reply { to, reply: Reply::Outcome(answer.outcome) });
+    }
+    if let Some(open) = domain.open_watches.get(&key) {
+        if open.ask != ask {
+            return refused(to, Refusal::KeyConflict, out);
+        }
+        return out.push(Request::Reply { to, reply: Reply::Outcome(Outcome::Watching { watcher: open.watcher }) });
     }
     if let Some(id) = domain.flights.get(&key).copied() {
         let flight = domain.pending.get_mut(id).expect("key index names live pending request");
@@ -1158,12 +1332,25 @@ fn admit_ask(
         return;
     }
     // An accepted flight reserves one answered record, even while pending.
-    if domain.answers.len().saturating_add(domain.flights.len()) >= env.limits.requests {
+    if domain.answers.len().saturating_add(domain.flights.len()).saturating_add(domain.open_watches.len())
+        >= env.limits.requests
+    {
         return refused(to, Refusal::Busy, out);
     }
     let project = project(&ask);
     let role = role(domain, key.person, project);
     let refusal = match &ask {
+        Ask::Watch { subject, .. } => match subject {
+            crate::WatchSubject::Inbox { party } if *party == key.person => None,
+            crate::WatchSubject::Inbox { .. } => Some(Refusal::Standing),
+            crate::WatchSubject::Run { .. } | crate::WatchSubject::Tree { .. } | crate::WatchSubject::Goals => {
+                if role.is_some() { None } else { Some(Refusal::Role) }
+            }
+        },
+        Ask::EditNote { .. } => match role {
+            Some(Role::Owner | Role::Maintainer | Role::Member | Role::Policy { .. }) => None,
+            Some(Role::Observer) | None => Some(Refusal::Role),
+        },
         Ask::MakeService { .. }
         | Ask::Adopt { .. }
         | Ask::SetRoles { .. }
@@ -1186,25 +1373,25 @@ fn admit_ask(
                 Some(Refusal::Role)
             } else {
                 match role {
-                    Some(Role::Owner | Role::Maintainer | Role::Member) => None,
+                    Some(Role::Owner | Role::Maintainer | Role::Member | Role::Policy { .. }) => None,
                     Some(Role::Observer) | None => Some(Refusal::Role),
                 }
             }
         }
         Ask::SetGoal { .. } => match role {
-            Some(Role::Owner | Role::Maintainer | Role::Member) => None,
+            Some(Role::Owner | Role::Maintainer | Role::Member | Role::Policy { .. }) => None,
             Some(Role::Observer) | None => Some(Refusal::Role),
         },
         Ask::Say { .. } | Ask::AnswerQuestion { .. } => match role {
-            Some(Role::Owner | Role::Maintainer | Role::Member) => None,
+            Some(Role::Owner | Role::Maintainer | Role::Member | Role::Policy { .. }) => None,
             Some(Role::Observer) | None => Some(Refusal::Role),
         },
         Ask::Prioritise { .. } => match role {
-            Some(Role::Owner | Role::Maintainer) => None,
+            Some(Role::Owner | Role::Maintainer | Role::Policy { .. }) => None,
             Some(Role::Member | Role::Observer) | None => Some(Refusal::Role),
         },
         Ask::Amend { .. } => match role {
-            Some(Role::Owner | Role::Maintainer | Role::Member) => None,
+            Some(Role::Owner | Role::Maintainer | Role::Member | Role::Policy { .. }) => None,
             Some(Role::Observer) | None => Some(Refusal::Role),
         },
         Ask::DecideEscalation { .. }
@@ -1219,7 +1406,9 @@ fn admit_ask(
     };
     if let Some(refusal) = refusal {
         let outcome = Outcome::Refused(refusal);
-        save_answer(domain, env, key, ask, outcome, out);
+        if !watch_ask(&ask) {
+            save_answer(domain, env, key, ask, outcome, out);
+        }
         return out.push(Request::Reply { to, reply: Reply::Outcome(outcome) });
     }
     if domain.pending.is_full() {
@@ -1231,7 +1420,7 @@ fn admit_ask(
     let id = domain.pending.insert(flight).expect("pending request admitted");
     let indexed = domain.flights.insert(key, id);
     assert!(indexed == Ok(None), "one key per flight within pending capacity");
-    out.push(Request::Route { request: id.token(), person: key.person, project, role, ask });
+    out.push(Request::Route { request: id.token(), person: key.person, project, role, ask: Box::new(ask) });
     fact(domain, Fact::Routed { person: key.person });
 }
 
@@ -1260,11 +1449,49 @@ fn decided(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, outcome: Out
     domain.pending.retire(id);
     let removed = domain.flights.remove(&key);
     assert!(removed == Some(id), "flight has one key index");
+    if watch_ask(&ask) {
+        match outcome {
+            Outcome::Watching { watcher } => {
+                let inserted = domain.open_watches.insert(key, OpenWatch { ask, watcher });
+                assert!(inserted == Ok(None), "watch reserves its volatile key slot at admission");
+            }
+            Outcome::Refused(_) => {}
+            Outcome::NoteEdited { .. }
+            | Outcome::ServiceMade { .. }
+            | Outcome::Adopted { .. }
+            | Outcome::GoalStarted { .. }
+            | Outcome::GoalProposed { .. }
+            | Outcome::Stopped { .. }
+            | Outcome::Cancelled { .. }
+            | Outcome::Released { .. }
+            | Outcome::PersonTaken { .. }
+            | Outcome::PersonHandedBack { .. }
+            | Outcome::PersonAnswered { .. }
+            | Outcome::Moved { .. }
+            | Outcome::ProposalDecided { .. }
+            | Outcome::Said { .. }
+            | Outcome::QuestionAnswered { .. }
+            | Outcome::Prioritised { .. }
+            | Outcome::Amended { .. }
+            | Outcome::AmendProposed { .. }
+            | Outcome::RolesSet { .. }
+            | Outcome::PolicyChanged { .. }
+            | Outcome::PoolSet { .. }
+            | Outcome::EscalationDecided { .. }
+            | Outcome::Started { .. } => unreachable!("watch has only an opened or refused terminal"),
+        }
+        for to in replies.into_boxed() {
+            out.push(Request::Reply { to, reply: Reply::Outcome(outcome) });
+        }
+        return;
+    }
     match outcome {
+        Outcome::Watching { .. } => unreachable!("only a watch can open a view"),
         // A refused admission is retryable with the same key, including
         // pressure reported by tasks or another child through the root.
         Outcome::Refused(Refusal::Busy | Refusal::NotReady) => {}
-        Outcome::ServiceMade { .. }
+        Outcome::NoteEdited { .. }
+        | Outcome::ServiceMade { .. }
         | Outcome::Adopted { .. }
         | Outcome::RolesSet { .. }
         | Outcome::PolicyChanged { .. }
@@ -1287,7 +1514,8 @@ fn decided(domain: &mut Domain, env: &Env<Limits>, id: Id<Pending>, outcome: Out
         | Outcome::EscalationDecided { .. }
         | Outcome::ProposalDecided { .. }
         | Outcome::Refused(
-            Refusal::NoFurther
+            Refusal::NotOffered
+            | Refusal::NoFurther
             | Refusal::Standing
             | Refusal::SignIn
             | Refusal::Role
@@ -1331,7 +1559,8 @@ fn restore(domain: &mut Domain, env: &Env<Limits>, record: Stored, out: &mut Que
         }
         Stored::Policy { .. } => false,
         Stored::Answer { key, ask, outcome, at } => {
-            valid_ask(&env.limits, ask)
+            !watch_ask(ask)
+                && valid_ask(&env.limits, ask)
                 && valid_answer_shape(ask, *outcome)
                 && !domain.answers.contains_key(key)
                 && (answer_expiry(*at, &env.limits) <= env.wall || domain.answers.len() < env.limits.requests)
@@ -1403,6 +1632,7 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
             return restore_failed(domain, Key::Answer(*key), Refusal::Unknown, out);
         }
         match answer.outcome {
+            Outcome::Watching { .. } => unreachable!("open watches are never stored"),
             Outcome::ServiceMade { person } => {
                 let Some(identity) = domain.people.get(&person) else {
                     return restore_failed(domain, Key::Answer(*key), Refusal::Unknown, out);
@@ -1422,7 +1652,9 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                         }
                     }
                 }
-                Ask::MakeService { .. }
+                Ask::Watch { .. }
+                | Ask::EditNote { .. }
+                | Ask::MakeService { .. }
                 | Ask::StartChat { .. }
                 | Ask::Adopt { .. }
                 | Ask::ChangePolicy { .. }
@@ -1444,7 +1676,8 @@ fn restored(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                     unreachable!("restored role success has a matching roster ask");
                 }
             },
-            Outcome::Adopted { .. }
+            Outcome::NoteEdited { .. }
+            | Outcome::Adopted { .. }
             | Outcome::Started { .. }
             | Outcome::PolicyChanged { .. }
             | Outcome::PoolSet { .. }

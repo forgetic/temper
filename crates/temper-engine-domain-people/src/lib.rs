@@ -50,8 +50,8 @@ pub use amendment::{
 };
 pub use boundary::{
     Adoption, Ask, Entry, EntryKind, EscalationChoice, EscalationDecision, Event, Holding, Identity, IdentityKey,
-    InitialOwner, Key, Kind, Outcome, PersonResult, ProposalChoice, ProposalDecision, Refusal, Reply, Request,
-    RequestKey, ResourceName, ResourceRole, ResultRef, Role, Seed, Stored, Whom,
+    InitialOwner, Key, Kind, NoteChange, NoteScope, Outcome, PersonResult, ProposalChoice, ProposalDecision, Refusal,
+    Reply, Request, RequestKey, ResourceName, ResourceRole, ResultRef, Role, Seed, Stored, WatchSubject, Whom,
 };
 pub use domain::{Domain, fire, max_out, step};
 pub use facts::Fact;

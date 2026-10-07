@@ -144,6 +144,17 @@ pub(super) fn begin(
         refused(domain, request, problem);
         return;
     }
+    for holding in &holdings {
+        match holding.role {
+            people::Role::Policy { role } => {
+                if domain.config.authority.role(project, role).is_none() {
+                    refused(domain, request, people::Refusal::Unknown);
+                    return;
+                }
+            }
+            people::Role::Owner | people::Role::Maintainer | people::Role::Member | people::Role::Observer => {}
+        }
+    }
     let contexts = match inspected(domain, env, request, project) {
         Ok(contexts) => contexts,
         Err(problem) => {

@@ -146,6 +146,10 @@ pub(super) fn begin(
     let any_task = match role {
         people::Role::Owner | people::Role::Maintainer => true,
         people::Role::Member | people::Role::Observer => false,
+        people::Role::Policy { .. } => match domain.config.authority.role(project, role.number()) {
+            Some(policy) => policy.requests.allows(authority::RequestKind::Amend),
+            None => false,
+        },
     };
     if context.project != project || !any_task && !person_tree(domain, person, task) {
         return person_control_refused(domain, request, people::Refusal::Standing);

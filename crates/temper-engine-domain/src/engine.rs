@@ -478,7 +478,7 @@ pub enum Event {
     /// An untrusted provider hint; the connector reads current facts.
     ForgeHint { hint: forge_client::api::Hint },
     /// An authenticated person opens one live run, task-tree or project-goal watch.
-    Watch { watcher: Token, sign_in: u64, subject: views::Subject },
+    Watch { watcher: Token, sign_in: u64, key: [u8; 16], subject: views::Subject },
     /// A person or stream stops one watch.
     Unwatch { watcher: Token },
     /// One watcher delivery was consumed or dropped by its stream.
@@ -1254,12 +1254,20 @@ fn environment_views(env: &Env<Limits>) -> Env<views::Limits> {
     Env { now: env.now, wall: env.wall, limits: env.limits.views }
 }
 
-fn view_outputs(domain: &mut Domain, output: &mut Queue<views::Request>, out: &mut Queue<Request>) {
+fn view_outputs(domain: &mut Domain, env: &Env<Limits>, output: &mut Queue<views::Request>, out: &mut Queue<Request>) {
     for _ in 0..output.len() {
         let request = output.pop().expect("view output count");
         match request {
             views::Request::Ended { watcher, .. } | views::Request::Refused { watcher, .. } => {
                 domain.watching.remove(&watcher);
+                let mut people_out = Queue::with_capacity(people::max_out(&env.limits.people));
+                people::step(
+                    &mut domain.people,
+                    &environment_people(env),
+                    people::Event::WatchClosed { watcher },
+                    &mut people_out,
+                );
+                assert!(people_out.is_empty(), "closing a live watch writes nothing");
             }
             views::Request::Watching { .. } | views::Request::Deliver { .. } => {}
         }
@@ -1270,7 +1278,207 @@ fn view_outputs(domain: &mut Domain, output: &mut Queue<views::Request>, out: &m
 fn view_step(domain: &mut Domain, env: &Env<Limits>, event: views::Event, out: &mut Queue<Request>) {
     let mut child = Queue::with_capacity(views::max_out(&env.limits.views));
     views::step(&mut domain.views, &environment_views(env), event, &mut child);
-    view_outputs(domain, &mut child, out);
+    view_outputs(domain, env, &mut child, out);
+}
+
+fn watch_subject(subject: views::Subject) -> people::WatchSubject {
+    match subject {
+        views::Subject::Run { task, attempt } => people::WatchSubject::Run { task: task.raw(), attempt: attempt.raw() },
+        views::Subject::Tree { task } => people::WatchSubject::Tree { task: task.raw() },
+        views::Subject::Goals { .. } => people::WatchSubject::Goals,
+        views::Subject::Inbox { party } => people::WatchSubject::Inbox { party },
+    }
+}
+
+fn watched_project(domain: &Domain, subject: views::Subject) -> u32 {
+    match subject {
+        views::Subject::Run { task, .. } | views::Subject::Tree { task } => match domain.tasks.delegation(task.raw()) {
+            Some(context) => context.project,
+            None => 0,
+        },
+        views::Subject::Goals { project } => project,
+        views::Subject::Inbox { .. } => 0,
+    }
+}
+
+fn watch_views(subject: people::WatchSubject, project: u32) -> views::Subject {
+    match subject {
+        people::WatchSubject::Run { task, attempt } => {
+            views::Subject::Run { task: Token::new(task), attempt: Token::new(attempt) }
+        }
+        people::WatchSubject::Tree { task } => views::Subject::Tree { task: Token::new(task) },
+        people::WatchSubject::Goals => views::Subject::Goals { project },
+        people::WatchSubject::Inbox { party } => views::Subject::Inbox { party },
+    }
+}
+
+fn watch_authorized(domain: &Domain, project: u32, role: Option<people::Role>) -> bool {
+    let Some(role) = role else { return false };
+    match domain.config.authority.role(project, role.number()) {
+        Some(policy) => policy.requests.allows(authority::RequestKind::Watch),
+        None => false,
+    }
+}
+
+fn note_authorized(domain: &Domain, project: u32, role: Option<people::Role>, scope: &people::NoteScope) -> bool {
+    let Some(role) = role else { return false };
+    let Some(policy) = domain.config.authority.role(project, role.number()) else { return false };
+    match scope {
+        people::NoteScope::Deployment => policy.authority.notes.0 & 4 != 0,
+        people::NoteScope::Project => policy.authority.notes.0 & 2 != 0,
+        people::NoteScope::Goal { .. } => policy.authority.notes.0 & 1 != 0,
+        people::NoteScope::Resources { connector, pattern } => {
+            let needed = policy_translate::pattern_to_authority(pattern.clone());
+            for offered in &policy.authority.note_resources {
+                if offered.connector == *connector && authority::pattern_at_most(&needed, &offered.pattern) {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+}
+
+/// A watch uses people's keyed admission, then opens a volatile view after the last commit is
+/// durable. Its key is retained only while the view is open (domain/people.md, 5.1; domain/root.md, 4).
+#[expect(clippy::too_many_arguments, reason = "watch admission carries the signed-in caller, key and subject")]
+#[expect(clippy::too_many_lines, reason = "one keyed watch admission owns the view opening and terminal answer")]
+fn open_watch(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    watcher: Token,
+    sign_in: u64,
+    key: [u8; 16],
+    project: u32,
+    subject: people::WatchSubject,
+    out: &mut Queue<Request>,
+) {
+    if !domain.ready() || !domain.counters.quiescent(&domain.journal) || !domain.work.is_empty() {
+        out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Busy });
+        return;
+    }
+    let ask = people::Ask::Watch { project, subject };
+    let mut admitted = Queue::with_capacity(people::max_out(&env.limits.people));
+    people::step(
+        &mut domain.people,
+        &environment_people(env),
+        people::Event::Ask { reply_to: ReplyTo::new(watcher), sign_in, key, ask },
+        &mut admitted,
+    );
+    let mut opened = false;
+    for _ in 0..admitted.len() {
+        match admitted.pop().expect("watch admission output count") {
+            people::Request::Route { request, person, project, role, ask } => {
+                let people::Ask::Watch { subject, .. } = *ask else {
+                    unreachable!("watch admission routes only its watch ask")
+                };
+                let subject = watch_views(subject, project);
+                let actual = watched_project(domain, subject);
+                let inbox = match subject {
+                    views::Subject::Inbox { .. } => true,
+                    views::Subject::Run { .. } | views::Subject::Tree { .. } | views::Subject::Goals { .. } => false,
+                };
+                let outcome = if actual != project || (project == 0 && !inbox) {
+                    people::Outcome::Refused(people::Refusal::Unknown)
+                } else if project != 0 && !watch_authorized(domain, project, role) {
+                    people::Outcome::Refused(people::Refusal::Authority)
+                } else if domain.watching.contains_key(&watcher) || domain.watching.len() >= env.limits.views.watchers {
+                    people::Outcome::Refused(people::Refusal::Busy)
+                } else {
+                    match view_snapshot(domain, subject, env.limits.views.snapshot_bytes) {
+                        Some(snapshot) => {
+                            let mut views_out = Queue::with_capacity(views::max_out(&env.limits.views));
+                            views::step(
+                                &mut domain.views,
+                                &environment_views(env),
+                                views::Event::Watch { watcher, subject, snapshot },
+                                &mut views_out,
+                            );
+                            let mut result = people::Outcome::Refused(people::Refusal::Unknown);
+                            for _ in 0..views_out.len() {
+                                match views_out.pop().expect("watch output count") {
+                                    views::Request::Watching { watcher: opened_watcher } => {
+                                        assert!(opened_watcher == watcher, "watch name is echoed");
+                                        out.push(Request::View(views::Request::Watching { watcher }));
+                                        result = people::Outcome::Watching { watcher };
+                                        opened = true;
+                                    }
+                                    request @ views::Request::Deliver { .. } => out.push(Request::View(request)),
+                                    views::Request::Refused { refusal, .. } => {
+                                        result = people::Outcome::Refused(match refusal {
+                                            views::Refusal::Busy => people::Refusal::Busy,
+                                            views::Refusal::Oversized => people::Refusal::Limit,
+                                            views::Refusal::Unknown | views::Refusal::Unfollowed => {
+                                                people::Refusal::Unknown
+                                            }
+                                        });
+                                    }
+                                    views::Request::Ended { .. } => {
+                                        unreachable!("a new watch cannot end before opening")
+                                    }
+                                }
+                            }
+                            result
+                        }
+                        None => people::Outcome::Refused(people::Refusal::Limit),
+                    }
+                };
+                if opened {
+                    let inserted = domain.watching.insert(watcher, person);
+                    assert!(inserted == Ok(None), "watch slot checked before opening");
+                }
+                let mut decided = Queue::with_capacity(people::max_out(&env.limits.people));
+                people::step(
+                    &mut domain.people,
+                    &environment_people(env),
+                    people::Event::Decided { request, outcome },
+                    &mut decided,
+                );
+                while let Some(reply) = decided.pop() {
+                    match reply {
+                        people::Request::Reply { to, reply } => match reply {
+                            people::Reply::Outcome(people::Outcome::Watching { watcher: first }) => {
+                                if !opened {
+                                    out.push(Request::View(views::Request::Watching { watcher: first }));
+                                }
+                            }
+                            people::Reply::Outcome(people::Outcome::Refused(refusal))
+                            | people::Reply::Refused(refusal) => {
+                                out.push(Request::WatchRefused { watcher: to.into_token(), refusal });
+                            }
+                            people::Reply::Outcome(_) | people::Reply::SignedIn { .. } | people::Reply::SignedOut => {
+                                unreachable!("watch replies only with open or refusal")
+                            }
+                        },
+                        people::Request::Save { .. }
+                        | people::Request::Erase { .. }
+                        | people::Request::Route { .. }
+                        | people::Request::RolesApplied { .. }
+                        | people::Request::RolesRefused { .. }
+                        | people::Request::ServiceMade { .. }
+                        | people::Request::RestoreRefused { .. } => unreachable!("watch writes nothing"),
+                    }
+                }
+            }
+            people::Request::Reply { to, reply } => match reply {
+                people::Reply::Outcome(people::Outcome::Watching { watcher: first }) => {
+                    out.push(Request::View(views::Request::Watching { watcher: first }));
+                }
+                people::Reply::Outcome(people::Outcome::Refused(refusal)) | people::Reply::Refused(refusal) => {
+                    out.push(Request::WatchRefused { watcher: to.into_token(), refusal });
+                }
+                people::Reply::Outcome(_) | people::Reply::SignedIn { .. } | people::Reply::SignedOut => {
+                    unreachable!("watch admission reply shape")
+                }
+            },
+            people::Request::Save { .. }
+            | people::Request::Erase { .. }
+            | people::Request::RolesApplied { .. }
+            | people::Request::RolesRefused { .. }
+            | people::Request::ServiceMade { .. }
+            | people::Request::RestoreRefused { .. } => unreachable!("watch admission writes nothing"),
+        }
+    }
 }
 
 fn view_byte(bytes: &mut List<u8>, value: &[u8]) -> Option<()> {
@@ -1467,55 +1675,9 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 }
             }
         }
-        Event::Watch { watcher, sign_in, subject } => {
-            if !domain.ready() || !domain.counters.quiescent(&domain.journal) || !domain.work.is_empty() {
-                out.push(Request::View(views::Request::Refused { watcher, refusal: views::Refusal::Busy }));
-                return;
-            }
-            let person = domain.people.person(sign_in, env.now, env.wall);
-            let project = match subject {
-                views::Subject::Run { task, .. } | views::Subject::Tree { task } => {
-                    match domain.tasks.delegation(task.raw()) {
-                        Some(context) => Some(context.project),
-                        None => None,
-                    }
-                }
-                views::Subject::Goals { project } => Some(project),
-                views::Subject::Inbox { .. } => None,
-            };
-            let Some(person) = person else {
-                out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Unknown });
-                return;
-            };
-            match subject {
-                views::Subject::Inbox { party } => {
-                    if party != person {
-                        out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Standing });
-                        return;
-                    }
-                }
-                views::Subject::Run { .. } | views::Subject::Tree { .. } | views::Subject::Goals { .. } => {
-                    let Some(project) = project else {
-                        out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Unknown });
-                        return;
-                    };
-                    if domain.people.role(person, project).is_none() {
-                        out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Standing });
-                        return;
-                    }
-                }
-            }
-            if domain.watching.contains_key(&watcher) || domain.watching.len() >= env.limits.views.watchers {
-                out.push(Request::View(views::Request::Refused { watcher, refusal: views::Refusal::Busy }));
-                return;
-            }
-            domain.watching.insert(watcher, person).expect("one bounded watcher");
-            let Some(snapshot) = view_snapshot(domain, subject, env.limits.views.snapshot_bytes) else {
-                domain.watching.remove(&watcher);
-                out.push(Request::View(views::Request::Refused { watcher, refusal: views::Refusal::Oversized }));
-                return;
-            };
-            view_step(domain, env, views::Event::Watch { watcher, subject, snapshot }, out);
+        Event::Watch { watcher, sign_in, key, subject } => {
+            let project = watched_project(domain, subject);
+            open_watch(domain, env, watcher, sign_in, key, project, watch_subject(subject), out);
             return;
         }
         Event::Unwatch { watcher } => {
@@ -1684,6 +1846,10 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
             domain.work.push(Work::People(people::Event::SignedIn { reply_to, person, sign_in, identity, kind }));
         }
         Event::Ask { reply_to, sign_in, key, ask } => {
+            if let people::Ask::Watch { project, subject } = &ask {
+                open_watch(domain, env, reply_to.into_token(), sign_in, key, *project, *subject, out);
+                return;
+            }
             if !domain.ready() || !admits(domain, &env.limits) {
                 out.push(Request::Deliver(Delivery::WebReply {
                     to: reply_to,
@@ -2164,7 +2330,7 @@ fn fire_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>)
     if !domain.watching.is_empty() {
         let mut view_out = Queue::with_capacity(views::max_out(&env.limits.views));
         views::fire(&mut domain.views, &environment_views(env), &mut view_out);
-        view_outputs(domain, &mut view_out, out);
+        view_outputs(domain, env, &mut view_out, out);
     }
     if !domain.ready() || !admits(domain, &env.limits) {
         return;
@@ -2355,7 +2521,7 @@ fn route_person_priorities(
     goals: Box<[(u64, u32)]>,
 ) {
     let allowed = match role {
-        Some(people::Role::Owner | people::Role::Maintainer) => {
+        Some(people::Role::Owner | people::Role::Maintainer | people::Role::Policy { .. }) => {
             match domain.config.authority.role(project, escalation::role_number(role.expect("checked role"))) {
                 Some(policy) => policy.requests.allows(authority::RequestKind::Amend),
                 None => false,
@@ -2393,7 +2559,19 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
             people::Request::Reply { to, reply } => {
                 emit(decision, &env.limits, Delivery::WebReply { to, sign_in: domain.signing_in, reply });
             }
-            people::Request::Route { request, person, project, role, ask } => match ask {
+            people::Request::Route { request, person, project, role, ask } => match *ask {
+                people::Ask::Watch { .. } => unreachable!("watch routes before the decision loop"),
+                people::Ask::EditNote { scope, .. } => {
+                    let allowed = note_authorized(domain, project, role, &scope);
+                    domain.work.push(Work::People(people::Event::Decided {
+                        request,
+                        outcome: people::Outcome::Refused(if allowed {
+                            people::Refusal::NotOffered
+                        } else {
+                            people::Refusal::Authority
+                        }),
+                    }));
+                }
                 people::Ask::MakeService { role: service_role, .. } => {
                     let outcome = match roles::allowed(domain, person, project) {
                         Ok(())
@@ -2462,13 +2640,13 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                         priority,
                     );
                 }
-                people::Ask::Stop { .. } | people::Ask::Cancel { .. } | people::Ask::Release { .. } => {
-                    route_person_control(domain, request, person, project, role, ask);
+                control @ (people::Ask::Stop { .. } | people::Ask::Cancel { .. } | people::Ask::Release { .. }) => {
+                    route_person_control(domain, request, person, project, role, control);
                 }
-                people::Ask::TakePerson { .. }
+                task_ask @ (people::Ask::TakePerson { .. }
                 | people::Ask::HandBackPerson { .. }
-                | people::Ask::AnswerPerson { .. } => {
-                    route_person_task(domain, request, person, project, role, ask);
+                | people::Ask::AnswerPerson { .. }) => {
+                    route_person_task(domain, request, person, project, role, task_ask);
                 }
                 people::Ask::Say { task, words, .. } => {
                     route_person_message(domain, env, request, person, project, task, None, words);
@@ -2482,9 +2660,9 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                 people::Ask::Amend { task, amendment, .. } => {
                     amendments::begin(domain, env, request, person, role, project, task, amendment);
                 }
-                people::Ask::StartChat { .. } => {
+                chat_ask @ people::Ask::StartChat { .. } => {
                     let Some(role) = role else { unreachable!("chat membership admitted") };
-                    make_chat(domain, env, request, person, project, role, ask);
+                    make_chat(domain, env, request, person, project, role, chat_ask);
                 }
                 people::Ask::SetRoles { holdings, .. } => {
                     roles::begin(domain, env, decision, request, person, project, holdings);
@@ -2552,6 +2730,8 @@ fn route_person_task(
         | people::Ask::AnswerQuestion { .. }
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
+        | people::Ask::Watch { .. }
+        | people::Ask::EditNote { .. }
         | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::Adopt { .. }
@@ -2584,6 +2764,8 @@ fn route_person_task(
                         | people::Ask::AnswerQuestion { .. }
                         | people::Ask::Prioritise { .. }
                         | people::Ask::Amend { .. }
+                        | people::Ask::Watch { .. }
+                        | people::Ask::EditNote { .. }
                         | people::Ask::MakeService { .. }
                         | people::Ask::SetRoles { .. }
                         | people::Ask::Adopt { .. }
@@ -2607,6 +2789,8 @@ fn route_person_task(
                     | people::Ask::AnswerQuestion { .. }
                     | people::Ask::Prioritise { .. }
                     | people::Ask::Amend { .. }
+                    | people::Ask::Watch { .. }
+                    | people::Ask::EditNote { .. }
                     | people::Ask::MakeService { .. }
                     | people::Ask::SetRoles { .. }
                     | people::Ask::Adopt { .. }
@@ -2652,6 +2836,8 @@ fn route_person_task(
         | people::Ask::AnswerQuestion { .. }
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
+        | people::Ask::Watch { .. }
+        | people::Ask::EditNote { .. }
         | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::Adopt { .. }
@@ -2697,8 +2883,9 @@ fn route_person_control(
     role: Option<people::Role>,
     ask: people::Ask,
 ) {
-    let task = match &ask {
-        people::Ask::Stop { task, .. } | people::Ask::Cancel { task, .. } | people::Ask::Release { task, .. } => *task,
+    let (task, control_kind) = match &ask {
+        people::Ask::Stop { task, .. } | people::Ask::Cancel { task, .. } => (*task, authority::RequestKind::Cancel),
+        people::Ask::Release { task, .. } => (*task, authority::RequestKind::Release),
         people::Ask::TakePerson { .. }
         | people::Ask::HandBackPerson { .. }
         | people::Ask::AnswerPerson { .. }
@@ -2708,6 +2895,8 @@ fn route_person_control(
         | people::Ask::AnswerQuestion { .. }
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
+        | people::Ask::Watch { .. }
+        | people::Ask::EditNote { .. }
         | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::Adopt { .. }
@@ -2728,6 +2917,10 @@ fn route_person_control(
     let any_task = match holding {
         people::Role::Owner | people::Role::Maintainer => true,
         people::Role::Member | people::Role::Observer => false,
+        people::Role::Policy { .. } => match domain.config.authority.role(project, holding.number()) {
+            Some(policy) => policy.requests.allows(control_kind),
+            None => false,
+        },
     };
     if context.project != project || !any_task && !person_tree(domain, person, task) {
         return person_control_refused(domain, request, people::Refusal::Standing);
@@ -2749,6 +2942,8 @@ fn route_person_control(
         | people::Ask::AnswerQuestion { .. }
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
+        | people::Ask::Watch { .. }
+        | people::Ask::EditNote { .. }
         | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::Adopt { .. }
@@ -2816,6 +3011,8 @@ fn route_person_control(
         | people::Ask::AnswerQuestion { .. }
         | people::Ask::Prioritise { .. }
         | people::Ask::Amend { .. }
+        | people::Ask::Watch { .. }
+        | people::Ask::EditNote { .. }
         | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::Adopt { .. }
@@ -3012,6 +3209,8 @@ fn make_chat(
         people::Ask::StartChat { words, .. } => words,
         people::Ask::DecideEscalation { .. }
         | people::Ask::DecideProposal { .. }
+        | people::Ask::Watch { .. }
+        | people::Ask::EditNote { .. }
         | people::Ask::MakeService { .. }
         | people::Ask::SetRoles { .. }
         | people::Ask::Adopt { .. }

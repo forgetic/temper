@@ -93,6 +93,34 @@ pub enum Role {
     Member,
     /// Observer membership; `StartChat` is refused and its keyed role outcome is saved.
     Observer,
+    /// A role numbered by this project's policy, beyond the four defaults.
+    Policy { role: u32 },
+}
+
+impl Role {
+    /// Number used by authority and role-addressed task entries.
+    #[must_use]
+    pub const fn number(self) -> u32 {
+        match self {
+            Self::Owner => 0,
+            Self::Maintainer => 1,
+            Self::Member => 2,
+            Self::Observer => 3,
+            Self::Policy { role } => role,
+        }
+    }
+
+    /// Resolve a configured policy role to a membership label.
+    #[must_use]
+    pub const fn from_number(number: u32) -> Self {
+        match number {
+            0 => Self::Owner,
+            1 => Self::Maintainer,
+            2 => Self::Member,
+            3 => Self::Observer,
+            role => Self::Policy { role },
+        }
+    }
 }
 
 /// One person's authoritative project role; a roles record permits at most one holding per person.
@@ -144,10 +172,49 @@ pub enum ResourceRole {
     Context,
 }
 
+/// Note scope named by a party; the parent translates it to the notes child.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum NoteScope {
+    /// Shared deployment guidance.
+    Deployment,
+    /// Guidance for one project.
+    Project,
+    /// Guidance for one goal in the request's project.
+    Goal { goal: u64 },
+    /// Guidance for one connector resource pattern in the request's project.
+    Resources { connector: u16, pattern: crate::Pattern },
+}
+
+/// A person's correction or deletion of a recalled note revision.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum NoteChange {
+    /// Replace an entry's bounded description, body and task references.
+    Correct { description: Box<[u8]>, body: Box<[u8]>, references: Box<[u64]>, recalled: u32 },
+    /// Delete the entry at the revision the person saw.
+    Delete { recalled: u32 },
+}
+
+/// A live view's subject, named without depending on the sibling views child.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum WatchSubject {
+    /// One run attempt's stream.
+    Run { task: u64, attempt: u64 },
+    /// One task and its delegate tree.
+    Tree { task: u64 },
+    /// Current goals of one project.
+    Goals,
+    /// The requesting party's inbox.
+    Inbox { party: u64 },
+}
+
 /// Authenticated keyed requests admitted by the people child and routed by
 /// the root after role checks (domain/people.md, section 5.1).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Ask {
+    /// Open one role-checked live view, retained only while the view is open.
+    Watch { project: u32, subject: WatchSubject },
+    /// Correct or delete a note whose scope the party's project role permits.
+    EditNote { project: u32, name: u64, scope: Box<NoteScope>, change: Box<NoteChange> },
     /// Make a deployment service in a project with a role and display name.
     MakeService { project: u32, name: Box<[u8]>, role: Role },
     /// Adopt a connector resource as a durable keyed owner request.
@@ -272,6 +339,8 @@ pub enum EscalationChoice {
 /// completed key, while other decided refusals are retained. (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Refusal {
+    /// The checked request awaits the core route provided by a later session.
+    NotOffered,
     /// Final policy role cannot pass further; no state mutation.
     NoFurther,
     /// Caller is not the current waiting recipient.
@@ -303,6 +372,10 @@ pub enum Refusal {
 /// nontransient outcomes with the parent's task decision. (domain/people.md, section 5.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
+    /// One live watch was opened; it writes no durable answer record.
+    Watching { watcher: Token },
+    /// A note correction or deletion was committed with its keyed answer.
+    NoteEdited { name: u64 },
     /// A service party and its project role were committed together.
     ServiceMade { person: u64 },
     /// Resource adoption and its connector-known party seed committed together.
@@ -478,6 +551,8 @@ impl Stored {
 /// cross this boundary without protocol secrets. (domain/people.md, sections 3–5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Forget a volatile watch key when its stream closes.
+    WatchClosed { watcher: Token },
     /// Apply an authorized owner request to make a service with a fresh party number.
     MakeService { request: Token, person: u64 },
     /// Add previously unknown collaborators and their first project role in one decision.
@@ -590,7 +665,7 @@ pub enum Request {
         /** Current membership at admission: Some is required for chat; an escalation decision may carry None so root can check named-person standing. Root still checks authority. */
         role: Option<Role>,
         /** Original bounded request, owned by the root for routing and atomic decision. */
-        ask: Ask,
+        ask: Box<Ask>,
     },
     /// Terminal client output; the parent enforces durability before exposure.
     Reply {

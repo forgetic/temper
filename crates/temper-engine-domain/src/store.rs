@@ -661,6 +661,36 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 .ok()?
                 .checked_mul(u64::try_from(size_of::<temper_engine_domain_people::Holding>()).ok()?),
             temper_engine_domain_people::Stored::Answer { ask, .. } => match ask.as_ref() {
+                temper_engine_domain_people::Ask::EditNote { scope, change, .. } => {
+                    let scope_bytes = match scope.as_ref() {
+                        temper_engine_domain_people::NoteScope::Deployment
+                        | temper_engine_domain_people::NoteScope::Project
+                        | temper_engine_domain_people::NoteScope::Goal { .. } => 0,
+                        temper_engine_domain_people::NoteScope::Resources { pattern, .. } => {
+                            let mut bytes = u64::try_from(pattern.segments.len())
+                                .ok()?
+                                .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?;
+                            for segment in &pattern.segments {
+                                bytes = bytes.checked_add(u64::try_from(segment.len()).ok()?)?;
+                            }
+                            let last = match &pattern.last {
+                                temper_engine_domain_people::Last::Exact(bytes)
+                                | temper_engine_domain_people::Last::Open(bytes) => bytes.len(),
+                            };
+                            bytes.checked_add(u64::try_from(last).ok()?)?
+                        }
+                    };
+                    let change_bytes = match change.as_ref() {
+                        temper_engine_domain_people::NoteChange::Correct { description, body, references, .. } => {
+                            u64::try_from(description.len())
+                                .ok()?
+                                .checked_add(u64::try_from(body.len()).ok()?)?
+                                .checked_add(u64::try_from(references.len()).ok()?.checked_mul(8)?)?
+                        }
+                        temper_engine_domain_people::NoteChange::Delete { .. } => 0,
+                    };
+                    scope_bytes.checked_add(change_bytes)
+                }
                 temper_engine_domain_people::Ask::MakeService { name, .. } => u64::try_from(name.len()).ok(),
                 temper_engine_domain_people::Ask::Adopt { adoption, .. } => {
                     let mut bytes = u64::try_from(adoption.resource.path.len().checked_add(adoption.options.len())?)
@@ -692,7 +722,8 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                 | temper_engine_domain_people::Ask::AnswerQuestion { words, .. } => u64::try_from(words.len()).ok(),
                 temper_engine_domain_people::Ask::Move { reason, .. }
                 | temper_engine_domain_people::Ask::Cancel { reason, .. } => u64::try_from(reason.len()).ok(),
-                temper_engine_domain_people::Ask::TakePerson { .. }
+                temper_engine_domain_people::Ask::Watch { .. }
+                | temper_engine_domain_people::Ask::TakePerson { .. }
                 | temper_engine_domain_people::Ask::SetPool { .. }
                 | temper_engine_domain_people::Ask::HandBackPerson { .. }
                 | temper_engine_domain_people::Ask::Stop { .. }

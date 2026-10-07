@@ -12,18 +12,19 @@ use skein_lib::{List, Queue};
 
 /// Project one durable person-origin goal proposal into policy or proposer inboxes.
 pub(super) fn person_proposal_entries(domain: &Domain, row: &tasks::PersonProposal) -> Box<[people::Entry]> {
-    let mut entries = List::with_capacity(4);
+    let mut entries = List::with_capacity(domain.config.authority.limits().roles.max(1));
     match &row.state {
         tasks::PersonProposalState::Pending { since } => {
-            for role in 0..4 {
-                if let Some(policy) = domain.config.authority.role(row.project, role)
-                    && policy.decides.allows(authority::ProposalKind::Batch)
-                {
+            if let Some(project) = domain.config.authority.policy(row.project) {
+                for policy in &project.roles {
+                    if !policy.decides.allows(authority::ProposalKind::Batch) {
+                        continue;
+                    }
                     entries
                         .push(people::Entry {
                             task: row.goal.number,
                             project: row.project,
-                            whom: people::Whom::Role { project: row.project, role },
+                            whom: people::Whom::Role { project: row.project, role: policy.number },
                             kind: people::EntryKind::Proposal { number: row.number },
                             at: *since,
                         })
@@ -433,7 +434,14 @@ fn question_answered(row: &tasks::TaskRecord, question: u64) -> bool {
 /// Project the currently waiting person-facing references of one task.
 #[expect(clippy::too_many_lines, reason = "one exhaustive task projection covers all person-facing waiting kinds")]
 pub(super) fn entries(domain: &Domain, row: &tasks::TaskRecord) -> Box<[people::Entry]> {
-    let capacity = domain.limits.tasks.inbox_messages.checked_add(7).expect("validated task inbox projection bound");
+    let capacity = domain
+        .limits
+        .tasks
+        .inbox_messages
+        .checked_add(domain.config.authority.limits().roles)
+        .expect("validated task inbox projection bound")
+        .checked_add(3)
+        .expect("validated task inbox projection bound");
     let mut entries = List::with_capacity(capacity);
     match &row.phase {
         tasks::Phase::Ended(_) | tasks::Phase::Closing(_) => return entries.into_boxed(),
@@ -486,14 +494,15 @@ pub(super) fn entries(domain: &Domain, row: &tasks::TaskRecord) -> Box<[people::
                     since,
                 ),
                 tasks::ProposalHolder::Policy { project, kind } => {
-                    for role in 0..4 {
-                        if let Some(policy) = domain.config.authority.role(project, role)
-                            && policy.decides.allows(proposal_kind(kind))
-                        {
+                    if let Some(project_policy) = domain.config.authority.policy(project) {
+                        for policy in &project_policy.roles {
+                            if !policy.decides.allows(proposal_kind(kind)) {
+                                continue;
+                            }
                             add(
                                 &mut entries,
                                 row,
-                                people::Whom::Role { project, role },
+                                people::Whom::Role { project, role: policy.number },
                                 people::EntryKind::Proposal { number: proposal.number },
                                 since,
                             );

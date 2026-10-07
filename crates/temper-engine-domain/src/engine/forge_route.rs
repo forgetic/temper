@@ -69,13 +69,7 @@ fn seeded_role(domain: &Domain, project: u32, permission: forge_client::api::Per
     let mappings = domain.config.permission_roles.get(&project)?;
     for mapping in mappings.as_ref() {
         if mapping.connector == domain.config.forge_connector && mapping.permission == number {
-            return match mapping.role {
-                0 => Some(people::Role::Owner),
-                1 => Some(people::Role::Maintainer),
-                2 => Some(people::Role::Member),
-                3 => Some(people::Role::Observer),
-                _ => None,
-            };
+            return Some(people::Role::from_number(mapping.role));
         }
     }
     None

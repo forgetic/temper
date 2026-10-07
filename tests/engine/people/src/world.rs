@@ -304,7 +304,7 @@ impl World {
                 Request::Reply { to, reply } => replies.push((to.into_token().raw(), reply)),
                 Request::Route { request, person, project, role, ask } => {
                     assert_eq!(project, 1);
-                    assert!(matches!(ask, Ask::StartChat { .. }));
+                    assert!(matches!(*ask, Ask::StartChat { .. }));
                     let key = self.context.expect("a routed call carries the client's key");
                     assert_eq!(person, key.person);
                     self.stats.routes += 1;

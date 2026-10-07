@@ -73,7 +73,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
             .checked_mul(u64::from(limits.holdings))?
             .checked_mul(u64::try_from(size_of::<Holding>()).ok()?)?,
     )?;
-    let waiting_recipients = limits.people.checked_add(limits.projects.checked_mul(4)?)?;
+    // At most one role per holding; only held roles can have a cached inbox.
+    let waiting_recipients = limits.people.checked_add(limits.projects.checked_mul(limits.holdings)?)?;
     let waiting = Map::<crate::Whom, Box<[crate::Entry]>>::worst_case(waiting_recipients)?
         .checked_add(
             u64::from(waiting_recipients).checked_mul(List::<crate::Entry>::worst_case(limits.inbox_entries)?)?,
@@ -92,6 +93,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Map::<u64, SignIn>::worst_case(limits.sign_ins)?)?
         .checked_add(Deadlines::<u64>::worst_case(limits.sign_ins)?)?
         .checked_add(Map::<RequestKey, Answered>::worst_case(limits.requests)?)?
+        .checked_add(Map::<RequestKey, crate::domain::OpenWatch>::worst_case(limits.requests)?)?
         .checked_add(Deadlines::<RequestKey>::worst_case(limits.requests)?)?
         .checked_add(u64::from(limits.requests).checked_mul(ask_bytes)?)?
         .checked_add(Slab::<Pending>::worst_case(limits.pending)?)?

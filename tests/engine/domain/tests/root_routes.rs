@@ -29,6 +29,7 @@ fn a_watched_run_shows_each_turn_as_it_commits() {
     driver.send(engine::Event::Watch {
         watcher: Token::new(770),
         sign_in: driver.session(),
+        key: [1; 16],
         subject: views::Subject::Run { task: Token::new(assignment.task), attempt: Token::new(assignment.attempt) },
     });
     assert!(driver.viewed.iter().any(|request| matches!(request,
@@ -68,12 +69,38 @@ fn a_watched_run_shows_each_turn_as_it_commits() {
 }
 
 #[test]
+fn a_watch_key_replays_while_open_and_can_open_again_after_unwatch() {
+    let (mut driver, assignment) = batch_fixture();
+    let subject = views::Subject::Tree { task: Token::new(assignment.task) };
+    let writes = driver.transactions.len();
+    driver.send(engine::Event::Watch { watcher: Token::new(780), sign_in: driver.session(), key: [28; 16], subject });
+    assert!(driver.viewed.iter().any(|request| matches!(request,
+        views::Request::Watching { watcher } if *watcher == Token::new(780)
+    )));
+    assert_eq!(driver.transactions.len(), writes, "opening the view writes no record");
+
+    driver.viewed.clear();
+    driver.send(engine::Event::Watch { watcher: Token::new(781), sign_in: driver.session(), key: [28; 16], subject });
+    assert_eq!(driver.viewed, [views::Request::Watching { watcher: Token::new(780) }]);
+    assert_eq!(driver.transactions.len(), writes, "replay writes no record");
+
+    driver.send(engine::Event::Unwatch { watcher: Token::new(780) });
+    driver.send(engine::Event::ViewDelivered { watcher: Token::new(780), done: true });
+    driver.viewed.clear();
+    driver.send(engine::Event::Watch { watcher: Token::new(781), sign_in: driver.session(), key: [28; 16], subject });
+    assert!(driver.viewed.iter().any(|request| matches!(request,
+        views::Request::Watching { watcher } if *watcher == Token::new(781)
+    )));
+}
+
+#[test]
 #[expect(clippy::wildcard_enum_match_arm, reason = "select the exact named tree snapshot")]
 fn a_task_tree_watch_carries_a_child_phase_after_its_commit() {
     let (mut driver, assignment) = batch_fixture_with(2, 2);
     driver.send(engine::Event::Watch {
         watcher: Token::new(771),
         sign_in: driver.session(),
+        key: [2; 16],
         subject: views::Subject::Tree { task: Token::new(assignment.task) },
     });
     let snapshot = driver
@@ -133,6 +160,7 @@ fn a_project_goals_watch_shows_a_later_priority_change() {
     driver.send(engine::Event::Watch {
         watcher: Token::new(774),
         sign_in: maintainer_session,
+        key: [3; 16],
         subject: views::Subject::Goals { project: 1 },
     });
     let snapshot = driver

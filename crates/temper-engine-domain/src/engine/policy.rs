@@ -37,7 +37,15 @@ pub(super) fn change(
         Some(mappings) => mappings.clone(),
         None => Box::new([]),
     };
-    if policy_translate::apply(&mut policy, &mut permissions, change, env.limits.authority.requirements).is_none() {
+    if policy_translate::apply(
+        &mut policy,
+        &mut permissions,
+        change,
+        env.limits.authority.requirements,
+        env.limits.authority.roles,
+    )
+    .is_none()
+    {
         return refused(domain, request, people::Refusal::Unknown);
     }
     let Some(snapshot) = policy_translate::snapshot(&policy, &permissions) else {

@@ -276,18 +276,19 @@ fn requirement_to_people(value: &authority::Requirement) -> people::Requirement 
     }
 }
 
+fn role_exists(policy: &authority::Policy, number: u32) -> bool {
+    for role in &policy.roles {
+        if role.number == number {
+            return true;
+        }
+    }
+    false
+}
+
 fn map_valid(policy: &authority::Policy, mappings: &[people::PermissionRole]) -> bool {
     for (index, mapping) in mappings.iter().enumerate() {
-        if mapping.role > 3 {
-            let mut found = false;
-            for role in &policy.roles {
-                if role.number == mapping.role {
-                    found = true;
-                }
-            }
-            if !found {
-                return false;
-            }
+        if mapping.role > 3 && !role_exists(policy, mapping.role) {
+            return false;
         }
         for earlier in mappings.get(..index).expect("enumerated mapping is in bounds") {
             if earlier.connector == mapping.connector && earlier.permission == mapping.permission {
@@ -303,11 +304,15 @@ pub(super) fn apply(
     policy: &mut authority::Policy,
     permissions: &mut Box<[people::PermissionRole]>,
     change: people::PolicyChange,
-    limit: u32,
+    requirements_limit: u32,
+    roles_limit: u32,
 ) -> Option<()> {
     match change {
         people::PolicyChange::ProjectSpend { period_spend } => policy.period_spend = period_spend,
         people::PolicyChange::Role(edit) => {
+            if edit.number <= 3 && !role_exists(policy, edit.number) {
+                return None;
+            }
             let value = authority_to_authority(edit.authority)?;
             let mut found = false;
             for role in &mut policy.roles {
@@ -320,14 +325,27 @@ pub(super) fn apply(
                 }
             }
             if !found {
-                return None;
+                let mut roles = List::with_capacity(roles_limit);
+                for role in &policy.roles {
+                    roles.push(role.clone()).ok()?;
+                }
+                roles
+                    .push(authority::Role {
+                        number: edit.number,
+                        authority: value,
+                        period_spend: edit.period_spend,
+                        requests: authority::Requests(edit.requests),
+                        decides: authority::Proposals(edit.decides),
+                    })
+                    .ok()?;
+                policy.roles = roles.into_boxed();
             }
         }
         people::PolicyChange::Requirements { requirements } => {
-            if u32::try_from(requirements.len()).ok()? > limit {
+            if u32::try_from(requirements.len()).ok()? > requirements_limit {
                 return None;
             }
-            let mut translated = List::with_capacity(limit);
+            let mut translated = List::with_capacity(requirements_limit);
             for requirement in requirements {
                 translated.push(requirement_to_authority(requirement)).ok()?;
             }

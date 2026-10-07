@@ -29,20 +29,12 @@ pub(super) enum Query {
 }
 
 pub(super) fn role_number(role: people::Role) -> u32 {
-    match role {
-        people::Role::Owner => 0,
-        people::Role::Maintainer => 1,
-        people::Role::Member => 2,
-        people::Role::Observer => 3,
-    }
+    role.number()
 }
 
 fn fallback(domain: &Domain, project: u32) -> Option<tasks::EscalationHolder> {
     // The policy names the escalation role; this slice resolves that role here.
     let role = domain.config.authority.policy(project)?.escalation_role?;
-    if role > 3 {
-        return None;
-    }
     Some(tasks::EscalationHolder::Role { project, role })
 }
 
