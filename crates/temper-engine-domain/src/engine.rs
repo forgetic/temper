@@ -229,6 +229,29 @@ pub enum BriefBody {
     Missing(brief::GatherMissing),
 }
 
+/// A root-owned part of the task context rendered for a brief.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TaskBriefPart {
+    Spec,
+    Dependencies,
+    Delegates,
+    Attempts,
+    TranscriptTail,
+}
+
+/// A bounded fragment and the amount its root renderer omitted.
+#[derive(Debug)]
+struct TaskBriefFragment {
+    bytes: Box<[u8]>,
+    left: u64,
+}
+
+/// The result of reading a root-owned part of a task.
+enum TaskBriefRead {
+    Got(Box<[TaskBriefFragment]>),
+    Failed,
+}
+
 /// A checkout's authoritative forge start, prepared afresh by the worker.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ForgeStart {
@@ -5655,7 +5678,7 @@ fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
     let transcript = domain.transcripts.get(&task).expect("prepared transcript state");
     let oversized = transcript.bytes > u64::from(domain.config.resume_bytes);
     let mut wanted = List::with_capacity(domain.limits.brief.sections);
-    let Some(task_text) = read_core(domain, task, brief::TaskPart::Spec) else {
+    let Some(task_text) = read_core(domain, task, TaskBriefPart::Spec) else {
         domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
         return;
     };
@@ -5669,7 +5692,7 @@ fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
         })
         .expect("task brief room");
     if !context.dependencies.is_empty() || !context.spec.inputs.is_empty() {
-        let Some(text) = read_core(domain, task, brief::TaskPart::Dependencies) else {
+        let Some(text) = read_core(domain, task, TaskBriefPart::Dependencies) else {
             domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
             return;
         };
@@ -5684,7 +5707,7 @@ fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
             .expect("dependency result section room");
     }
     if oversized {
-        let Some(text) = read_core(domain, task, brief::TaskPart::TranscriptTail) else {
+        let Some(text) = read_core(domain, task, TaskBriefPart::TranscriptTail) else {
             domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
             return;
         };
@@ -5700,7 +5723,7 @@ fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
     }
     if !context.delegates.is_empty()
         && wanted.room() > 0
-        && let Some(text) = read_core(domain, task, brief::TaskPart::Delegates)
+        && let Some(text) = read_core(domain, task, TaskBriefPart::Delegates)
     {
         wanted
             .push(brief::Planned::Core {
@@ -5714,7 +5737,7 @@ fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
     }
     if context.tries != tasks::Tries::NONE
         && wanted.room() > 0
-        && let Some(text) = read_core(domain, task, brief::TaskPart::Attempts)
+        && let Some(text) = read_core(domain, task, TaskBriefPart::Attempts)
     {
         wanted
             .push(brief::Planned::Core {
@@ -5832,18 +5855,15 @@ fn forge_brief_budget(kind: ForgeBriefKind, budgets: &brief::Budgets) -> u32 {
     }
 }
 
-fn read_core(domain: &Domain, task: u64, part: brief::TaskPart) -> Option<Box<[u8]>> {
+fn read_core(domain: &Domain, task: u64, part: TaskBriefPart) -> Option<Box<[u8]>> {
     let tail = match part {
-        brief::TaskPart::TranscriptTail => true,
-        brief::TaskPart::Spec
-        | brief::TaskPart::Dependencies
-        | brief::TaskPart::Delegates
-        | brief::TaskPart::Attempts => false,
+        TaskBriefPart::TranscriptTail => true,
+        TaskBriefPart::Spec | TaskBriefPart::Dependencies | TaskBriefPart::Delegates | TaskBriefPart::Attempts => false,
     };
     let read = task_section(domain, task, part, domain.limits.brief.parts, domain.limits.brief.read_bytes);
     let parts = match read {
-        brief::Read::Got(parts) => parts,
-        brief::Read::Failed => return None,
+        TaskBriefRead::Got(parts) => parts,
+        TaskBriefRead::Failed => return None,
     };
     let mut length = 0_usize;
     let mut ended_line = true;
@@ -6562,7 +6582,7 @@ pub(crate) fn run_charter_bytes(charter: &RunCharter) -> Option<u64> {
     Some(bytes)
 }
 
-fn text_part(first: &[u8], second: &[u8], third: &[u8], fourth: &[u8], available: u32) -> brief::Part {
+fn text_part(first: &[u8], second: &[u8], third: &[u8], fourth: &[u8], available: u32) -> TaskBriefFragment {
     let total = first
         .len()
         .checked_add(second.len())
@@ -6589,7 +6609,7 @@ fn text_part(first: &[u8], second: &[u8], third: &[u8], fourth: &[u8], available
             break;
         }
     }
-    brief::Part {
+    TaskBriefFragment {
         bytes: text.finish(),
         left: u64::try_from(total.checked_sub(keep).expect("prefix in part")).expect("usize fits u64"),
     }
@@ -6610,35 +6630,35 @@ fn prefix(bytes: &[u8], most: usize) -> &[u8] {
     bytes.get(..end).expect("UTF-8 prefix within source")
 }
 
-fn task_section(domain: &Domain, task: u64, part: brief::TaskPart, parts: u32, bytes: u32) -> brief::Read {
+fn task_section(domain: &Domain, task: u64, part: TaskBriefPart, parts: u32, bytes: u32) -> TaskBriefRead {
     if parts == 0 {
-        return brief::Read::Failed;
+        return TaskBriefRead::Failed;
     }
     match part {
-        brief::TaskPart::Spec => match domain.contexts.get(&task) {
+        TaskBriefPart::Spec => match domain.contexts.get(&task) {
             Some(context) => task_read(context, parts, bytes),
-            None => brief::Read::Failed,
+            None => TaskBriefRead::Failed,
         },
-        brief::TaskPart::Delegates => match domain.contexts.get(&task) {
+        TaskBriefPart::Delegates => match domain.contexts.get(&task) {
             Some(context) => delegates_read(&context.delegates, bytes),
-            None => brief::Read::Failed,
+            None => TaskBriefRead::Failed,
         },
-        brief::TaskPart::Dependencies => match domain.dependency_results.get(&task) {
+        TaskBriefPart::Dependencies => match domain.dependency_results.get(&task) {
             Some(results) => dependency_read(results, bytes),
-            None => brief::Read::Failed,
+            None => TaskBriefRead::Failed,
         },
-        brief::TaskPart::Attempts => match domain.contexts.get(&task) {
+        TaskBriefPart::Attempts => match domain.contexts.get(&task) {
             Some(context) => attempt_read(context.tries, bytes),
-            None => brief::Read::Failed,
+            None => TaskBriefRead::Failed,
         },
-        brief::TaskPart::TranscriptTail => match domain.transcripts.get(&task) {
+        TaskBriefPart::TranscriptTail => match domain.transcripts.get(&task) {
             Some(transcript) => tail_read(transcript, bytes),
-            None => brief::Read::Failed,
+            None => TaskBriefRead::Failed,
         },
     }
 }
 
-fn attempt_read(tries: tasks::Tries, bytes: u32) -> brief::Read {
+fn attempt_read(tries: tasks::Tries, bytes: u32) -> TaskBriefRead {
     let classes: [(&[u8], u32); 6] = [
         (b"transient: ", tries.transient),
         (b"permanent: ", tries.permanent),
@@ -6669,7 +6689,7 @@ fn attempt_read(tries: tasks::Tries, bytes: u32) -> brief::Read {
         }
     }
     let text = writer.finish();
-    brief::Read::Got(Box::new([brief::Part {
+    TaskBriefRead::Got(Box::new([TaskBriefFragment {
         left: u64::try_from(total.checked_sub(text.len()).expect("written prefix")).expect("usize fits u64"),
         bytes: text,
     }]))
@@ -6690,7 +6710,7 @@ fn delegate_phase(phase: &tasks::Phase) -> &'static [u8] {
     }
 }
 
-fn delegates_read(delegates: &[tasks::DelegateState], bytes: u32) -> brief::Read {
+fn delegates_read(delegates: &[tasks::DelegateState], bytes: u32) -> TaskBriefRead {
     let mut total = 0_usize;
     for delegate in delegates {
         total = total
@@ -6714,7 +6734,7 @@ fn delegates_read(delegates: &[tasks::DelegateState], bytes: u32) -> brief::Read
         writer.put(b"\n").expect("measured delegate newline");
     }
     let text = writer.finish();
-    brief::Read::Got(Box::new([text_part(&text, b"", b"", b"", bytes)]))
+    TaskBriefRead::Got(Box::new([text_part(&text, b"", b"", b"", bytes)]))
 }
 
 fn result_label(kind: tasks::ResultKind) -> &'static [u8] {
@@ -6727,7 +6747,7 @@ fn result_label(kind: tasks::ResultKind) -> &'static [u8] {
     }
 }
 
-fn dependency_read(results: &[HistoricalResult], bytes: u32) -> brief::Read {
+fn dependency_read(results: &[HistoricalResult], bytes: u32) -> TaskBriefRead {
     let mut total = 0_usize;
     for result in results {
         total = total
@@ -6778,10 +6798,10 @@ fn dependency_read(results: &[HistoricalResult], bytes: u32) -> brief::Read {
         writer.put(b"\n\n").expect("measured result separator");
     }
     let text = writer.finish();
-    brief::Read::Got(Box::new([text_part(&text, b"", b"", b"", bytes)]))
+    TaskBriefRead::Got(Box::new([text_part(&text, b"", b"", b"", bytes)]))
 }
 
-fn tail_read(transcript: &Transcript, bytes: u32) -> brief::Read {
+fn tail_read(transcript: &Transcript, bytes: u32) -> TaskBriefRead {
     let kept = u64::from(bytes).min(transcript.kept);
     let skip = transcript.kept.checked_sub(kept).expect("tail within kept bytes");
     let mut writer = Writer::new(usize::try_from(kept).expect("u32 bound fits usize"));
@@ -6795,7 +6815,7 @@ fn tail_read(transcript: &Transcript, bytes: u32) -> brief::Read {
         passed = end;
     }
     let text = writer.finish();
-    brief::Read::Got(Box::new([brief::Part {
+    TaskBriefRead::Got(Box::new([TaskBriefFragment {
         left: transcript.bytes.saturating_sub(u64::try_from(text.len()).expect("bounded tail")),
         bytes: text,
     }]))
@@ -6874,9 +6894,9 @@ fn contract_text(contract: &tasks::Contract) -> Box<[u8]> {
 }
 
 /// Render an agent task's spec and typed contract from its activation snapshot.
-fn task_read(record: &tasks::RunContext, parts: u32, bytes: u32) -> brief::Read {
+fn task_read(record: &tasks::RunContext, parts: u32, bytes: u32) -> TaskBriefRead {
     if parts == 0 {
-        return brief::Read::Failed;
+        return TaskBriefRead::Failed;
     }
     let contract = contract_text(&record.contract);
     let first = text_part(&record.spec.words, b"\n", &contract, b"", bytes);
@@ -6909,7 +6929,7 @@ fn task_read(record: &tasks::RunContext, parts: u32, bytes: u32) -> brief::Read 
             .checked_add(part.left)
             .expect("bounded omitted bytes");
     }
-    brief::Read::Got(gathered.into_boxed())
+    TaskBriefRead::Got(gathered.into_boxed())
 }
 
 fn header_loaded(startup: Startup) -> bool {
