@@ -5,7 +5,8 @@ use crate::{Deployment, Family, Key, Record, TurnRecord, Write};
 use alloc::boxed::Box;
 use skein_lib::{List, Queue, Token, Wall};
 
-const LIMITS: Limits = Limits { commits: 2, held: 8, writes: 4, deliveries: 4, transcript_bytes: 64, result_bytes: 32 };
+const LIMITS: Limits =
+    Limits { commits: 2, held: 8, writes: 4, deliveries: 4, transcript_bytes: 64, result_bytes: 32, run_bytes: 1 };
 
 const DEPLOYMENT: Deployment = Deployment {
     id: [19; 16],
@@ -261,8 +262,15 @@ fn counter_and_commit_overflow_cannot_reuse_names() {
 fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention() {
     use temper_engine_domain_fleet as fleet;
     use temper_engine_domain_people as people;
-    let limits =
-        crate::JournalLimits { commits: 1, held: 2, writes: 2, deliveries: 2, transcript_bytes: 4, result_bytes: 4 };
+    let limits = crate::JournalLimits {
+        commits: 1,
+        held: 2,
+        writes: 2,
+        deliveries: 2,
+        transcript_bytes: 4,
+        result_bytes: 4,
+        run_bytes: 1,
+    };
     let mut decision = Decision::new(&limits);
     let row = Record::People(people::Stored::Person {
         number: 1,
@@ -305,13 +313,55 @@ fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention(
 fn held_assignment_checks_owned_bytes_and_section_backing_before_acceptance() {
     use temper_engine_domain_accounts as accounts;
     use temper_engine_domain_brief as brief;
-    let limits =
-        crate::JournalLimits { commits: 1, held: 1, writes: 1, deliveries: 1, transcript_bytes: 4, result_bytes: 4 };
+    let limits = crate::JournalLimits {
+        commits: 1,
+        held: 1,
+        writes: 1,
+        deliveries: 1,
+        transcript_bytes: 4,
+        result_bytes: 4,
+        run_bytes: 512,
+    };
     let mut decision = Decision::new(&limits);
     let assignment = crate::engine::Assignment {
         task: 1,
         attempt: 1,
         charter: 1,
+        run: Box::new(crate::engine::RunCharter {
+            policy: crate::engine::RunPolicy {
+                instructions: Box::new([]),
+                waiting: skein_lib::Duration::from_secs(1),
+                resume: true,
+                turns: 1,
+                time: skein_lib::Duration::from_secs(1),
+                model: crate::engine::Model {
+                    dialect: 1,
+                    account: 1,
+                    endpoint: 1,
+                    name: b"m".as_slice().into(),
+                    max_tokens: 1,
+                    input_price: 1,
+                    cached_price: 1,
+                    output_price: 1,
+                    price_unit: 1,
+                },
+                alternatives: Box::new([]),
+                inspect: false,
+                modify: false,
+                shell: false,
+                agents: false,
+                call_timeout: skein_lib::Duration::from_secs(1),
+            },
+            contract: temper_engine_domain_tasks::Contract::Report { words: 1 },
+            authority: temper_engine_domain_tasks::Authority {
+                tools: temper_engine_domain_tasks::Tools(0),
+                grants: Box::new([]),
+                delegation: temper_engine_domain_tasks::Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
+                budget: temper_engine_domain_tasks::Budget { spend: 1, deadline: None },
+                notes: temper_engine_domain_tasks::Scopes(0),
+            },
+            budget: 1,
+        }),
         sections: Box::new([brief::Section {
             kind: brief::Kind::Task,
             body: brief::Body::Text(b"12345".as_slice().into()),

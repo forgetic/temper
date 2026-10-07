@@ -37,6 +37,8 @@ pub struct Limits {
     pub transcript_bytes: u32,
     /// Maximum owned result text or assignment section text admitted to a held delivery.
     pub result_bytes: u32,
+    /// Maximum deeply owned run charter bytes in a held assignment.
+    pub run_bytes: u32,
 }
 
 /// Owned root effects held after the decision they follow (domain/engine.md, section 5.2). External notices have no acknowledgement of their own; web
@@ -723,7 +725,12 @@ pub fn uncommitted(journal: &mut Journal, number: u64, out: &mut Queue<Output>) 
 /// overflow return `None`; no state or effect is created.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
-    if limits.commits == 0 || limits.writes == 0 || limits.held < limits.deliveries || limits.deliveries == 0 {
+    if limits.commits == 0
+        || limits.writes == 0
+        || limits.held < limits.deliveries
+        || limits.deliveries == 0
+        || limits.run_bytes == 0
+    {
         return None;
     }
     Queue::<Held>::worst_case(limits.held)?
@@ -732,10 +739,13 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(u64::from(limits.writes).checked_mul(2)?.checked_mul(u64::from(limits.transcript_bytes))?)?
         .checked_add(
             u64::from(limits.held).checked_add(u64::from(limits.deliveries))?.checked_mul(
-                u64::from(limits.result_bytes).max(u64::from(limits.transcript_bytes)).checked_add(
-                    List::<temper_engine_domain_brief::Section>::worst_case(limits.deliveries)?
-                        .max(u64::try_from(size_of::<temper_engine_domain_tasks::EscalationContext>()).ok()?),
-                )?,
+                u64::from(limits.result_bytes)
+                    .max(u64::from(limits.transcript_bytes))
+                    .checked_add(u64::from(limits.run_bytes))?
+                    .checked_add(
+                        List::<temper_engine_domain_brief::Section>::worst_case(limits.deliveries)?
+                            .max(u64::try_from(size_of::<temper_engine_domain_tasks::EscalationContext>()).ok()?),
+                    )?,
             )?,
         )
 }
@@ -765,6 +775,13 @@ fn fleet_delivery_within(event: &temper_engine_domain_fleet::Event, limits: &Lim
 }
 
 fn assignment_within(assignment: &crate::engine::Assignment, limits: &Limits) -> bool {
+    let charter_within = match crate::engine::run_charter_bytes(&assignment.run) {
+        Some(bytes) => bytes <= u64::from(limits.run_bytes),
+        None => false,
+    };
+    if !charter_within {
+        return false;
+    }
     if assignment.task == 0
         || assignment.attempt == 0
         || assignment.sections.len() > usize::try_from(limits.deliveries).expect("u32 fits usize")

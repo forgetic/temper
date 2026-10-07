@@ -491,6 +491,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-smith"
+version = "0.0.0"
+dependencies = [
+ "skein-json",
+ "skein-lib",
+ "smith-domain",
+ "smith-domain-run",
+ "smith-domain-session",
+ "temper-engine-domain",
+ "temper-engine-domain-accounts",
+ "temper-engine-domain-authority",
+ "temper-engine-domain-brief",
+ "temper-engine-domain-forge",
+ "temper-engine-domain-forge-client",
+ "temper-engine-domain-tasks",
+]
+
+[[package]]
 name = "temper-engine-tasks-world"
 version = "0.0.0"
 dependencies = [

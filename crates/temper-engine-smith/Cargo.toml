@@ -1,0 +1,24 @@
+[package]
+name = "temper-engine-smith"
+description = "Pure typed boundary between Temper's engine and Smith's agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+skein-lib.workspace = true
+skein-json.workspace = true
+temper-engine-domain.workspace = true
+temper-engine-domain-brief.workspace = true
+temper-engine-domain-tasks.workspace = true
+temper-engine-domain-forge-client.workspace = true
+temper-engine-domain-forge.workspace = true
+temper-engine-domain-authority.workspace = true
+temper-engine-domain-accounts.workspace = true
+smith-domain.workspace = true
+smith-domain-run.workspace = true
+smith-domain-session.workspace = true
+
+[lints]
+workspace = true

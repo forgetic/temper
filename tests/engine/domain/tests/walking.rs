@@ -171,6 +171,12 @@ fn walking_referee_rejects_wrong_task_or_uncommitted_or_duplicate_assignment() {
         task: task.number,
         attempt: task.attempt,
         charter: 1,
+        run: Box::new(engine::RunCharter {
+            policy: temper_engine_domain_world::walking::config(65).run,
+            contract: task.contract.clone(),
+            authority: task.authority.clone(),
+            budget: 100,
+        }),
         sections: Box::new([Section {
             kind: Kind::Task,
             body: Body::Text(

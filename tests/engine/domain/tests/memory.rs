@@ -77,6 +77,7 @@ fn partial_delivery_transfer_never_allocates_a_second_shrinking_container() {
         deliveries: 1000,
         transcript_bytes: 0,
         result_bytes: 0,
+        run_bytes: 1,
     };
     let mut out = Queue::<Output>::with_capacity(1);
     let meter = Meter::new();
@@ -97,8 +98,15 @@ fn partial_delivery_transfer_never_allocates_a_second_shrinking_container() {
 
 #[test]
 fn partial_write_transfer_moves_values_without_shrinking_the_source() {
-    let limits =
-        root::JournalLimits { commits: 1, held: 1, writes: 128, deliveries: 1, transcript_bytes: 0, result_bytes: 0 };
+    let limits = root::JournalLimits {
+        commits: 1,
+        held: 1,
+        writes: 128,
+        deliveries: 1,
+        transcript_bytes: 0,
+        result_bytes: 0,
+        run_bytes: 1,
+    };
     let mut out = Queue::<Output>::with_capacity(1);
     let meter = Meter::new();
     let mut journal = Journal::new(HEADER, &limits);

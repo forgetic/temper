@@ -5,8 +5,15 @@ use temper_engine_domain::{
     TurnRecord, Write,
 };
 
-pub const LIMITS: JournalLimits =
-    JournalLimits { commits: 3, held: 12, writes: 4, deliveries: 4, transcript_bytes: 128, result_bytes: 128 };
+pub const LIMITS: JournalLimits = JournalLimits {
+    commits: 3,
+    held: 12,
+    writes: 4,
+    deliveries: 4,
+    transcript_bytes: 128,
+    result_bytes: 128,
+    run_bytes: 1,
+};
 
 pub const HEADER: Deployment = Deployment {
     id: [31; 16],

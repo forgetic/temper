@@ -99,6 +99,9 @@ pub struct Config {
     pub authority: authority::Domain,
     /// Charter selected for chats; admitted by tasks as the configured executor.
     pub charter: u32,
+    /// Smith-neutral run policy selected for this charter. The root owns the
+    /// policy; its typed adapter supplies Smith's vocabulary at the boundary.
+    pub run: RunPolicy,
     /// Maximum committed conversation bytes across a task's attempts that may be resumed whole.
     /// A longer transcript starts the next run fresh with its bounded tail in the brief.
     pub resume_bytes: u32,
@@ -123,6 +126,48 @@ pub struct Config {
     pub forge: forge_client::Config,
 }
 
+/// One configured model and its deployment-unit prices (domain/agent.md, 4.6).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Model {
+    pub dialect: u32,
+    pub account: u32,
+    pub endpoint: u32,
+    pub name: Box<[u8]>,
+    pub max_tokens: u32,
+    pub input_price: u64,
+    pub cached_price: u64,
+    pub output_price: u64,
+    pub price_unit: u32,
+}
+
+/// Root-owned charter policy, independent of Smith's run vocabulary.
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[expect(clippy::struct_excessive_bools, reason = "independent charter grants and run behavior")]
+pub struct RunPolicy {
+    pub instructions: Box<[u8]>,
+    pub waiting: skein_lib::Duration,
+    pub resume: bool,
+    pub turns: u32,
+    pub time: skein_lib::Duration,
+    pub model: Model,
+    pub alternatives: Box<[Model]>,
+    pub inspect: bool,
+    pub modify: bool,
+    pub shell: bool,
+    pub agents: bool,
+    pub call_timeout: skein_lib::Duration,
+}
+
+/// The root's complete task-specific charter, kept behind one bounded
+/// assignment cell so delivery queues carry a small fixed-size value.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RunCharter {
+    pub policy: RunPolicy,
+    pub contract: tasks::Contract,
+    pub authority: tasks::Authority,
+    pub budget: u64,
+}
+
 /// A complete claim's assignment, root to worker after durability; its
 /// brief sections are bounded by brief limits (domain/engine.md, 7.1 and 9).
 /// Its attempt ends through the worker answer route; the worker keeps its
@@ -134,6 +179,8 @@ pub struct Assignment {
     pub attempt: u64,
     /// Configured charter, never selected by the worker.
     pub charter: u32,
+    /// Root-owned charter policy and task result contract for this activation.
+    pub run: Box<RunCharter>,
     /// Owned task, attempt and transcript-tail sections, at most brief `sections` and
     /// `brief_bytes`. Task/deployment lineage awaits its root route.
     pub sections: Box<[brief::Section]>,
@@ -798,6 +845,13 @@ impl Domain {
     #[must_use]
     pub fn new(mut config: Config, limits: &Limits) -> Domain {
         assert!(worst_case(limits).is_some(), "root limits are valid");
+        assert!(
+            match run_policy_bound(&config.run, limits) {
+                Some(bytes) => bytes <= u64::from(limits.journal.run_bytes),
+                None => false,
+            },
+            "run policy fits assignment bound"
+        );
         assert!(
             config.resume_bytes > 0 && config.resume_bytes <= limits.journal.transcript_bytes,
             "configured task transcript bound fits the root's owned-byte limit"
@@ -4574,6 +4628,13 @@ fn brief_outputs(domain: &mut Domain, env: &Env<Limits>, _decision: &mut Decisio
                     task,
                     attempt,
                     charter: domain.config.charter,
+                    run: Box::new(RunCharter {
+                        policy: domain.config.run.clone(),
+                        contract: context.contract,
+                        authority: context.authority,
+                        budget: authority::left(authority_numbers(context.numbers))
+                            .min(domain.config.authority.rules().maximum_run_spend),
+                    }),
                     sections,
                     inbox: context.inbox,
                     saved: context.saved,
@@ -5957,6 +6018,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
                         .checked_mul(u64::from(limits.tasks.message_bytes).checked_add(32)?)?,
                 )?
                 .checked_add(u64::from(limits.tasks.saved_repositories).checked_mul(4)?)?
+                .checked_add(u64::from(limits.journal.run_bytes))?
                 .checked_add(u64::from(limits.journal.transcript_bytes))?
                 .checked_add(List::<Box<[u8]>>::worst_case(limits.journal.transcript_bytes)?)?
                 .checked_add(
@@ -6033,6 +6095,93 @@ fn authority_within(value: &authority::Authority, limits: &Limits) -> bool {
         bytes = total;
     }
     bytes <= usize::try_from(limits.tasks.authority_bytes).expect("u32 fits usize")
+}
+
+fn run_policy_bytes(policy: &RunPolicy) -> Option<u64> {
+    if policy.turns == 0
+        || policy.waiting == skein_lib::Duration::ZERO
+        || policy.time == skein_lib::Duration::ZERO
+        || policy.call_timeout == skein_lib::Duration::ZERO
+        || policy.model.name.is_empty()
+        || policy.model.max_tokens == 0
+        || policy.model.price_unit == 0
+    {
+        return None;
+    }
+    let mut bytes = u64::try_from(size_of::<RunCharter>())
+        .ok()?
+        .checked_add(u64::try_from(policy.instructions.len()).ok()?)?
+        .checked_add(u64::try_from(policy.model.name.len()).ok()?)?
+        .checked_add(
+            u64::try_from(policy.alternatives.len()).ok()?.checked_mul(u64::try_from(size_of::<Model>()).ok()?)?,
+        )?;
+    for model in &policy.alternatives {
+        if model.name.is_empty() || model.max_tokens == 0 || model.price_unit == 0 {
+            return None;
+        }
+        bytes = bytes.checked_add(u64::try_from(model.name.len()).ok()?)?;
+    }
+    Some(bytes)
+}
+
+fn run_carriers_bound(limits: &Limits) -> Option<u64> {
+    u64::from(limits.tasks.contract_choices)
+        .checked_mul(u64::try_from(size_of::<tasks::Verdict>()).ok()?)?
+        .checked_add(
+            u64::from(limits.tasks.authority_grants).checked_mul(u64::try_from(size_of::<tasks::Grant>()).ok()?)?,
+        )?
+        .checked_add(
+            u64::from(limits.tasks.authority_grants)
+                .checked_mul(u64::from(limits.tasks.authority_segments))?
+                .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?,
+        )?
+        .checked_add(u64::from(limits.tasks.authority_bytes))?
+        .checked_add(
+            u64::from(limits.tasks.executor_kinds)
+                .checked_mul(u64::try_from(size_of::<tasks::AuthorityExecutor>()).ok()?)?,
+        )
+}
+
+fn run_policy_bound(policy: &RunPolicy, limits: &Limits) -> Option<u64> {
+    run_policy_bytes(policy)?.checked_add(run_carriers_bound(limits)?)
+}
+
+pub(crate) fn run_charter_bytes(charter: &RunCharter) -> Option<u64> {
+    let mut bytes = run_policy_bytes(&charter.policy)?;
+    match &charter.contract {
+        tasks::Contract::Report { .. } | tasks::Contract::Change { .. } => {}
+        tasks::Contract::Verdict { choices } => {
+            bytes = bytes.checked_add(
+                u64::try_from(choices.len()).ok()?.checked_mul(u64::try_from(size_of::<tasks::Verdict>()).ok()?)?,
+            )?;
+        }
+    }
+    bytes = bytes
+        .checked_add(
+            u64::try_from(charter.authority.grants.len())
+                .ok()?
+                .checked_mul(u64::try_from(size_of::<tasks::Grant>()).ok()?)?,
+        )?
+        .checked_add(
+            u64::try_from(charter.authority.delegation.kinds.len())
+                .ok()?
+                .checked_mul(u64::try_from(size_of::<tasks::AuthorityExecutor>()).ok()?)?,
+        )?;
+    for grant in &charter.authority.grants {
+        bytes = bytes.checked_add(
+            u64::try_from(grant.pattern.segments.len())
+                .ok()?
+                .checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?,
+        )?;
+        for segment in &grant.pattern.segments {
+            bytes = bytes.checked_add(u64::try_from(segment.len()).ok()?)?;
+        }
+        let terminal = match &grant.pattern.last {
+            tasks::Last::Exact(bytes) | tasks::Last::Open(bytes) => bytes.len(),
+        };
+        bytes = bytes.checked_add(u64::try_from(terminal).ok()?)?;
+    }
+    Some(bytes)
 }
 
 fn text_part(first: &[u8], second: &[u8], third: &[u8], fourth: &[u8], available: u32) -> brief::Part {
