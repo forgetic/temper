@@ -194,6 +194,11 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 | 05s8 agent-world host feedback for caller names | merged locally | smith 80c9e20 | The wire world observes any decoded host call, including `message`; fmt/clippy pass; 594 focused / 3.624 s; 12 fuzzy / 4.506 s. |
 | 05s8 typed agent-world host feedback for caller names | merged locally | smith 1697a6d | The typed bridge observes the caller-declared `message` host call and its continuation feedback; fmt/clippy pass; 595 focused / 3.770 s; 12 fuzzy / 4.493 s. |
 | 05s8 local host 6.1: named answers on agent start | merged locally | smith 5685caf | fmt/clippy pass; 596 focused / 6.661 s; 12 fuzzy / 6.954 s. |
+| 05s8 local host 6.1b: waking prompt answers | merged locally | smith e685b15 | Settled turns retained; each absent host answer is rendered in the waking prompt. fmt/clippy pass; 597 focused / 11.833 s; 12 fuzzy / 5.491 s. |
+| 05s8 local host 6.2: durable answers by call name | merged locally | smith f9be9a8 | Multiple intents and answers survive restart until a following turn is saved; the run renders every outcome and keeps the full person line. fmt/clippy pass; 599 focused / 5.414 s; 12 fuzzy / 6.042 s; local serial 45 / 0.211 s. |
+| 05s8 local host 6.3: configured push recovery | merged locally | smith c5b1c11 | Saved targets drive recovery after commit and on either side of the push terminal; remote stale and failure outcomes are covered. fmt/clippy pass; 605 focused / 4.100 s; 12 fuzzy / 5.156 s; local serial 51 / 0.246 s. |
+| 05s8 local host 6.4: moved local head is stale | merged locally | smith b1557b8 | A run retains each repository's start head and its own later commits; an outside move stops delivery before any commit. fmt/clippy pass; 607 focused / 5.136 s; 12 fuzzy / 5.769 s; local serial 53 / 0.261 s. |
+| 05s8 local host 6.5: bounded request routing | merged locally | smith 4943450 | Local child requests drain with a traversal bounded by `max_out`. fmt/clippy pass; 607 focused / 6.394 s; 12 fuzzy / 7.445 s. |
 
 ## Completion 08.4 measured suite shares
 
