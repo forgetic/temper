@@ -2,3 +2,5 @@
 //! scripted agent domain, with domain fakes for storage and people.
 
 pub mod world;
+#[cfg(test)]
+mod forge;

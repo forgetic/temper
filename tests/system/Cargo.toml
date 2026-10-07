@@ -9,16 +9,23 @@ publish.workspace = true
 [dependencies]
 skein-lib.workspace = true
 skein-fake-checkout.workspace = true
+skein-fake-llm-domain.workspace = true
 smith-domain.workspace = true
 smith-domain-run.workspace = true
 smith-agent-world.workspace = true
 temper-engine-domain.workspace = true
 temper-engine-domain-world = { path = "../engine/domain" }
 temper-engine-domain-people.workspace = true
+temper-engine-domain-authority.workspace = true
+temper-engine-domain-brief.workspace = true
 temper-engine-domain-fleet.workspace = true
+temper-engine-domain-forge.workspace = true
+temper-engine-domain-forge-change.workspace = true
+temper-engine-domain-forge-client.workspace = true
 temper-engine-domain-tasks.workspace = true
 temper-engine-smith.workspace = true
 temper-engine-forge-world = { path = "../engine/forge" }
+temper-fake-forge-domain.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"
