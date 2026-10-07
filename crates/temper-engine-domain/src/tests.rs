@@ -301,7 +301,12 @@ fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention(
     );
     let callback = Delivery::Fleet(fleet::Event::Hello {
         channel: Token::new(1),
-        hello: fleet::Hello { graces: None, slots: 1, workstreams: Box::new([]), hosting: Box::new([]) },
+        hello: fleet::Hello {
+            stop_bound: skein_lib::Duration::from_secs(0),
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
     });
     assert!(
         decision.deliver(&limits, callback).is_err(),

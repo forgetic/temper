@@ -299,7 +299,7 @@ impl World {
             self.events.push_back(engine::Event::Hello {
                 channel: Token::new(7),
                 hello: fleet::Hello {
-                    graces: Some(Duration::from_secs(1)),
+                    stop_bound: Duration::from_secs(1),
                     slots: if with_change { 2 } else { 1 },
                     workstreams: Box::new([]),
                     hosting: self
@@ -610,7 +610,7 @@ fn change_world_with_policy(
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -688,7 +688,7 @@ fn a_small_fix_made_in_a_chat_lands() {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -1668,7 +1668,7 @@ fn a_worker_frozen_past_its_grace_resumes_with_a_push_in_hand_and_lands_nothing_
     world.send(engine::Event::Hello {
         channel: Token::new(8),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -1983,7 +1983,7 @@ fn a_saved_repository_tag_becomes_a_concrete_checkout_in_the_next_attempt() {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2108,7 +2108,7 @@ fn a_goal_ending_while_its_issue_is_opening_eventually_closes_that_issue() {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2160,7 +2160,7 @@ fn a_goal_subscription_receives_the_connectors_landing_news() {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2219,7 +2219,7 @@ fn subscribe_chat(world: &mut World, topic: forge_top::Topic, key: u8) -> u64 {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2414,7 +2414,7 @@ fn an_authorized_forge_read_returns_a_bounded_typed_answer() {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2453,7 +2453,7 @@ fn a_named_forge_effect_is_committed_before_its_write_and_made_once() {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2558,7 +2558,7 @@ fn pending_issue_effect() -> (World, engine::Assignment) {
     world.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),

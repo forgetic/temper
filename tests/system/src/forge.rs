@@ -506,7 +506,7 @@ mod system_stories {
         world.send(engine::Event::Hello {
             channel: Token::new(7),
             hello: fleet::Hello {
-                graces: Some(Duration::from_secs(1)),
+                stop_bound: Duration::from_secs(1),
                 slots: 2,
                 workstreams: Box::new([]),
                 hosting: Box::new([]),

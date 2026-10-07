@@ -133,7 +133,7 @@ fn a_smith_goal_is_proposed_accepted_planned_and_done() {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 5,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -349,7 +349,7 @@ fn a_smith_coordinator_is_woken_once_by_a_burst() {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 5,
             workstreams: Box::new([]),
             hosting: Box::new([]),

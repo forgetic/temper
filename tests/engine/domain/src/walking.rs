@@ -395,7 +395,7 @@ impl World {
             engine::Event::Hello {
                 channel: Token::new(7),
                 hello: fleet::Hello {
-                    graces: Some(Duration::from_millis(100)),
+                    stop_bound: Duration::from_millis(100),
                     slots: 1,
                     workstreams: Box::new([]),
                     hosting,

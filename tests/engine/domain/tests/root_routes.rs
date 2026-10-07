@@ -106,7 +106,7 @@ fn a_project_goals_watch_shows_a_later_priority_change() {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -349,7 +349,7 @@ fn a_maintainer_prioritises_project_goals_and_a_member_cannot() {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -477,7 +477,7 @@ fn a_members_wider_amendment_waits_for_a_maintainer_to_accept() {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 2,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -708,7 +708,7 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -1179,7 +1179,7 @@ fn hello(driver: &mut Driver) {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -1455,7 +1455,7 @@ fn maximum_cold_hello_batch_and_duplicate_losses_fit_one_startup_decision() {
         driver.send(engine::Event::Hello {
             channel: Token::new(channel),
             hello: fleet::Hello {
-                graces: Some(Duration::from_secs(5)),
+                stop_bound: Duration::from_secs(5),
                 slots: 1,
                 workstreams: Box::new([]),
                 hosting: Box::new([]),
@@ -1466,7 +1466,12 @@ fn maximum_cold_hello_batch_and_duplicate_losses_fit_one_startup_decision() {
     }
     driver.send(engine::Event::Hello {
         channel: Token::new(1),
-        hello: fleet::Hello { graces: None, slots: 1, workstreams: Box::new([]), hosting: Box::new([]) },
+        hello: fleet::Hello {
+            stop_bound: limits.fleet.grace,
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
     });
     driver.settle();
     assert_eq!(driver.delivered.iter().filter(|delivery| matches!(delivery, Delivery::Refuse { .. })).count(), 5);
@@ -1694,7 +1699,7 @@ fn batch_fixture_custom(
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -2866,7 +2871,7 @@ fn a_call_asked_twice_across_a_restart_is_decided_once() {
     restarted.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([fleet::Hosted {
@@ -2905,7 +2910,7 @@ fn a_lost_attempt_is_told_of_the_calls_committed_after_its_last_turn() {
     driver.send(engine::Event::Hello {
         channel: Token::new(8),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -3512,7 +3517,7 @@ fn restored_loss_spends_a_try_with_or_without_a_durable_turn() {
         original.send(engine::Event::Hello {
             channel: Token::new(7),
             hello: fleet::Hello {
-                graces: Some(Duration::from_secs(1)),
+                stop_bound: Duration::from_secs(1),
                 slots: 1,
                 workstreams: Box::new([]),
                 hosting: Box::new([]),
@@ -4119,7 +4124,7 @@ fn chat_driver() -> (Driver, engine::Assignment) {
     driver.send(engine::Event::Hello {
         channel: Token::new(7),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -4787,7 +4792,7 @@ fn a_worker_lost_mid_run_resumes_at_the_last_committed_turn() {
     driver.send(engine::Event::Hello {
         channel: Token::new(8),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(1)),
+            stop_bound: Duration::from_secs(1),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
@@ -4806,7 +4811,7 @@ fn a_worker_frozen_past_its_grace_gets_no_next_attempt_until_its_sum_has_passed(
     driver.send(engine::Event::Hello {
         channel: Token::new(8),
         hello: fleet::Hello {
-            graces: Some(Duration::from_secs(5)),
+            stop_bound: Duration::from_secs(5),
             slots: 1,
             workstreams: Box::new([]),
             hosting: Box::new([]),
