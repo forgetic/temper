@@ -42,22 +42,23 @@ impl Store {
     pub fn apply(&mut self) -> u64 {
         let (number, writes) = self.pending.pop_front().expect("queued transaction");
         assert_eq!(number, self.applied + 1, "fake store commits in order");
-        let mut next = self.rows.clone();
+        // A store application is one synchronous fake operation: no engine or
+        // referee observes its rows until the whole batch has been applied.
+        // Moving writes into the map avoids copying every older row per commit.
         for write in writes {
             match write {
                 Write::Save(row) => {
-                    next.insert(row.key(), row);
+                    self.rows.insert(row.key(), row);
                 }
                 Write::Erase(key) => {
-                    next.remove(&key);
+                    self.rows.remove(&key);
                 }
             }
         }
-        let Some(Record::Deployment(header)) = next.get(&Key::Deployment) else {
+        let Some(Record::Deployment(header)) = self.rows.get(&Key::Deployment) else {
             panic!("durable deployment");
         };
         assert_eq!(header.commits, number, "header and records applied atomically");
-        self.rows = next;
         self.applied = number;
         number
     }
@@ -74,7 +75,8 @@ impl Store {
     /// Each page is a separate request and has a cursor only when rows remain.
     #[must_use]
     pub fn page(&self, range: Range, after: Option<Key>, most: u32) -> (Box<[Record]>, Option<Key>) {
-        let selected: Vec<Record> = self.rows.iter().filter(|(key, _)| {
+        let count = usize::try_from(most).expect("small page");
+        let mut selected: Vec<Record> = self.rows.iter().filter(|(key, _)| {
             let within = match range {
                 Range::Calls => matches!(key, Key::Call(call) if call.task != 0 && call.attempt != 0 && call.completion != 0),
                 Range::ProposalDecision { proposal } => matches!(key, Key::ProposalDecision(number) if *number == proposal),
@@ -94,10 +96,12 @@ impl Store {
                 Range::TaskTranscript { task } => matches!(key, Key::Turn { task: found, attempt, turn } if *found == task && *attempt != 0 && *turn != 0),
             };
             within && after.is_none_or(|old| **key > old)
-        }).map(|(_, row)| row.clone()).collect();
-        let count = usize::try_from(most).expect("small page");
+        }).take(count.saturating_add(1)).map(|(_, row)| row.clone()).collect();
         let more = selected.len() > count;
-        let rows: Box<[Record]> = selected.into_iter().take(count).collect();
+        if more {
+            selected.pop();
+        }
+        let rows: Box<[Record]> = selected.into_boxed_slice();
         let next = if more { Some(rows.last().expect("positive page").key()) } else { None };
         (rows, next)
     }

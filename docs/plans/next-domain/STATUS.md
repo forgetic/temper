@@ -14,6 +14,7 @@ protocol drafts and lower-layer integration are parked for later work.
 
 | Increment | State | Commit | Evidence |
 |---|---|---|---|
+| Completion 08.4: budgets and legacy map | merged | this commit | `docs/development/legacy-domain-map.md` maps every step 07 section 2 story and rule. The root fake store moves committed writes without full history copies. Gate: fmt, clippy, 2,596 focused / 12.057 s, 45 fuzzy / 27.577 s. Serial shares are below. |
 | Completion 08.3: ending sweep and memory | merged | this commit | Root fuzzy sweep covers durable done, failed and cancelled endings plus a held route; the tasks sweep already injects drawn restarts, and root, tasks, people and forge have counted worst-case memory tests. Gate: fmt, clippy, 2,596 focused / 11.730 s, 45 fuzzy / 27.448 s. |
 | Completion 08.2: referee test lockfile | merged | this commit | Lock the two new world test dependencies from 08.2. Gate: fmt, clippy, 2,596 focused / 11.913 s, 44 fuzzy / 26.674 s. |
 | Completion 08.2: whole referee sensitivity | merged | this commit | Seven negative boundary tests cover authority, once, commit fencing, order, no loss, no overwrite and bounds; the good control runs the real root, while the forge fake observes and refuses a divergent push. Gate: fmt, clippy, 2,596 focused / 12.075 s, 44 fuzzy / 26.795 s. |
@@ -180,6 +181,31 @@ remain on `checkpoint/migration/transcript-codec`, outside main.
 | 05s8 local host 05: delivery intent and restart reconciliation | merged locally | smith 5164339 | fmt/clippy pass; 591 focused / 3.366 s; 12 fuzzy / 4.301 s; local serial 41 / 0.185 s focused and 1 / 0.035 s fuzzy. |
 | 05s8 local host 05: waking notice read fence | merged locally | smith c3ff7a6 | fmt/clippy pass; 592 focused / 3.630 s; 12 fuzzy / 4.408 s. |
 | 05s8 shared Skein OAuth revision | merged locally | smith bf3609f | All 13 Skein packages pinned to 4e78d26; fmt/clippy pass; 592 focused / 3.871 s; 12 fuzzy / 4.457 s. |
+
+## Completion 08.4 measured suite shares
+
+On an idle machine, `cargo nextest run --workspace --profile measure -j 1`
+selected the focused suite, and `--ignore-default-filter -E 'binary(/^fuzzy_/)'`
+selected the fuzzy suite. These are serial test durations; the gate's
+parallel wall times were 12.057 s focused and 27.577 s fuzzy, under the
+30 s and 120 s suite caps in the completion plan's README, section 5.5.
+
+| World or share | Focused tests / serial seconds | Fuzzy tests / serial seconds |
+|---|---:|---:|
+| New root | 160 / 1.382 | 7 / 3.150 |
+| New tasks | 55 / 0.332 | 1 / 1.866 |
+| New people | 14 / 0.068 | 1 / 0.085 |
+| New forge top | 28 / 0.149 | 1 / 0.022 |
+| Legacy crates and worlds | 729 / 10.979 | 13 / 17.342 |
+| Other crates and worlds | 1,610 / 16.210 | 22 / 32.701 |
+| Whole suite | 2,596 / 29.192 wall | 45 / 55.167 wall |
+
+The new world's allotment is 1 s focused and 8 s fuzzy each while legacy
+runs. Root's focused serial share is 0.382 s above that allotment; the other
+new worlds fit, and both enforced suite caps pass. The root fake store's
+write transfer reduced its share from 1.926 s before this increment. This
+remaining root share is a test-cost gap for later consolidation or faster
+simulation; no legacy fuzzy seed trim is needed for the suite caps.
 
 ## Alignment slice limits
 
