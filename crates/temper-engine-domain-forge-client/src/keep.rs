@@ -30,6 +30,7 @@ struct Live {
     active: bool,
     fresh: Fresh,
     writer: bool,
+    pushed_by: Option<(Commit, u64)>,
     hinted: bool,
     state: State,
     interval: Duration,
@@ -55,6 +56,7 @@ enum Phase {
     Pull,
     Reviews(u32),
     Branch,
+    BranchCompare { before: Commit, after: Commit },
 }
 #[derive(Debug)]
 struct Repo {
@@ -175,6 +177,7 @@ fn live(record: LiveRecord, l: &Limits, alarm: u64) -> Live {
         active: true,
         fresh: Fresh::Complete,
         writer: false,
+        pushed_by: None,
         hinted: false,
         state: State::Due(phase, Priority::Keep),
         interval: l.poll,
@@ -527,11 +530,12 @@ fn prepare_inbox(row: &mut Live, phase: Phase, priority: Priority, out: &mut Que
                 out.push(Request::Save { record: Stored::Live(row.record.clone()) });
             }
         }
-        Phase::Object | Phase::Pull | Phase::Reviews(_) | Phase::Branch => {}
+        Phase::Object | Phase::Pull | Phase::Reviews(_) | Phase::Branch | Phase::BranchCompare { .. } => {}
     }
 }
 fn operation(row: &Live, key: &Resource, phase: Phase) -> Read {
     match phase {
+        Phase::BranchCompare { before, after } => Read::Compare { before, after },
         Phase::Object => match key.what {
             What::Pull(number) | What::Issue(number) => Read::Item {
                 number,
@@ -617,7 +621,9 @@ pub(crate) fn pushed(d: &mut Domain, env: &Env<Limits>, key: &Resource, commit: 
 }
 pub(crate) fn hint(d: &mut Domain, env: &Env<Limits>, hint: api::Hint) {
     let valid = match &hint.change {
-        Change::Branch(name) => name.len() <= usize::try_from(env.limits.op_bytes).expect("u32 fits usize"),
+        Change::Branch(name) | Change::BranchMoved { branch: name, .. } => {
+            name.len() <= usize::try_from(env.limits.op_bytes).expect("u32 fits usize")
+        }
         Change::Item(_) | Change::Commit(_) => true,
     };
     if !valid {
@@ -633,19 +639,6 @@ pub(crate) fn hint(d: &mut Domain, env: &Env<Limits>, hint: api::Hint) {
         // still cause a read so the returned row can establish provenance.
         Some(_) | None => {}
     }
-    match &hint.change {
-        Change::Branch(name) => {
-            for (key, row) in &d.keep.live {
-                if key.repository == hint.repository && row.active && row.writer {
-                    match &key.what {
-                        What::Branch(branch) if branch == name => return,
-                        What::Branch(_) | What::Repository | What::Pull(_) | What::Issue(_) => {}
-                    }
-                }
-            }
-        }
-        Change::Item(_) | Change::Commit(_) => {}
-    }
     for key in keys(&d.keep) {
         let row = d.keep.live.get_mut(&key).expect("bounded key remains");
         let key = &key;
@@ -653,10 +646,13 @@ pub(crate) fn hint(d: &mut Domain, env: &Env<Limits>, hint: api::Hint) {
             continue;
         }
         let affected = affected(row, key, &hint.change);
-        if affected && !row.writer {
+        if affected {
+            if let Change::BranchMoved { head, actor, .. } = &hint.change {
+                row.pushed_by = Some((*head, *actor));
+            }
             match hint.change {
                 Change::Item(_) => row.inbox.needs_repair = true,
-                Change::Branch(_) | Change::Commit(_) => {}
+                Change::Branch(_) | Change::BranchMoved { .. } | Change::Commit(_) => {}
             }
             nudge_resource(&mut d.alarms, env, key, row);
         }
@@ -682,7 +678,7 @@ fn affected(row: &Live, key: &Resource, change: &Change) -> bool {
             What::Repository => true,
             What::Branch(_) => false,
         },
-        Change::Branch(name) => match &key.what {
+        Change::Branch(name) | Change::BranchMoved { branch: name, .. } => match &key.what {
             What::Branch(branch) => branch == name,
             What::Pull(_) => match &row.record.cached.pull {
                 Some(pull) => pull.head == *name || pull.base == *name,
@@ -791,8 +787,8 @@ pub(crate) fn answered_repository(
         | Answer::Remarks { .. }
         | Answer::Commit(_)
         | Answer::Branches(_)
-        | Answer::PullFiles { .. }
         | Answer::Compare { .. }
+        | Answer::PullFiles { .. }
         | Answer::Checks(_)
         | Answer::File { .. }
         | Answer::Job { .. }
@@ -881,12 +877,14 @@ pub(crate) fn answered_resource(
         }
         Answer::Reviews { reviews, more } => reviews_answered(d, env, key, phase, reviews, more, out),
         Answer::Commit(commit) => branch_answered(d, env, key, commit, out),
+        Answer::Compare { before, after, contains_before, .. } => {
+            branch_compared(d, env, key, before, after, contains_before, out);
+        }
         Answer::Items { .. }
         | Answer::Branches(_)
         | Answer::Statuses { .. }
         | Answer::Remarks { .. }
         | Answer::PullFiles { .. }
-        | Answer::Compare { .. }
         | Answer::Checks(_)
         | Answer::File { .. }
         | Answer::Job { .. }
@@ -994,7 +992,7 @@ fn reviews_answered(
 ) {
     let page = match phase {
         Phase::Reviews(page) => page,
-        Phase::Object | Phase::Pull | Phase::Branch => unreachable!("reviews stage"),
+        Phase::Object | Phase::Pull | Phase::Branch | Phase::BranchCompare { .. } => unreachable!("reviews stage"),
     };
     if more && page >= env.limits.inbox {
         failed_resource(d, env, key, phase, Error::TooLarge, out);
@@ -1105,15 +1103,60 @@ fn remember(stamps: &mut List<Delivery>, wanted: Delivery) -> bool {
     stamps.push(wanted).is_ok()
 }
 fn branch_answered(d: &mut Domain, env: &Env<Limits>, key: &Resource, commit: Commit, out: &mut Queue<Request>) {
+    let row = d.keep.live.get(key).expect("resource remains");
+    if row.writer
+        && row.record.cached.tip != Some(commit)
+        && let Some(before) = row.record.cached.tip
+    {
+        let row = d.keep.live.get_mut(key).expect("resource remains");
+        row.state = State::Due(Phase::BranchCompare { before, after: commit }, Priority::Fresh);
+        return;
+    }
+    branch_observed(d, env, key, commit, false, out);
+}
+fn branch_compared(
+    d: &mut Domain,
+    env: &Env<Limits>,
+    key: &Resource,
+    before: Commit,
+    after: Commit,
+    forward: bool,
+    out: &mut Queue<Request>,
+) {
+    let row = d.keep.live.get(key).expect("resource remains");
+    // A run answer can confirm a newer head while this comparison is in flight.
+    // The comparison cannot overwrite that confirmation.
+    if row.record.cached.tip != Some(before) {
+        let row = d.keep.live.get_mut(key).expect("resource remains");
+        row.state = State::Due(Phase::Branch, Priority::Fresh);
+        return;
+    }
+    branch_observed(d, env, key, after, !forward, out);
+}
+fn branch_observed(
+    d: &mut Domain,
+    env: &Env<Limits>,
+    key: &Resource,
+    commit: Commit,
+    backwards: bool,
+    out: &mut Queue<Request>,
+) {
+    let row = d.keep.live.get(key).expect("resource remains");
+    let outside = match row.pushed_by {
+        Some((head, actor)) if head == commit => !crate::identity::writer(d, key.repository, actor),
+        Some(_) | None => false,
+    };
     let row = d.keep.live.get_mut(key).expect("resource remains");
     let changed = row.record.cached.tip != Some(commit);
-    if !row.writer
-        && let Some(expected) = row.record.pushed
-        && expected != commit
+    let expected = if row.writer { row.record.cached.tip } else { row.record.pushed };
+    if (backwards || outside || !row.writer)
         && changed
+        && let Some(expected) = expected
+        && expected != commit
     {
-        out.push(Request::Drift { resource: key.clone(), expected, observed: commit });
+        out.push(Request::Drift { resource: key.clone(), expected, observed: Some(commit) });
     }
+    row.pushed_by = None;
     row.record.cached.tip = Some(commit);
     out.push(Request::Save { record: Stored::Live(row.record.clone()) });
     if changed && !row.writer {
@@ -1129,6 +1172,14 @@ fn failed_resource(
     error: Error,
     out: &mut Queue<Request>,
 ) {
+    if error == Error::Missing {
+        let row = d.keep.live.get(key).expect("resource remains");
+        if let What::Branch(_) = key.what
+            && let Some(expected) = row.record.cached.tip
+        {
+            out.push(Request::Drift { resource: key.clone(), expected, observed: None });
+        }
+    }
     out.push(Request::Changed { resource: key.clone(), result: Err(error) });
     let row = d.keep.live.get_mut(key).expect("resource remains");
     if error == Error::Missing {

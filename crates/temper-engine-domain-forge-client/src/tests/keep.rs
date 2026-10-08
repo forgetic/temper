@@ -741,3 +741,44 @@ fn a_first_inbox_read_never_hides_an_edited_or_unknown_completed_own_echo() {
         }
     }
 }
+
+#[test]
+fn writer_moves_require_forward_ancestry_and_authenticated_identity() {
+    for (actor, forward, hint_head, expected_drift) in
+        [(1, true, [2; 32], 0), (2, true, [2; 32], 1), (1, false, [2; 32], 1), (2, true, [3; 32], 0)]
+    {
+        let mut h = Harness::new();
+        h.keep(Box::new([watch(branch(), false)]));
+        h.clock();
+        let read = h.one();
+        h.answer(read, Answer::Commit([1; 32]));
+        h.event(Event::Writer { resource: branch(), taken: true });
+        h.event(Event::Hint {
+            hint: api::Hint {
+                repository: REPO,
+                change: Change::BranchMoved { branch: Box::from(&b"topic"[..]), head: hint_head, actor },
+                key: None,
+            },
+        });
+        h.fire(101);
+        let listing = h.one();
+        h.answer(listing, Answer::Items { items: Box::new([]), more: false, now: at(101) });
+        let read = h.one();
+        assert_eq!(read.op, Op::Read(Read::Branch { branch: Box::from(&b"topic"[..]) }));
+        h.answer(read, Answer::Commit([2; 32]));
+        let compare = h.one();
+        assert_eq!(compare.op, Op::Read(Read::Compare { before: [1; 32], after: [2; 32] }));
+        h.answer(
+            compare,
+            Answer::Compare {
+                before: [1; 32],
+                after: [2; 32],
+                contains_before: forward,
+                files: Box::new([]),
+                commits: Box::new([]),
+            },
+        );
+        assert_eq!(h.drift, expected_drift);
+        assert_eq!(h.news.as_slice(), &[Answer::Commit([1; 32])]);
+    }
+}

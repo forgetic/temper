@@ -143,6 +143,21 @@ pub struct Hold {
     pub name: Name,
     pub task: u64,
     pub writer: Option<Writer>,
+    /// Last outside change requiring a person to release this hold.
+    pub drift: Option<Drift>,
+}
+
+/// An outside change and its observation time, retained with the affected hold.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Drift {
+    pub at: skein_lib::Wall,
+    pub change: DriftChange,
+}
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum DriftChange {
+    Branch { expected: client::api::Commit, observed: Option<client::api::Commit> },
+    PullClosed { number: u64 },
+    Retargeted { number: u64, before: Box<[u8]>, after: Box<[u8]> },
 }
 /// Durable progress while a closing task releases its connector resources.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -231,6 +246,8 @@ pub struct Subscriber {
 pub struct BranchHead {
     pub name: Name,
     pub commit: client::api::Commit,
+    /// The store has confirmed this branch was left by our writer.
+    pub owned: bool,
 }
 /// Last published pull state and CI verdict.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -483,6 +500,9 @@ pub enum Event {
 /// The connector's output to the root, including child API calls.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Current role and hold admission for one named resource.
+    Resource { name: Name, role: crate::Access, hold: crate::resources::HoldKind },
+
     /// Add a goal's topic through the core's durable task subscriptions.
     GoalTopic { goal: u64, topic: Topic },
     /// Remove a goal's CI topic after no change names that head.

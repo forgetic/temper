@@ -30,6 +30,9 @@ pub enum Change {
     Item(u64),
     /// A hint about a branch.
     Branch(Box<[u8]>),
+    /// An authenticated push webhook. The hint advances a fresh branch read;
+    /// its actor is used only if that read still observes this head.
+    BranchMoved { branch: Box<[u8]>, head: Commit, actor: u64 },
     /// A hint about a commit.
     Commit(Commit),
 }

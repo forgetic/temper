@@ -125,7 +125,7 @@ impl Domain {
     }
 }
 
-fn branch_matches(name: &crate::Name, branch: &[u8]) -> bool {
+pub(crate) fn branch_matches(name: &crate::Name, branch: &[u8]) -> bool {
     let parts = match &name.what {
         crate::What::Branch(parts) => parts,
         crate::What::Repository | crate::What::Pull(_) | crate::What::Issue(_) => return false,
@@ -146,4 +146,34 @@ fn branch_matches(name: &crate::Name, branch: &[u8]) -> bool {
         at = end;
     }
     at == branch.len()
+}
+
+/// Compare the prefix without allocating a joined branch name.
+pub(crate) fn branch_starts_with(name: &crate::Name, prefix: &[u8]) -> bool {
+    let parts = match &name.what {
+        crate::What::Branch(parts) => parts,
+        crate::What::Repository | crate::What::Pull(_) | crate::What::Issue(_) => return false,
+    };
+    let mut at = 0_usize;
+    for (index, part) in parts.iter().enumerate() {
+        if index != 0 {
+            if at == prefix.len() {
+                return true;
+            }
+            if prefix.get(at) != Some(&b'/') {
+                return false;
+            }
+            at = at.checked_add(1).expect("prefix offset bounded by prefix length");
+        }
+        for byte in part {
+            if at == prefix.len() {
+                return true;
+            }
+            if prefix.get(at) != Some(byte) {
+                return false;
+            }
+            at = at.checked_add(1).expect("prefix offset bounded by prefix length");
+        }
+    }
+    at == prefix.len()
 }

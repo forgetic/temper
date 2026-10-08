@@ -2049,6 +2049,25 @@ pub(super) fn outputs(
     for _ in 0..out.len() {
         let request = out.pop().expect("connector output count");
         match request {
+            forge::Request::Resource { name, role, hold } => {
+                let Some(name) = hub_name(domain.config.forge_connector, &name, &env.limits.tasks) else { continue };
+                let role = match role {
+                    forge::Access::Owned => jig_core::connector::ResourceRole::Owned,
+                    forge::Access::Participant => jig_core::connector::ResourceRole::Participant,
+                    forge::Access::Context => jig_core::connector::ResourceRole::Context,
+                    forge::Access::Unavailable => jig_core::connector::ResourceRole::Unavailable,
+                };
+                let hold = match hold {
+                    forge::resources::HoldKind::Shared => jig_core::connector::HoldKind::Shared,
+                    forge::resources::HoldKind::Exclusive { wait } => jig_core::connector::HoldKind::Exclusive { wait },
+                };
+                domain.work.push(Work::Core(jig_core::Event::EffectConnector(jig_core::connector::Event::Resource {
+                    name,
+                    role,
+                    hold,
+                })));
+            }
+
             forge::Request::GoalTopic { goal, topic } => subscribe_goal(domain, env, goal, topic),
             forge::Request::GoalUntopic { goal, topic } => {
                 if let Some(subscriber) = domain.forge.topic_subscriber(goal, &topic) {

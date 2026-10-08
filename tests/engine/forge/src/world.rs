@@ -41,7 +41,7 @@ pub const LIMITS: top::Limits = top::Limits {
     resources_per_task: 4,
     paths_per_subscription: 4,
     name_bytes: 128,
-    output: 64,
+    output: 80,
     facts: 16,
     adoptions: 2,
     collaborators: 8,
@@ -239,6 +239,10 @@ impl World {
     }
 
     /// Script a worker's pushed branch through the independent fake git.
+    pub fn permission(&mut self, permission: raw::Permission) {
+        forge::grant(&mut self.forge, b"org/repo", 1, permission);
+    }
+
     pub fn produce(&mut self, branch: &[u8]) {
         self.produce_file(branch, b"file", b"change");
     }
@@ -262,8 +266,11 @@ impl World {
         self.push_file(branch, b"file", content);
     }
     pub fn push_file(&mut self, branch: &[u8], path: &[u8], content: &[u8]) {
+        self.push_as(branch, path, content, 1);
+    }
+    pub fn push_as(&mut self, branch: &[u8], path: &[u8], content: &[u8], actor: u64) {
         let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits: self.forge_env.limits };
-        forge::advance(&mut self.forge, &env, b"org/repo", branch, path, content, 1).expect("worker push");
+        forge::advance(&mut self.forge, &env, b"org/repo", branch, path, content, actor).expect("scripted push");
     }
     pub fn status(&mut self, branch: &[u8], check: raw::Check) {
         self.external(
@@ -426,7 +433,8 @@ impl World {
                     };
                     self.seen.push(top::Request::RestartDone { stage }).expect("world output capacity");
                 }
-                other @ (top::Request::Adopted { .. }
+                other @ (top::Request::Resource { .. }
+                | top::Request::Adopted { .. }
                 | top::Request::Taken { .. }
                 | top::Request::Refused { .. }
                 | top::Request::Outcome { .. }

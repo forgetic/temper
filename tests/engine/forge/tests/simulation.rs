@@ -38,6 +38,38 @@ fn a_repository_with_another_deployments_branch_prefix_is_refused() {
 }
 
 #[test]
+fn a_later_adoption_rechecks_the_prefix_and_accepts_only_recorded_writer_branches() {
+    let mut world = World::new(4);
+    world.adopt();
+    world.produce(b"temper/own");
+    let name = top::Name {
+        forge: REPO.forge,
+        repository: REPO.repository,
+        what: top::What::Branch(Box::new([Box::from(&b"temper"[..]), Box::from(&b"own"[..])])),
+    };
+    world.event(top::Event::Names { task: 9, resources: Box::new([name.clone()]) });
+    world.event(top::Event::Hold { task: 9, resource: name.clone(), from: None });
+    world.event(top::Event::Claim { task: 9, attempt: 1, writes: Box::new([name.clone()]), holders: Box::new([9]) });
+    world.event(top::Event::Answered {
+        task: 9,
+        attempt: 1,
+        pushed: Box::new([(name, translate::commit(world.branch(b"temper/own")))]),
+    });
+    drop(world.take_seen());
+    world.adopt();
+    assert!(world.seen().iter().any(|request| matches!(request, top::Request::Adopted { result: Ok(_), .. })));
+    world.produce(b"temper/foreign");
+    drop(world.take_seen());
+    world.adopt();
+    assert!(
+        world
+            .seen()
+            .iter()
+            .any(|request| matches!(request, top::Request::Adopted { result: Err(client::api::Error::Refused), .. }))
+    );
+}
+
+#[test]
 fn a_context_repository_cannot_receive_a_write() {
     let mut world = World::new(5);
     world.adopt_as(top::Role::Context);
@@ -63,6 +95,46 @@ fn a_context_repository_cannot_receive_a_write() {
     world.run_for(2);
     assert!(world.seen().iter().any(|request| matches!(request, top::Request::Refused { task: 9 })));
     assert_eq!(world.writes(), 0);
+}
+
+#[test]
+fn a_permission_refusal_rereads_capabilities_and_narrows_later_writes() {
+    let mut world = World::new(5);
+    world.adopt();
+    world.permission(temper_fake_forge_domain::api::Permission::Read);
+    let entry = client::Entry {
+        number: 1,
+        task: 9,
+        repository: REPO,
+        effect: client::Effect {
+            write: client::api::Write::Status {
+                commit: translate::commit(1),
+                context: Box::from(&b"build"[..]),
+                check: client::api::Check::Passed,
+            },
+            condition: client::Condition::None,
+        },
+        start: None,
+        attempt: None,
+        failures: 0,
+    };
+    world.event(top::Event::Enqueue { entry: entry.clone() });
+    world.event(top::Event::Committed { entry: 1 });
+    world.run_for(5);
+    assert!(world.seen().iter().any(|request| matches!(
+        request,
+        top::Request::Outcome { outcome: client::Outcome::Failed(client::api::Error::Forbidden), .. }
+    )));
+    let Some(top::Stored::Repository(repository)) = world.stored().get(&top::Key::Repository(REPO)) else {
+        panic!("repository");
+    };
+    assert!(repository.kinds.read);
+    assert!(!repository.kinds.issue && !repository.kinds.push && !repository.kinds.land);
+    let before = world.calls();
+    world.event(top::Event::Enqueue { entry: client::Entry { number: 2, ..entry } });
+    world.run_for(1);
+    assert_eq!(world.calls(), before, "later writes are refused before any provider call");
+    assert!(world.seen().iter().any(|request| matches!(request, top::Request::Refused { task: 9 })));
 }
 
 fn change_row() -> top::ChangeRow {
@@ -479,12 +551,21 @@ fn a_pull_closed_by_someone_else_is_held_then_reopened_on_release() {
         Some(top::Stored::Change(row)) => row.pull.expect("fixture pull"),
         Some(_) | None => panic!("fixture change"),
     };
+    let name = top::Name {
+        forge: REPO.forge,
+        repository: REPO.repository,
+        what: top::What::Branch(Box::new([Box::from(&b"temper"[..]), Box::from(&b"51"[..])])),
+    };
+    world.event(top::Event::Hold { task: 51, resource: name.clone(), from: None });
     world.close(pull);
     assert_eq!(
         change_step(&mut world, 1, change::Status::Passed, Box::new([])),
         change::Decision::Hold(change::Hold::PullClosed)
     );
     assert_eq!(world.writes(), 0);
+    let Some(top::Stored::Hold(hold)) = world.stored().get(&top::Key::Hold(name)) else { panic!("held change") };
+    assert_eq!(hold.drift.as_ref().expect("closed pull details").change, top::DriftChange::PullClosed { number: pull });
+    assert!(hold.drift.as_ref().expect("drift timestamp").at > Wall::EPOCH);
     world.event(top::Event::ReleaseChange { task: 51 });
     assert_eq!(
         change_step_with_release(&mut world, 2, change::Status::Passed, Box::new([]), true),
@@ -702,6 +783,7 @@ fn a_change_produced_opened_checked_queued_and_landed() {
                     panic!("unexpected delegate")
                 }
                 top::Request::ChangeDecision { .. }
+                | top::Request::Resource { .. }
                 | top::Request::Adopted { .. }
                 | top::Request::Save { .. }
                 | top::Request::Erase { .. }
@@ -1262,6 +1344,12 @@ fn an_external_move_of_a_held_branch_is_reported_as_drift() {
     world.run_for(5);
     assert!(world.seen().iter().any(|event| matches!(event,
         top::Request::Drift { task: 51, resource } if resource == &name)));
+    let Some(top::Stored::Hold(hold)) = world.stored().get(&top::Key::Hold(name.clone())) else {
+        panic!("affected hold");
+    };
+    assert!(
+        matches!(hold.drift.as_ref(), Some(top::Drift { at, change: top::DriftChange::Branch { expected, observed: Some(_) } }) if *expected == pushed && *at > Wall::EPOCH)
+    );
     world.take_seen();
     world.event(top::Event::StepChange {
         task: 51,
@@ -1497,6 +1585,7 @@ fn goals_classify_landings_from_their_subtree_heads_and_planned_paths_after_rest
                 | top::Request::BriefReady { .. }
                 | top::Request::BriefSized { .. }
                 | top::Request::BriefTaken { .. }
+                | top::Request::Resource { .. }
                 | top::Request::Adopted { .. }
                 | top::Request::Save { .. }
                 | top::Request::Erase { .. }
@@ -1540,4 +1629,37 @@ fn goals_classify_landings_from_their_subtree_heads_and_planned_paths_after_rest
         request,
         top::Request::News { task: 42, class: top::Class::Kept, news: top::News::Landing { .. }, .. }
     )));
+}
+
+#[test]
+fn an_outside_push_during_a_worker_slot_holds_the_task_with_evidence() {
+    let mut world = World::new(130);
+    world.adopt();
+    world.produce(b"temper/51");
+    let name = top::Name {
+        forge: REPO.forge,
+        repository: REPO.repository,
+        what: top::What::Branch(Box::new([Box::from(&b"temper"[..]), Box::from(&b"51"[..])])),
+    };
+    world.event(top::Event::Names { task: 51, resources: Box::new([name.clone()]) });
+    world.event(top::Event::Hold { task: 51, resource: name.clone(), from: None });
+    world.run_for(1);
+    let before = temper_engine_forge_world::translate::commit(world.branch(b"temper/51"));
+    world.event(top::Event::Claim { task: 51, attempt: 1, writes: Box::new([name.clone()]), holders: Box::new([]) });
+    world.push_as(b"temper/51", b"file", b"outside", 2);
+    let after = temper_engine_forge_world::translate::commit(world.branch(b"temper/51"));
+    world.event(top::Event::Hint {
+        hint: client::api::Hint {
+            repository: REPO,
+            change: client::api::Change::BranchMoved { branch: Box::from(&b"temper/51"[..]), head: after, actor: 2 },
+            key: None,
+        },
+    });
+    world.run_for(5);
+    let Some(top::Stored::Hold(hold)) = world.stored().get(&top::Key::Hold(name)) else { panic!("affected hold") };
+    assert_eq!(
+        hold.drift.as_ref().expect("outside push holds task").change,
+        top::DriftChange::Branch { expected: before, observed: Some(after) }
+    );
+    assert!(hold.drift.as_ref().expect("drift").at > Wall::EPOCH);
 }

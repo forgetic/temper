@@ -46,6 +46,7 @@ pub(crate) struct PendingLost {
     task: u64,
     attempt: u64,
     name: Name,
+    comparison: Option<(client::api::Commit, client::api::Commit)>,
 }
 /// One fresh verdict read for a commit with live CI subscribers.
 #[derive(Debug)]
@@ -112,11 +113,12 @@ pub struct Domain {
     pub(crate) sequence: u64,
     pub(crate) changes: Map<u64, ChangeRow>,
     steps: Map<Token, PendingStep>,
-    issues: Map<u64, IssueRow>,
+    pub(crate) issues: Map<u64, IssueRow>,
     releases: Map<u64, ReleaseRow>,
     namespace: Box<[u8]>,
     adoptions: Map<Token, PendingAdoption>,
-    writers: Map<u16, u64>,
+    pub(crate) writers: Map<u16, u64>,
+    pub(crate) capabilities: Map<Token, crate::capabilities::Pending>,
     client: client::Domain,
     client_out: Queue<client::Request>,
     pub(crate) brief_fetches: Map<Token, brief::BriefFetch>,
@@ -185,6 +187,7 @@ impl Domain {
             releases: Map::with_capacity(l.tasks),
             namespace: config.namespace.clone(),
             adoptions: Map::with_capacity(l.adoptions),
+            capabilities: Map::with_capacity(l.repositories),
             writers,
             client: client::Domain::configured(&l.client, seed, config)?,
             client_out: Queue::with_capacity(client::max_out(&l.client)),
@@ -645,32 +648,7 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                 emit(out, Request::Save { record: Stored::Entry(entry) });
             }
             client::Request::Outcome { entry, task, outcome } => {
-                projection_outcome(d, entry, outcome, out);
-                change_outcome(d, env, entry, outcome, out);
-                release_outcome(d, entry, outcome, out);
-                match outcome {
-                    client::Outcome::Made { made: client::Made::Merged(commit), .. } => {
-                        if d.landed.len() < env.limits.landings || d.landed.contains_key(&commit) {
-                            d.landed.insert(commit, task).expect("preflighted landed capacity");
-                            emit(out, Request::Save { record: Stored::Landed { commit, task } });
-                        }
-                    }
-                    client::Outcome::Made {
-                        made:
-                            client::Made::Created(_)
-                            | client::Made::Commented(_)
-                            | client::Made::Reviewed(_)
-                            | client::Made::Updated(_)
-                            | client::Made::Branch(_)
-                            | client::Made::Set,
-                        ..
-                    }
-                    | client::Outcome::Failed(_)
-                    | client::Outcome::Raced { .. }
-                    | client::Outcome::Uncertain
-                    | client::Outcome::Held
-                    | client::Outcome::Withdrawn => {}
-                }
+                outcome_facts(d, env, entry, task, outcome, out);
                 match outcome {
                     client::Outcome::Uncertain => {}
                     client::Outcome::Made { .. }
@@ -693,7 +671,9 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                 }
             }
             client::Request::Changed { resource, result } => changed(d, env, resource, result, out),
-            client::Request::Drift { resource, expected: _, observed: _ } => drift(d, env, resource, out),
+            client::Request::Drift { resource, expected, observed } => {
+                drift(d, env, resource, crate::DriftChange::Branch { expected, observed }, out);
+            }
             client::Request::Call { call, repository, op } => emit(out, Request::Call { call, repository, op }),
             client::Request::Kept { owner, result } => {
                 if result.is_err() {
@@ -701,7 +681,9 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                 }
             }
             client::Request::Read { owner, result } => {
-                if d.brief_fetches.contains_key(&owner) {
+                if d.capabilities.contains_key(&owner) {
+                    crate::capabilities::answered(d, env, owner, result, out);
+                } else if d.brief_fetches.contains_key(&owner) {
                     brief::brief_answer(d, owner, result, out);
                 } else if d.adoptions.contains_key(&owner) {
                     adoption_read(d, env, owner, result, out);
@@ -724,6 +706,82 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
         }
     }
     read_afresh_complete(d, out);
+}
+
+fn outcome_facts(
+    d: &mut Domain,
+    env: &Env<Limits>,
+    entry: u64,
+    task: u64,
+    outcome: client::Outcome,
+    out: &mut Queue<Request>,
+) {
+    let forbidden = match outcome {
+        client::Outcome::Failed(client::api::Error::Forbidden | client::api::Error::Protected) => true,
+        client::Outcome::Made { .. }
+        | client::Outcome::Failed(_)
+        | client::Outcome::Raced { .. }
+        | client::Outcome::Uncertain
+        | client::Outcome::Held
+        | client::Outcome::Withdrawn => false,
+    };
+    if forbidden && let Some(row) = d.entries.get(&entry) {
+        let repository = row.repository;
+        crate::capabilities::refresh(d, env, repository, out);
+    }
+    projection_outcome(d, entry, outcome, out);
+    change_outcome(d, env, entry, outcome, out);
+    release_outcome(d, entry, outcome, out);
+    match outcome {
+        client::Outcome::Made { made: client::Made::Branch(commit), .. } => {
+            if let Some(kept) = d.entries.get(&entry) {
+                let branch = match &kept.effect.write {
+                    client::api::Write::CreateBranch { branch, .. } => Some(branch.clone()),
+                    client::api::Write::CreateIssue { .. }
+                    | client::api::Write::OpenPull { .. }
+                    | client::api::Write::Post { .. }
+                    | client::api::Write::Review { .. }
+                    | client::api::Write::Edit { .. }
+                    | client::api::Write::SetReviewers { .. }
+                    | client::api::Write::Close { .. }
+                    | client::api::Write::Reopen { .. }
+                    | client::api::Write::Merge { .. }
+                    | client::api::Write::Update { .. }
+                    | client::api::Write::Status { .. }
+                    | client::api::Write::DeleteBranch { .. } => None,
+                };
+                if let Some(branch) = branch {
+                    let resource = client::Resource { repository: kept.repository, what: client::What::Branch(branch) };
+                    if let Some(name) = from_client(&resource, &env.limits) {
+                        let head = BranchHead { name: name.clone(), commit, owned: true };
+                        if d.heads.insert(name, head.clone()).is_ok() {
+                            emit(out, Request::Save { record: Stored::BranchHead(head) });
+                        }
+                    }
+                }
+            }
+        }
+        client::Outcome::Made { made: client::Made::Merged(commit), .. } => {
+            if d.landed.len() < env.limits.landings || d.landed.contains_key(&commit) {
+                d.landed.insert(commit, task).expect("preflighted landed capacity");
+                emit(out, Request::Save { record: Stored::Landed { commit, task } });
+            }
+        }
+        client::Outcome::Made {
+            made:
+                client::Made::Created(_)
+                | client::Made::Commented(_)
+                | client::Made::Reviewed(_)
+                | client::Made::Updated(_)
+                | client::Made::Set,
+            ..
+        }
+        | client::Outcome::Failed(_)
+        | client::Outcome::Raced { .. }
+        | client::Outcome::Uncertain
+        | client::Outcome::Held
+        | client::Outcome::Withdrawn => {}
+    }
 }
 
 pub(crate) fn emit(out: &mut Queue<Request>, request: Request) {
@@ -837,6 +895,19 @@ fn adopt(d: &mut Domain, env: &Env<Limits>, reply_to: Token, request: Adoption, 
     );
 }
 
+fn owns_branch(d: &Domain, repository: client::api::Repository, branch: &[u8]) -> bool {
+    for (name, head) in &d.heads {
+        if head.owned
+            && name.forge == repository.forge
+            && name.repository == repository.repository
+            && crate::items::branch_matches(name, branch)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn adoption_read(
     d: &mut Domain,
     env: &Env<Limits>,
@@ -854,7 +925,7 @@ fn adoption_read(
                     return;
                 }
                 pending.permission = Some(permission);
-                let check_prefix = pending.request.role != Role::Context && !d.repositories.contains_key(&repository);
+                let check_prefix = pending.request.role != Role::Context;
                 pending.stage = if check_prefix { AdoptionStage::Branches } else { AdoptionStage::Settings };
                 d.adoptions.insert(owner, pending).expect("replaces read chain");
                 let read = if check_prefix { client::api::Read::Branches } else { client::api::Read::Settings };
@@ -866,7 +937,7 @@ fn adoption_read(
         AdoptionStage::Branches => match result {
             Ok(client::api::Answer::Branches(branches)) => {
                 for branch in branches {
-                    if branch.starts_with(&pending.request.prefix) {
+                    if branch.starts_with(&pending.request.prefix) && !owns_branch(d, repository, &branch) {
                         emit(out, Request::Adopted { reply_to: owner, result: Err(client::api::Error::Refused) });
                         return;
                     }
@@ -1092,6 +1163,11 @@ fn names(d: &mut Domain, env: &Env<Limits>, task: u64, resources: Box<[Name]>, o
     );
     if kept(&d.client_out) {
         d.names.insert(task, resources.clone()).expect("preflighted task capacity");
+        for name in &resources {
+            if let Some((role, hold)) = d.resource_facts(name) {
+                emit(out, Request::Resource { name: name.clone(), role, hold });
+            }
+        }
         emit(out, Request::Save { record: Stored::Names { task, resources } });
     }
     drain(d, env, out);
@@ -1150,7 +1226,13 @@ fn kept(out: &Queue<client::Request>) -> bool {
 }
 
 fn hold(d: &mut Domain, env: &Env<Limits>, task: u64, resource: Name, from: Option<u64>, out: &mut Queue<Request>) {
-    if !valid_name(d, &env.limits, &resource) || (!d.holds.contains_key(&resource) && d.holds.len() == env.limits.holds)
+    let holdable = match d.resource_facts(&resource) {
+        Some((_, crate::resources::HoldKind::Exclusive { .. })) => true,
+        Some((_, crate::resources::HoldKind::Shared)) | None => false,
+    };
+    if !holdable
+        || !valid_name(d, &env.limits, &resource)
+        || (!d.holds.contains_key(&resource) && d.holds.len() == env.limits.holds)
     {
         emit(out, Request::Refused { task });
         return;
@@ -1168,7 +1250,11 @@ fn hold(d: &mut Domain, env: &Env<Limits>, task: u64, resource: Name, from: Opti
         Some(row) => row.writer,
         None => None,
     };
-    let row = Hold { name: resource.clone(), task, writer };
+    let drift = match d.holds.get(&resource) {
+        Some(row) => row.drift.clone(),
+        None => None,
+    };
+    let row = Hold { name: resource.clone(), task, writer, drift };
     d.holds.insert(resource, row.clone()).expect("preflighted hold capacity");
     emit(out, Request::Save { record: Stored::Hold(row) });
 }
@@ -1244,10 +1330,11 @@ fn answered(
         row.writer = None;
         let saved = row.clone();
         emit(out, Request::Save { record: Stored::Hold(saved) });
+        let undrifted = row.drift.is_none();
         if let Some(resource) = to_client(name, &env.limits) {
             for (pushed_name, commit) in pushed {
-                if pushed_name == name {
-                    let head = BranchHead { name: name.clone(), commit: *commit };
+                if pushed_name == name && undrifted {
+                    let head = BranchHead { name: name.clone(), commit: *commit, owned: true };
                     d.heads.insert(name.clone(), head.clone()).expect("reported head was a live resource");
                     emit(out, Request::Save { record: Stored::BranchHead(head) });
                     child(d, env, client::Event::Pushed { resource: resource.clone(), commit: *commit }, out);
@@ -1280,7 +1367,7 @@ fn lost(d: &mut Domain, env: &Env<Limits>, task: u64, attempt: u64, out: &mut Qu
         };
         d.sequence = sequence;
         let owner = Token::new(sequence | (1_u64 << 62));
-        if d.lost.insert(owner, PendingLost { task, attempt, name: name.clone() }).is_err() {
+        if d.lost.insert(owner, PendingLost { task, attempt, name: name.clone(), comparison: None }).is_err() {
             emit(out, Request::Refused { task });
             return;
         }
@@ -1295,11 +1382,54 @@ fn lost_read(
     result: Result<client::api::Answer, client::api::Error>,
     out: &mut Queue<Request>,
 ) {
-    let Some(pending) = d.lost.remove(&owner) else { return };
-    let observed = match result {
-        Ok(client::api::Answer::Commit(commit)) => Some(commit),
-        Err(client::api::Error::Missing) => None,
-        Ok(_) | Err(_) => {
+    let Some(mut pending) = d.lost.remove(&owner) else { return };
+    let Some(resource) = to_client(&pending.name, &env.limits) else { return };
+    let baseline = d.branch_head(&pending.name);
+    let observed = match (pending.comparison, result) {
+        (None, Ok(client::api::Answer::Commit(commit))) => {
+            if let Some(before) = baseline
+                && before != commit
+            {
+                pending.comparison = Some((before, commit));
+                d.lost.insert(owner, pending).expect("comparison occupies its reserved lost-read slot");
+                child(
+                    d,
+                    env,
+                    client::Event::Read {
+                        owner,
+                        repository: resource.repository,
+                        read: client::api::Read::Compare { before, after: commit },
+                    },
+                    out,
+                );
+                return;
+            }
+            Some(commit)
+        }
+        (
+            Some((expected_before, expected_after)),
+            Ok(client::api::Answer::Compare { before, after, contains_before, .. }),
+        ) if before == expected_before && after == expected_after => {
+            if !contains_before {
+                drift(
+                    d,
+                    env,
+                    resource.clone(),
+                    crate::DriftChange::Branch { expected: before, observed: Some(after) },
+                    out,
+                );
+            }
+            Some(after)
+        }
+        (None, Err(client::api::Error::Missing)) => {
+            if let Some(expected) = baseline {
+                drift(d, env, resource.clone(), crate::DriftChange::Branch { expected, observed: None }, out);
+            } else {
+                emit(out, Request::Drift { task: pending.task, resource: pending.name.clone() });
+            }
+            None
+        }
+        (_, Ok(_) | Err(_)) => {
             emit(out, Request::Refused { task: pending.task });
             return;
         }
@@ -1309,23 +1439,18 @@ fn lost_read(
         return;
     }
     row.writer = None;
-    let saved = row.clone();
-    emit(out, Request::Save { record: Stored::Hold(saved) });
-    if let Some(commit) = observed {
-        let head = BranchHead { name: pending.name.clone(), commit };
+    let undrifted = row.drift.is_none();
+    emit(out, Request::Save { record: Stored::Hold(row.clone()) });
+    if undrifted && let Some(commit) = observed {
+        let head = BranchHead { name: pending.name.clone(), commit, owned: true };
         if d.heads.insert(pending.name.clone(), head.clone()).is_err() {
             emit(out, Request::Refused { task: pending.task });
             return;
         }
         emit(out, Request::Save { record: Stored::BranchHead(head) });
+        child(d, env, client::Event::Pushed { resource: resource.clone(), commit }, out);
     }
-    if let Some(resource) = to_client(&pending.name, &env.limits) {
-        match observed {
-            Some(commit) => child(d, env, client::Event::Pushed { resource: resource.clone(), commit }, out),
-            None => emit(out, Request::Drift { task: pending.task, resource: pending.name.clone() }),
-        }
-        child(d, env, client::Event::Writer { resource, taken: false }, out);
-    }
+    child(d, env, client::Event::Writer { resource, taken: false }, out);
 }
 
 fn enqueue(d: &mut Domain, env: &Env<Limits>, entry: client::Entry, out: &mut Queue<Request>) {
@@ -1760,6 +1885,29 @@ fn finish_step(d: &mut Domain, env: &Env<Limits>, pending: PendingStep, out: &mu
         Some(pull) => Some(pull.number),
         None => row.pull,
     };
+    if let Some(pull) = &pending.pull {
+        let changed = if pull.base != row.base {
+            Some(crate::DriftChange::Retargeted {
+                number: pull.number,
+                before: row.base.clone(),
+                after: pull.base.clone(),
+            })
+        } else if pull.state == client::api::State::Closed && pull.merged.is_none() {
+            Some(crate::DriftChange::PullClosed { number: pull.number })
+        } else {
+            None
+        };
+        if let Some(change) = changed {
+            let resource =
+                client::Resource { repository: row.repository, what: client::What::Branch(row.branch.clone()) };
+            if let Some(name) = from_client(&resource, &env.limits)
+                && let Some(hold) = d.holds.get_mut(&name)
+            {
+                hold.drift = Some(crate::Drift { at: env.wall, change });
+                emit(out, Request::Save { record: Stored::Hold(hold.clone()) });
+            }
+        }
+    }
     let facts = change_facts(d, env, &row, &pending, base_tip);
     let heard = change::Heard {
         effect: if row.pending.is_some() { change::EffectResult::Pending } else { row.effect },
@@ -1985,8 +2133,14 @@ fn change_outcome(d: &mut Domain, env: &Env<Limits>, entry: u64, outcome: client
     if pull_closed {
         let branch =
             client::Resource { repository: saved.repository, what: client::What::Branch(saved.branch.clone()) };
-        if let Some(resource) = from_client(&branch, &env.limits) {
-            emit(out, Request::Drift { task, resource });
+        if from_client(&branch, &env.limits).is_some() {
+            drift(
+                d,
+                env,
+                branch,
+                crate::DriftChange::PullClosed { number: saved.pull.expect("raced pull is known") },
+                out,
+            );
         }
     }
     match outcome {
@@ -2031,6 +2185,17 @@ fn release_change(d: &mut Domain, task: u64, out: &mut Queue<Request>) {
     row.drift = None;
     let saved = row.clone();
     emit(out, Request::Save { record: Stored::Change(saved) });
+    let mut affected = List::with_capacity(d.holds.len());
+    for (name, hold) in &d.holds {
+        if hold.task == task && hold.drift.is_some() {
+            affected.push(name.clone()).expect("at most all held resources");
+        }
+    }
+    for name in &affected {
+        let hold = d.holds.get_mut(name).expect("collected held resource");
+        hold.drift = None;
+        emit(out, Request::Save { record: Stored::Hold(hold.clone()) });
+    }
 }
 
 fn settle_effects(
@@ -2641,7 +2806,9 @@ fn ci_refresh(
 fn ci_hint(d: &mut Domain, env: &Env<Limits>, hint: &client::api::Hint, out: &mut Queue<Request>) {
     let head = match &hint.change {
         client::api::Change::Commit(head) => *head,
-        client::api::Change::Item(_) | client::api::Change::Branch(_) => return,
+        client::api::Change::Item(_) | client::api::Change::Branch(_) | client::api::Change::BranchMoved { .. } => {
+            return;
+        }
     };
     let mut subscribed = false;
     for (_, subscriber) in &d.subscriptions {
@@ -2787,6 +2954,11 @@ fn branch_changed(
     out: &mut Queue<Request>,
 ) {
     let Some(name) = from_client(&resource, &env.limits) else { return };
+    if let Some(hold) = d.holds.get(&name)
+        && hold.drift.is_some()
+    {
+        return;
+    }
     let Some(branch) = (match &resource.what {
         client::What::Branch(branch) => Some(branch.clone()),
         client::What::Repository | client::What::Pull(_) | client::What::Issue(_) => None,
@@ -2797,7 +2969,11 @@ fn branch_changed(
         Some(row) => Some(row.commit),
         None => None,
     };
-    let row = BranchHead { name: name.clone(), commit };
+    let recorded = match d.heads.get(&name) {
+        Some(row) => row.owned,
+        None => false,
+    };
+    let row = BranchHead { name: name.clone(), commit, owned: recorded };
     if d.heads.insert(name, row.clone()).is_err() {
         return;
     }
@@ -2859,6 +3035,34 @@ fn pull_changed(
     pull: client::api::Pull,
     out: &mut Queue<Request>,
 ) {
+    let mut changed = List::with_capacity(env.limits.changes);
+    for (_, row) in &d.changes {
+        if row.repository == resource.repository && row.pull == Some(pull.number) {
+            let change = if row.base != pull.base {
+                Some(crate::DriftChange::Retargeted {
+                    number: pull.number,
+                    before: row.base.clone(),
+                    after: pull.base.clone(),
+                })
+            } else if pull.state == client::api::State::Closed && pull.merged.is_none() {
+                Some(crate::DriftChange::PullClosed { number: pull.number })
+            } else {
+                None
+            };
+            if let Some(change) = change {
+                changed.push((row.branch.clone(), change)).expect("bounded owned changes");
+            }
+        }
+    }
+    for (branch, change) in changed.into_boxed() {
+        drift(
+            d,
+            env,
+            client::Resource { repository: resource.repository, what: client::What::Branch(branch) },
+            change,
+            out,
+        );
+    }
     let Some(name) = from_client(&resource, &env.limits) else { return };
     let prior = d.pulls.get(&name).cloned();
     let state = PullState { name: name.clone(), head: pull.commit, ci: pull.ci, state: pull.state };
@@ -2954,7 +3158,13 @@ fn updating_entry(d: &Domain, task: u64) -> bool {
     }
 }
 
-fn drift(d: &mut Domain, env: &Env<Limits>, resource: client::Resource, out: &mut Queue<Request>) {
+fn drift(
+    d: &mut Domain,
+    env: &Env<Limits>,
+    resource: client::Resource,
+    change: crate::DriftChange,
+    out: &mut Queue<Request>,
+) {
     let mut affected = List::with_capacity(env.limits.holds);
     for (name, row) in &d.holds {
         if to_client(name, &env.limits) == Some(resource.clone()) {
@@ -2962,12 +3172,20 @@ fn drift(d: &mut Domain, env: &Env<Limits>, resource: client::Resource, out: &mu
                 continue;
             }
             emit(out, Request::Drift { task: row.task, resource: name.clone() });
-            affected.push(row.task).expect("one affected task per hold");
+            affected.push((row.task, name.clone())).expect("one affected task per hold");
         }
     }
-    for task in &affected {
+    for (task, name) in &affected {
+        if let Some(hold) = d.holds.get_mut(name) {
+            hold.drift = Some(crate::Drift { at: env.wall, change: change.clone() });
+            emit(out, Request::Save { record: Stored::Hold(hold.clone()) });
+        }
         if let Some(row) = d.changes.get_mut(task) {
-            row.drift = Some(change::Hold::BranchMoved);
+            row.drift = Some(match change {
+                crate::DriftChange::Branch { .. } => change::Hold::BranchMoved,
+                crate::DriftChange::PullClosed { .. } => change::Hold::PullClosed,
+                crate::DriftChange::Retargeted { .. } => change::Hold::Retargeted,
+            });
             emit(out, Request::Save { record: Stored::Change(row.clone()) });
         }
     }

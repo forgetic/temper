@@ -40,7 +40,7 @@ const LIMITS: Limits = Limits {
     resources_per_task: 4,
     paths_per_subscription: 4,
     name_bytes: 128,
-    output: 64,
+    output: 80,
     facts: 16,
     adoptions: 2,
     collaborators: 8,
@@ -144,7 +144,10 @@ fn a_hold_and_writer_slot_are_exclusive_until_answered() {
     let name = branch();
     let first = outputs(&mut d, Event::Hold { task: 7, resource: name.clone(), from: None });
     assert_eq!(first.len(), 1);
-    assert_eq!(first[0], Request::Save { record: Stored::Hold(Hold { name: name.clone(), task: 7, writer: None }) });
+    assert_eq!(
+        first[0],
+        Request::Save { record: Stored::Hold(Hold { name: name.clone(), task: 7, writer: None, drift: None }) }
+    );
     assert_eq!(
         outputs(&mut d, Event::Hold { task: 8, resource: name.clone(), from: None }).as_ref(),
         &[Request::Taken { task: 8, resource: name.clone(), by: 7 }]
@@ -166,7 +169,12 @@ fn a_hold_and_writer_slot_are_exclusive_until_answered() {
     assert_eq!(
         claimed.as_ref(),
         &[Request::Save {
-            record: Stored::Hold(Hold { name, task: 7, writer: Some(Writer::Run { task: 10, attempt: 1 }) })
+            record: Stored::Hold(Hold {
+                name,
+                task: 7,
+                writer: Some(Writer::Run { task: 10, attempt: 1 }),
+                drift: None
+            })
         }]
     );
 }
@@ -230,7 +238,8 @@ fn adoption_reads_permission_before_committing_its_role() {
     let sent = ready(&mut d);
     let (call, op) = match &sent[0] {
         Request::Call { call, op, .. } => (*call, op.clone()),
-        Request::Adopted { .. }
+        Request::Resource { .. }
+        | Request::Adopted { .. }
         | Request::Save { .. }
         | Request::Erase { .. }
         | Request::Taken { .. }
@@ -272,6 +281,7 @@ fn adoption_reads_permission_before_committing_its_role() {
     let branches = match &next[0] {
         Request::Call { call, op: client::api::Op::Read(client::api::Read::Branches), .. } => *call,
         Request::Call { .. }
+        | Request::Resource { .. }
         | Request::Adopted { .. }
         | Request::Save { .. }
         | Request::Erase { .. }
@@ -314,6 +324,7 @@ fn adoption_reads_permission_before_committing_its_role() {
     match &next[0] {
         Request::Call { op: client::api::Op::Read(client::api::Read::Settings), .. } => {}
         Request::Call { .. }
+        | Request::Resource { .. }
         | Request::Adopted { .. }
         | Request::Save { .. }
         | Request::Erase { .. }
@@ -430,4 +441,29 @@ fn workspace_items_are_sized_context_is_read_only_and_saved_work_starts_the_next
     assert!(item.bytes > 0);
     assert_eq!(d.context_repositories(5, 1).expect("bounded context").len(), 1);
     assert!(d.context_repositories(5, 0).is_none());
+}
+
+#[test]
+fn named_resource_reports_distinguish_private_branches_context_and_shared_landings() {
+    let mut d = domain();
+    outputs(&mut d, Event::Restore { record: Stored::Repository(adopted()) });
+    outputs(&mut d, Event::Restored { clock: client::RecoveryClock::Monotonic });
+    let private = branch();
+    assert_eq!(d.resource_facts(&private), Some((Access::Owned, resources::HoldKind::Exclusive { wait: true })));
+    let shared = Name { what: What::Branch(Box::new([Box::from(&b"main"[..])])), ..private.clone() };
+    assert_eq!(d.resource_facts(&shared), Some((Access::Participant, resources::HoldKind::Shared)));
+    let report = outputs(&mut d, Event::Names { task: 7, resources: Box::new([private.clone()]) });
+    assert!(report.contains(&Request::Resource {
+        name: private.clone(),
+        role: Access::Owned,
+        hold: resources::HoldKind::Exclusive { wait: true }
+    }));
+    let mut context = adopted();
+    context.role = Role::Context;
+    outputs(&mut d, Event::Restore { record: Stored::Repository(context) });
+    assert_eq!(d.resource_facts(&private), Some((Access::Context, resources::HoldKind::Shared)));
+    assert_eq!(
+        outputs(&mut d, Event::Hold { task: 7, resource: private, from: None }).as_ref(),
+        &[Request::Refused { task: 7 }]
+    );
 }

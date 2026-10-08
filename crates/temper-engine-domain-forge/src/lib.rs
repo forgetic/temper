@@ -15,11 +15,13 @@ extern crate alloc;
 use alloc::boxed::Box;
 pub mod boundary;
 mod brief;
+mod capabilities;
 mod domain;
 mod held;
 pub mod items;
 mod judge;
 mod limits;
+pub mod resources;
 #[cfg(test)]
 mod tests;
 mod topics;
@@ -276,7 +278,20 @@ pub fn stored_bytes(record: &Stored) -> Option<u64> {
             }
             Some(held)
         }
-        Stored::Hold(row) => name(&row.name),
+        Stored::Hold(row) => {
+            let mut bytes = name(&row.name)?;
+            if let Some(drift) = &row.drift {
+                match &drift.change {
+                    DriftChange::Retargeted { before, after, .. } => {
+                        bytes = bytes
+                            .checked_add(u64::try_from(before.len()).ok()?)?
+                            .checked_add(u64::try_from(after.len()).ok()?)?;
+                    }
+                    DriftChange::Branch { .. } | DriftChange::PullClosed { .. } => {}
+                }
+            }
+            Some(bytes)
+        }
         Stored::Names { resources, .. } => {
             let mut held = u64::try_from(resources.len()).ok()?.checked_mul(u64::try_from(size_of::<Name>()).ok()?)?;
             for resource in resources {

@@ -272,7 +272,7 @@ pub enum Request {
     /// Report a fresh observation of a live resource.
     Changed { resource: Resource, result: Result<Answer, Error> },
     /// Report a branch move outside its current writer.
-    Drift { resource: Resource, expected: Commit, observed: Commit },
+    Drift { resource: Resource, expected: Commit, observed: Option<Commit> },
     /// Save a client working-set record in the parent’s decision.
     Save { record: Stored },
     /// Updated execution position for an entry durably owned by the top.

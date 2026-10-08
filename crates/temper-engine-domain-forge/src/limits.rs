@@ -63,8 +63,9 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
     if l.output
         < client::max_out(&l.client)
             .checked_add(l.subscriptions.checked_mul(3)?)?
-            .checked_add(l.holds)?
-            .checked_add(8)?
+            .checked_add(l.holds.checked_mul(3)?)?
+            .checked_add(9)?
+        || l.output < client::max_out(&l.client).checked_add(l.resources_per_task)?.checked_add(1)?
     {
         return None;
     }
@@ -86,6 +87,7 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         )?
         .checked_add(Map::<u64, Box<[Name]>>::worst_case(l.tasks)?)?
         .checked_add(Map::<Name, Hold>::worst_case(l.holds)?)?
+        .checked_add(u64::from(l.holds).checked_mul(u64::from(l.client.answer_bytes).checked_mul(2)?)?)?
         .checked_add(Map::<(u64, Topic), Subscriber>::worst_case(l.subscriptions)?)?
         .checked_add(Map::<Name, BranchHead>::worst_case(l.client.resources)?)?
         .checked_add(Map::<Name, PullState>::worst_case(l.client.resources)?)?
@@ -93,6 +95,8 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
             l.subscriptions,
         )?)?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingCi>::worst_case(l.subscriptions)?)?
+        .checked_add(Map::<skein_lib::Token, crate::capabilities::Pending>::worst_case(l.repositories)?)?
+        .checked_add(u64::from(l.repositories).checked_mul(u64::from(l.client.answer_bytes))?)?
         .checked_add(Map::<u64, client::Entry>::worst_case(l.entries)?)?
         .checked_add(Map::<u64, crate::ProposedEffect>::worst_case(l.tasks)?)?
         .checked_add(
@@ -102,6 +106,8 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingLanding>::worst_case(l.landings)?)?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingLost>::worst_case(l.holds)?)?
         .checked_add(Map::<u64, crate::ChangeRow>::worst_case(l.changes)?)?
+        .checked_add(skein_lib::List::<(Box<[u8]>, crate::DriftChange)>::worst_case(l.changes)?)?
+        .checked_add(u64::from(l.changes).checked_mul(u64::from(l.name_bytes).checked_mul(3)?)?)?
         .checked_add(Map::<u64, crate::topics::Files>::worst_case(l.changes)?)?
         .checked_add(Map::<skein_lib::Token, crate::topics::Pending>::worst_case(l.changes)?)?
         .checked_add(file_payload(l)?)?

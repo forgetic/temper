@@ -1030,7 +1030,12 @@ impl Domain {
                 kinds: Box::new([tasks::Kind {
                     connector: root_config.forge_connector,
                     kind: 1,
-                    hold: tasks::HoldKind::Exclusive { taken: tasks::Taken::Waits },
+                    hold: match forge::resources::BRANCH_HOLD {
+                        forge::resources::HoldKind::Exclusive { wait } => tasks::HoldKind::Exclusive {
+                            taken: if wait { tasks::Taken::Waits } else { tasks::Taken::Refuses },
+                        },
+                        forge::resources::HoldKind::Shared => unreachable!("private branch kind takes exclusive holds"),
+                    },
                 }]),
             }),
         );
