@@ -83,7 +83,6 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         && host_limits.slots <= checkout_limits.workspaces
         && host_limits.slots <= agent_limits.agents
         && host_limits.charter_bytes <= agent_limits.charter_bytes
-        && host_limits.snapshot_bytes == 0
         && agent_limits.turns <= host_limits.turns
         && agent_limits.unacknowledged_bytes <= host_limits.turn_queue_bytes
         && host_limits.run_calls >= agent_limits.calls
@@ -119,15 +118,13 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let alarms = Deadlines::<Alarm>::worst_case(ALARMS)?;
     // An answer holds the outcome or the detail of a failure,
     // and the run's work: the repositories it landed in, and its save.
-    let answer = host_limits
-        .outcome_bytes
-        .max(host_limits.snapshot_bytes)
-        .max(u64::from(host_limits.detail_bytes))
-        .checked_add(u64::from(checkout_limits.repositories).checked_mul(work()?.checked_add(
+    let answer = host_limits.outcome_bytes.max(u64::from(host_limits.detail_bytes)).checked_add(
+        u64::from(checkout_limits.repositories).checked_mul(work()?.checked_add(
             u64::from(checkout_limits.conflicts).checked_mul(
                 u64::try_from(size_of::<Box<[u8]>>()).ok()?.checked_add(u64::from(checkout_limits.path_bytes))?,
             )?,
-        )?)?)?;
+        )?)?,
+    )?;
     let next_answers = Map::<crate::turns::Name, crate::turns::Answer>::worst_case(slots)?
         .checked_add(u64::from(slots).checked_mul(answer)?)?;
     // A typed relay retains its opaque name alongside tool and input while

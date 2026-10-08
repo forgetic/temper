@@ -1,7 +1,7 @@
 //! An assignment's bounds, checked at the entrance (worker-domain.md, 4.1):
 //! the host interprets none of it but the repositories' names, each the
 //! directory a repository sits in, so one path component unique within its
-//! workspace. It holds the charter and the snapshot until the agent starts,
+//! workspace. It holds the charter and conversation until the agent starts,
 //! and its parent relies on the workspace fitting the limits.
 
 use crate::Limits;
@@ -11,11 +11,6 @@ use crate::wire::{Access, Assignment, Invalid, Repository, Start};
 pub(crate) fn check(assignment: &Assignment, limits: &Limits, next: bool) -> Result<(), Invalid> {
     if len(&assignment.charter) > limits.host.charter_bytes {
         return Err(Invalid::Charter);
-    }
-    if let Some(snapshot) = &assignment.snapshot
-        && len(snapshot) > limits.host.snapshot_bytes
-    {
-        return Err(Invalid::Snapshot);
     }
     if let Some(branch) = &assignment.save {
         name(branch, limits)?;

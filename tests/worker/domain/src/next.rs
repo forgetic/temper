@@ -489,7 +489,6 @@ impl World {
                 workspace: Workspace { key: Box::from(&b"stream"[..]), repositories: Box::new([repository]) },
                 save: Some(Box::from(&b"saved"[..])),
                 charter: Box::from(&b"charter"[..]),
-                snapshot: None,
                 grants: Box::new([]),
             },
             turns: Box::new([Box::from(TRANSCRIPT)]),

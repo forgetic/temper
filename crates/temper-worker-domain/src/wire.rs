@@ -2,9 +2,7 @@
 
 pub use crate::push::{PushDiagnostic, PushFailure, PushReason};
 use alloc::boxed::Box;
-pub use jig_host::{
-    AgentFailure, AnsweredCall, Bounce, Finish, FinishV2, Grant, Hosting, Phase, Reason, RunFailure, Turn,
-};
+pub use jig_host::{AgentFailure, AnsweredCall, Bounce, FinishV2, Grant, Hosting, Phase, Reason, RunFailure, Turn};
 use skein_lib::Token;
 
 /// What the engine gives the worker for one run (worker-domain.md, 4.1).
@@ -18,8 +16,6 @@ pub struct Assignment {
     pub save: Option<Box<[u8]>>,
     /// What the agent's run is given, passed through.
     pub charter: Box<[u8]>,
-    /// The state of a parked run to resume from, passed through.
-    pub snapshot: Option<Box<[u8]>>,
     pub grants: Box<[Grant]>,
 }
 
@@ -203,8 +199,6 @@ pub enum Invalid {
     Name,
     /// The charter holds more bytes than a run may.
     Charter,
-    /// The snapshot holds more bytes than a run may.
-    Snapshot,
     Transcript,
     /// A resumed delivery's Smith channel evidence is malformed or disagrees with its outcome.
     DeliveryEvidence,

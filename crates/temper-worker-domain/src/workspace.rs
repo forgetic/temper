@@ -83,7 +83,7 @@ pub(crate) fn stage(
     if domain.items_by_run.contains_key(&assignment.run) {
         return Err(wire::Refusal::Busy);
     }
-    let wire::Assignment { run, attempt, workspace, save, charter, snapshot, grants } = assignment;
+    let wire::Assignment { run, attempt, workspace, save, charter, grants } = assignment;
     let has_items = !workspace.repositories.is_empty();
     let mut merging = false;
     for repository in &workspace.repositories {
@@ -122,7 +122,6 @@ pub(crate) fn stage(
         workspace: if has_items { Some(host::Workspace { workstream: run.raw(), items: id.token() }) } else { None },
         save: domain.items.get(id).expect("inserted above").save.is_some(),
         charter,
-        snapshot,
         grants,
     })
 }

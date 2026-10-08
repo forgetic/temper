@@ -171,9 +171,7 @@ const fn host_refusal(refusal: host::Refusal) -> wire::Refusal {
         host::Refusal::Busy => wire::Refusal::Busy,
         host::Refusal::Invalid(invalid) => wire::Refusal::Invalid(match invalid {
             host::Invalid::Charter => wire::Invalid::Charter,
-            host::Invalid::Snapshot => wire::Invalid::Snapshot,
             host::Invalid::Transcript => wire::Invalid::Transcript,
-            host::Invalid::Version => wire::Invalid::Version,
             host::Invalid::Grants => wire::Invalid::Grants,
         }),
     }

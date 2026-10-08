@@ -723,7 +723,6 @@ fn fleet_delivery_within(event: &jig_core_fleet::Event) -> bool {
     use jig_core_fleet::Event;
     match event {
         Event::StartTyped { .. }
-        | Event::Start { .. }
         | Event::TurnKept { .. }
         | Event::Acknowledge { .. }
         | Event::Cancel { .. }
@@ -731,7 +730,6 @@ fn fleet_delivery_within(event: &jig_core_fleet::Event) -> bool {
         Event::InboundTyped { .. }
         | Event::RelayTyped { .. }
         | Event::Adopt { .. }
-        | Event::Inbound { .. }
         | Event::Loaded
         | Event::Grant { .. }
         | Event::Rejected { .. }
@@ -741,7 +739,6 @@ fn fleet_delivery_within(event: &jig_core_fleet::Event) -> bool {
         | Event::Answer { .. }
         | Event::Turn { .. }
         | Event::TurnBusy { .. }
-        | Event::Relay { .. }
         | Event::Bounced { .. }
         | Event::Told { .. } => false,
     }

@@ -806,6 +806,7 @@ enum Payload {
     CallAnswer(CallAnswer),
     TypedAnswer(jig_core::SettledCall),
     TypedMessage(HostMessage),
+    InboxWord(tasks::Word),
     Turn { task: u64, attempt: u64, body: Turn },
     Answer { task: u64, attempt: u64, cumulative: u64, end: tasks::End, saved: Option<Box<[u32]>> },
 }
@@ -1247,7 +1248,6 @@ fn view_requests(routed: jig_core::Requests, room: u32) -> Queue<views::Request>
                 | jig_core::Now::EscalationInspection { .. }
                 | jig_core::Now::EscalationReply { .. }
                 | jig_core::Now::EscalationRefused { .. }
-                | jig_core::Now::CallPayload { .. }
                 | jig_core::Now::ProcedureDelegateOutcome { .. }
                 | jig_core::Now::SettledCallRefused { .. }
                 | jig_core::Now::CallTyped { .. }
@@ -1331,7 +1331,6 @@ fn open_watch(
                 | jig_core::Now::EscalationInspection { .. }
                 | jig_core::Now::EscalationReply { .. }
                 | jig_core::Now::EscalationRefused { .. }
-                | jig_core::Now::CallPayload { .. }
                 | jig_core::Now::ProcedureDelegateOutcome { .. }
                 | jig_core::Now::SettledCallRefused { .. }
                 | jig_core::Now::CallTyped { .. }
@@ -1640,12 +1639,17 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 out.push(Request::CallBusy { channel, task, attempt, call });
                 return;
             };
-            domain.work.push(Work::Fleet(fleet::Event::Relay {
+            domain.work.push(Work::Fleet(fleet::Event::RelayTyped {
                 channel,
                 run: Token::new(task),
                 attempt: Token::new(attempt),
-                call,
-                body: id.token(),
+                call: fleet::TypedCall {
+                    name: Box::from(call.raw().to_be_bytes()),
+                    tool: Box::new([]),
+                    writes: false,
+                    input: Box::from(id.token().raw().to_be_bytes()),
+                    deadline: skein_lib::Duration::ZERO,
+                },
             }));
         }
         Event::Turn { channel, task, attempt, turn } => {
@@ -1929,12 +1933,16 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
                 return;
             }
             Output::Deliver(Delivery::Relay { task, attempt, previous, word }) => {
-                let event = Token::new(word.number);
-                assert!(domain.core.relaying.replace(PendingRelay { previous, word }).is_none(), "one relay at a time");
-                domain.work.push(Work::Fleet(fleet::Event::Inbound {
+                let name = Token::new(word.number);
+                let payload = domain.payloads.insert(Some(Payload::InboxWord(word))).expect("relay payload reserved");
+                assert!(
+                    domain.core.relaying.replace(PendingRelay { previous, message: name.raw() }).is_none(),
+                    "one relay at a time"
+                );
+                domain.work.push(Work::Fleet(fleet::Event::InboundTyped {
                     run: Token::new(task),
                     attempt: Token::new(attempt),
-                    event,
+                    message: fleet::TypedMessage { name, sender: payload.token(), words: payload.token() },
                 }));
             }
             Output::Deliver(Delivery::Load { waiter, range, after }) => {
@@ -2538,35 +2546,63 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                             typed_route::settled(domain, &env.limits, decision, to, call);
                         }
                         jig_core::Held::RelayedTyped { channel, run, attempt, call: name, answer } => {
-                            let Some(Payload::TypedAnswer(call)) = take_payload(domain, answer) else {
-                                unreachable!("typed answer payload")
-                            };
-                            emit(
-                                decision,
-                                &env.limits,
-                                Delivery::Host(Box::new(HostDelivery::Answer {
-                                    channel,
-                                    task: run.raw(),
-                                    attempt: attempt.raw(),
-                                    name,
-                                    call,
-                                })),
-                            );
+                            match take_payload(domain, answer).expect("fleet relays an owned answer") {
+                                Payload::TypedAnswer(call) => emit(
+                                    decision,
+                                    &env.limits,
+                                    Delivery::Host(Box::new(HostDelivery::Answer {
+                                        channel,
+                                        task: run.raw(),
+                                        attempt: attempt.raw(),
+                                        name,
+                                        call,
+                                    })),
+                                ),
+                                Payload::CallAnswer(answer) => {
+                                    let call =
+                                        Token::new(skein_lib::Reader::new(&name).u64().expect("decoded call name"));
+                                    emit(
+                                        decision,
+                                        &env.limits,
+                                        Delivery::CallAnswer {
+                                            channel,
+                                            task: run.raw(),
+                                            attempt: attempt.raw(),
+                                            call,
+                                            answer,
+                                        },
+                                    );
+                                }
+                                Payload::Call { .. }
+                                | Payload::TypedMessage(_)
+                                | Payload::InboxWord(_)
+                                | Payload::Turn { .. }
+                                | Payload::Answer { .. } => unreachable!("fleet answer payload"),
+                            }
                         }
                         jig_core::Held::InboundTyped { channel, run, attempt, message } => {
-                            let Some(Payload::TypedMessage(message)) = take_payload(domain, message.words) else {
-                                unreachable!("typed message payload")
-                            };
-                            emit(
-                                decision,
-                                &env.limits,
-                                Delivery::Host(Box::new(HostDelivery::Inbound {
-                                    channel,
-                                    task: run.raw(),
-                                    attempt: attempt.raw(),
-                                    message,
-                                })),
-                            );
+                            match take_payload(domain, message.words).expect("fleet message payload") {
+                                Payload::TypedMessage(message) => emit(
+                                    decision,
+                                    &env.limits,
+                                    Delivery::Host(Box::new(HostDelivery::Inbound {
+                                        channel,
+                                        task: run.raw(),
+                                        attempt: attempt.raw(),
+                                        message,
+                                    })),
+                                ),
+                                Payload::InboxWord(word) => emit(
+                                    decision,
+                                    &env.limits,
+                                    Delivery::Inbound { channel, task: run.raw(), attempt: attempt.raw(), word },
+                                ),
+                                Payload::Call { .. }
+                                | Payload::CallAnswer(_)
+                                | Payload::TypedAnswer(_)
+                                | Payload::Turn { .. }
+                                | Payload::Answer { .. } => unreachable!("fleet message payload"),
+                            }
                         }
                         jig_core::Held::MakeEffect { connector, entry } => {
                             assert!(connector == domain.config.forge_connector, "numbered forge make");
@@ -2612,8 +2648,7 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                         jig_core::Held::Result { person, task, words } => {
                             emit(decision, &env.limits, Delivery::Result { person, task, words });
                         }
-                        jig_core::Held::Assign { channel, run, attempt }
-                        | jig_core::Held::AssignTyped { channel, run, attempt, .. } => {
+                        jig_core::Held::AssignTyped { channel, run, attempt, .. } => {
                             let assignment =
                                 domain.assignments.remove(&run.raw()).expect("durable claim has prepared assignment");
                             assert!(assignment.attempt == attempt.raw(), "assignment names current attempt");
@@ -2680,23 +2715,6 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                 Delivery::TurnBusy { channel, task: run.raw(), attempt: attempt.raw(), turn },
                             );
                         }
-                        jig_core::Held::Relayed { channel, run, attempt, call, answer } => {
-                            let Some(Payload::CallAnswer(answer)) = take_payload(domain, answer) else {
-                                unreachable!("fleet relays an owned call answer")
-                            };
-                            emit(
-                                decision,
-                                &env.limits,
-                                Delivery::CallAnswer { channel, task: run.raw(), attempt: attempt.raw(), call, answer },
-                            );
-                        }
-                        jig_core::Held::Inbound { channel, run, attempt, word } => {
-                            emit(
-                                decision,
-                                &env.limits,
-                                Delivery::Inbound { channel, task: run.raw(), attempt: attempt.raw(), word },
-                            );
-                        }
                         jig_core::Held::StopRun { task, attempt } => {
                             emit(decision, &env.limits, Delivery::Fleet(Core::stop_run(task, attempt)));
                         }
@@ -2718,21 +2736,44 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                     },
                     jig_core::Request::Now(now) => match *now {
                         jig_core::Now::CallTyped { to, run, attempt, call } => {
-                            typed_route::decode(domain, to, run.raw(), attempt.raw(), call);
+                            if call.tool.is_empty() {
+                                let body = Token::new(
+                                    skein_lib::Reader::new(&call.input).u64().expect("decoded call payload"),
+                                );
+                                relay_payload(domain, env, decision, to, run, attempt, body);
+                            } else {
+                                typed_route::decode(domain, to, run.raw(), attempt.raw(), call);
+                            }
                         }
                         jig_core::Now::DropTyped { call } => {
-                            self::now(domain, Request::Host(Box::new(HostRequest::Dropped { call })));
+                            if call.tool.is_empty() {
+                                let body = Token::new(
+                                    skein_lib::Reader::new(&call.input).u64().expect("decoded call payload"),
+                                );
+                                drop(take_payload(domain, body));
+                            } else {
+                                self::now(domain, Request::Host(Box::new(HostRequest::Dropped { call })));
+                            }
                         }
                         jig_core::Now::UndeliveredTyped { run, attempt, message } => {
-                            drop(take_payload(domain, message.words));
-                            self::now(
-                                domain,
-                                Request::Host(Box::new(HostRequest::Undelivered {
-                                    task: run.raw(),
-                                    attempt: attempt.raw(),
-                                    message,
-                                })),
-                            );
+                            match take_payload(domain, message.words).expect("undelivered message payload") {
+                                Payload::TypedMessage(_) => {
+                                    let _sent = self::now(
+                                        domain,
+                                        Request::Host(Box::new(HostRequest::Undelivered {
+                                            task: run.raw(),
+                                            attempt: attempt.raw(),
+                                            message,
+                                        })),
+                                    );
+                                }
+                                Payload::InboxWord(_) => {}
+                                Payload::Call { .. }
+                                | Payload::CallAnswer(_)
+                                | Payload::TypedAnswer(_)
+                                | Payload::Turn { .. }
+                                | Payload::Answer { .. } => unreachable!("message payload family"),
+                            }
                         }
                         jig_core::Now::SettledCallRefused { to, key: _, name, tool } => typed_route::settled(
                             domain,
@@ -2769,7 +2810,8 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                 | Payload::Call { .. }
                                 | Payload::CallAnswer(_)
                                 | Payload::TypedAnswer(_)
-                                | Payload::TypedMessage(_) => {
+                                | Payload::TypedMessage(_)
+                                | Payload::InboxWord(_) => {
                                     unreachable!("fleet returns turn family")
                                 }
                             };
@@ -2792,7 +2834,8 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                 | Payload::Call { .. }
                                 | Payload::CallAnswer(_)
                                 | Payload::TypedAnswer(_)
-                                | Payload::TypedMessage(_) => {
+                                | Payload::TypedMessage(_)
+                                | Payload::InboxWord(_) => {
                                     unreachable!("fleet returns answer family")
                                 }
                             };
@@ -2823,7 +2866,8 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                 | Payload::Call { .. }
                                 | Payload::CallAnswer(_)
                                 | Payload::TypedAnswer(_)
-                                | Payload::TypedMessage(_) => {
+                                | Payload::TypedMessage(_)
+                                | Payload::InboxWord(_) => {
                                     unreachable!("turn family")
                                 }
                             };
@@ -2849,7 +2893,8 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                     Payload::Call { .. }
                                     | Payload::CallAnswer(_)
                                     | Payload::TypedAnswer(_)
-                                    | Payload::TypedMessage(_),
+                                    | Payload::TypedMessage(_)
+                                    | Payload::InboxWord(_),
                                 ) => {
                                     unreachable!("task refusal owns a task payload")
                                 }
@@ -3040,9 +3085,6 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                 &env.limits,
                                 Delivery::WebReply { to, sign_in: None, reply: people::Reply::Refused(why) },
                             );
-                        }
-                        jig_core::Now::CallPayload { to, run, attempt, body } => {
-                            relay_payload(domain, env, decision, to, run, attempt, body);
                         }
                         jig_core::Now::DropAssignment { task } => {
                             drop(domain.assignments.remove(&task));
@@ -4749,7 +4791,6 @@ fn account_outputs(routed: jig_core::Requests, out: &mut Queue<Request>) {
                 | jig_core::Now::EscalationInspection { .. }
                 | jig_core::Now::EscalationReply { .. }
                 | jig_core::Now::EscalationRefused { .. }
-                | jig_core::Now::CallPayload { .. }
                 | jig_core::Now::ProcedureDelegateOutcome { .. }
                 | jig_core::Now::SettledCallRefused { .. }
                 | jig_core::Now::CallTyped { .. }
