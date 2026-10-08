@@ -7,7 +7,7 @@ use skein_lib::{Duration, List, Wall, bytes};
 use smith_domain_run as run;
 use temper_engine_domain::engine;
 
-use crate::{Problem, forge, json::Value, nested};
+use crate::{Problem, forge, json::Value, nested, notes};
 
 struct Spec {
     name: &'static [u8],
@@ -18,7 +18,7 @@ struct Spec {
 
 const READ_SCHEMA: &[u8] = br#"{"type":"object","properties":{"repository":{"type":"object"},"read":{"type":"object"}},"required":["repository","read"]}"#;
 
-const SPECS: [Spec; 31] = [
+const SPECS: [Spec; 33] = [
     Spec { name: b"read_items", description: b"Read one page of forge items.", schema: READ_SCHEMA, effect: run::HostEffect::Read },
     Spec { name: b"read_item", description: b"Read an issue or pull and its comments.", schema: READ_SCHEMA, effect: run::HostEffect::Read },
     Spec { name: b"read_pull", description: b"Read a pull request.", schema: READ_SCHEMA, effect: run::HostEffect::Read },
@@ -50,6 +50,8 @@ const SPECS: [Spec; 31] = [
     Spec { name: b"decide", description: b"Accept, reject or pass a pending proposal.", schema: br#"{"type":"object","properties":{"proposer":{"type":"integer","minimum":1},"proposal":{"type":"integer","minimum":1},"decision":{"type":"string","enum":["accept","reject","pass"]},"reason":{"type":"string"}},"required":["proposer","proposal","decision"]}"#, effect: run::HostEffect::Write },
     Spec { name: b"subscribe", description: b"Watch a referenced task or a timer.", schema: br#"{"type":"object","properties":{"kind":{"type":"string","enum":["task","timer"]},"target":{"type":"integer","minimum":1},"held":{"type":"boolean"},"result":{"type":"boolean"},"at":{"type":"integer","minimum":0},"period":{"type":"integer","minimum":1}},"required":["kind"]}"#, effect: run::HostEffect::Write },
     Spec { name: b"propose", description: b"Ask the covering holder to act beyond your authority.", schema: br#"{"type":"object","properties":{"action":{"type":"string","enum":["batch","amend","widen","release"]},"task":{"type":"integer","minimum":1},"batch":{"type":"array","items":{"type":"object"}},"amendment":{"type":"object"},"authority":{"type":"object"},"reason":{"type":"string"},"as_holder":{"type":"boolean"}},"required":["action","reason"]}"#, effect: run::HostEffect::Write },
+    Spec { name: b"note", description: b"Write a scoped note, or revise one at the revision you recalled.", schema: br#"{"type":"object","properties":{"scope":{"type":"object"},"description":{"type":"string"},"body":{"type":"string"},"references":{"type":"array","items":{"type":"integer","minimum":1}},"name":{"type":"integer","minimum":1},"recalled":{"type":"integer","minimum":1}},"required":["scope","description","body"]}"#, effect: run::HostEffect::Write },
+    Spec { name: b"recall", description: b"Recall a note by name or search scoped descriptions.", schema: br#"{"type":"object","properties":{"kind":{"type":"string","enum":["name","search"]},"name":{"type":"integer","minimum":1},"scopes":{"type":"array","items":{"type":"object"}},"query":{"type":"string"},"page":{"type":"integer","minimum":0}},"required":["kind"]}"#, effect: run::HostEffect::Read },
 ];
 
 /// Host declarations offered to Smith with exact schemas and write effects.
@@ -206,6 +208,14 @@ pub fn call(name: run::CallName, tool: &[u8], input: &run::HostInput) -> Result<
                 reason: value.required(b"reason")?.text()?,
                 as_holder: optional_bool(&value, b"as_holder", false)?,
             }
+        }
+        b"note" => {
+            let (entry, recalled) = notes::new(&value)?;
+            engine::Tool::Note { entry, recalled }
+        }
+        b"recall" => {
+            let (by, page) = notes::recall(&value)?;
+            engine::Tool::Recall { by, page }
         }
         _ => return Err(Problem::UnknownTool),
     };

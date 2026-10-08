@@ -97,7 +97,8 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, o
             | RootRead::Proposal(_)
             | RootRead::Transcript { .. }
             | RootRead::Dependency(_)
-            | RootRead::InputCheck(_),
+            | RootRead::InputCheck(_)
+            | RootRead::Notes { .. },
         ) => {
             unreachable!("inbox load owns its read")
         }
@@ -177,7 +178,8 @@ pub(super) fn page(
             | RootRead::Proposal(_)
             | RootRead::Transcript { .. }
             | RootRead::Dependency(_)
-            | RootRead::InputCheck(_),
+            | RootRead::InputCheck(_)
+            | RootRead::Notes { .. },
         ) => {
             unreachable!("inbox page owns its read")
         }
@@ -245,6 +247,7 @@ pub(super) fn page(
                 ) => {}
                 Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::History(_))
                 | Record::People(_)
+                | Record::Notes(_)
                 | Record::Forge { .. }
                 | Record::Deployment(_)
                 | Record::Call(_)
@@ -298,6 +301,7 @@ pub(super) fn page(
                     | tasks::Stored::Pool(_),
                 )
                 | Record::People(_)
+                | Record::Notes(_)
                 | Record::Forge { .. }
                 | Record::Deployment(_)
                 | Record::Call(_)

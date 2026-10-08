@@ -81,7 +81,7 @@ impl Referee {
         for write in writes {
             let key = match write {
                 Write::Save(record) => record.key(),
-                Write::Erase(key) => *key,
+                Write::Erase(key) => key.clone(),
             };
             if !keys.insert(key) {
                 return Err("same key twice in role transaction");
@@ -107,6 +107,7 @@ impl Referee {
                     | Record::Terminal(_)
                     | Record::EscalationDecision(_)
                     | Record::ProposalDecision(_)
+                    | Record::Notes(_)
                     | Record::Forge { .. },
                 )
                 | Write::Erase(_) => None,
@@ -138,6 +139,7 @@ impl Referee {
                     | Record::Terminal(_)
                     | Record::EscalationDecision(_)
                     | Record::ProposalDecision(_)
+                    | Record::Notes(_)
                     | Record::Forge { .. },
                 )
                 | Write::Erase(_) => None,
@@ -189,6 +191,7 @@ impl Referee {
                         | Record::Terminal(_)
                         | Record::EscalationDecision(_)
                         | Record::ProposalDecision(_)
+                        | Record::Notes(_)
                         | Record::Forge { .. },
                     )
                     | Write::Erase(_) => None,
@@ -240,7 +243,8 @@ impl Referee {
                     | Record::Terminal(_)
                     | Record::EscalationDecision(_)
                     | Record::ProposalDecision(_)
-                    | Record::Turn(_),
+                    | Record::Turn(_)
+                    | Record::Notes(_),
                 )
                 | Write::Erase(
                     Key::Call(_)
@@ -249,7 +253,8 @@ impl Referee {
                     | Key::Terminal { .. }
                     | Key::EscalationDecision { .. }
                     | Key::ProposalDecision(_)
-                    | Key::Turn { .. },
+                    | Key::Turn { .. }
+                    | Key::Notes(_),
                 ) => return Err("role administration changed funding or accepted work"),
                 Write::Save(Record::People(_) | Record::Deployment(_)) | Write::Erase(Key::People(_)) => {}
                 Write::Save(Record::Forge { .. }) | Write::Erase(Key::Forge(_)) => {

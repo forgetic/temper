@@ -156,15 +156,15 @@ pub fn begin(
     out: &mut Queue<Request>,
 ) -> Option<Token> {
     assert!(out.room() >= 1, "one root load output reserved");
-    if most == 0 || most > domain.limits.rows || !valid_range(range) {
+    if most == 0 || most > domain.limits.rows || !valid_range(&range) {
         return None;
     }
-    if let Some(key) = after
+    if let Some(key) = &after
         && !range.contains(key)
     {
         return None;
     }
-    let entry = Entry { waiter, range, after, most, phase: Phase::Waiting };
+    let entry = Entry { waiter, range: range.clone(), after: after.clone(), most, phase: Phase::Waiting };
     let id = domain.entries.insert(entry).ok()?;
     let owner = id.token();
     out.push(Request::Load { owner, range, after, most, bytes: domain.limits.reply_bytes });
@@ -219,7 +219,7 @@ pub fn loaded(domain: &mut Loads, owner: Token, rows: Box<[Record]>, next: Optio
         Phase::Closed => return,
         Phase::Waiting => {}
     }
-    let checked = check(entry, &domain.limits, &rows, next);
+    let checked = check(entry, &domain.limits, &rows, next.clone());
     let waiter = entry.waiter;
     entry.phase = Phase::Closed;
     domain.entries.retire(id);
@@ -263,23 +263,23 @@ fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> 
     if count > entry.most {
         return Err(Failure::Rows);
     }
-    let mut previous = entry.after;
-    let mut last_kept = entry.after;
+    let mut previous = entry.after.clone();
+    let mut last_kept = entry.after.clone();
     let mut bytes = 0_u64;
     let mut removed_bytes = 0_u64;
     let mut keep = 0_u32;
     let mut cutting = false;
     for row in rows {
         let key = row.key();
-        if !entry.range.contains(key) {
+        if !entry.range.contains(&key) {
             return Err(Failure::Range);
         }
-        if let Some(old) = previous
-            && key <= old
+        if let Some(old) = &previous
+            && key <= *old
         {
             return Err(Failure::Order);
         }
-        previous = Some(key);
+        previous = Some(key.clone());
         let owned = crate::store::record_bytes(row).ok_or(Failure::Bytes)?;
         let size = u64::try_from(size_of::<Record>())
             .expect("record slot fits u64")
@@ -295,17 +295,18 @@ fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> 
             last_kept = Some(key);
         }
     }
-    if let Some(cursor) = next {
-        if rows.is_empty() || Some(cursor) != previous || !entry.range.contains(cursor) {
+    if let Some(cursor) = &next {
+        if rows.is_empty() || Some(cursor) != previous.as_ref() || !entry.range.contains(cursor) {
             return Err(Failure::Cursor);
         }
-        match entry.range {
+        match &entry.range {
             Range::Deployment
             | Range::TaskResult { .. }
             | Range::EscalationDecision { .. }
             | Range::ProposalDecision { .. } => {
                 return Err(Failure::Cursor);
             }
+            Range::Notes(jig_core_notes::Range::Entry { .. }) => return Err(Failure::Cursor),
             Range::Turns { .. }
             | Range::TaskTranscript { .. }
             | Range::Tasks
@@ -313,7 +314,8 @@ fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> 
             | Range::People
             | Range::Forge
             | Range::RunProofs
-            | Range::Calls => {}
+            | Range::Calls
+            | Range::Notes(jig_core_notes::Range::Lines { .. }) => {}
         }
     }
     if bytes.checked_add(removed_bytes).ok_or(Failure::Bytes)? > u64::from(limits.reply_bytes) {
@@ -327,7 +329,7 @@ fn check(entry: &Entry, limits: &Limits, rows: &[Record], next: Option<Key>) -> 
     Ok(Page { keep, next: if cutting { last_kept } else { next }, cut })
 }
 
-fn valid_range(range: Range) -> bool {
+fn valid_range(range: &Range) -> bool {
     match range {
         Range::Deployment
         | Range::Tasks
@@ -335,11 +337,13 @@ fn valid_range(range: Range) -> bool {
         | Range::People
         | Range::Forge
         | Range::RunProofs
-        | Range::Calls => true,
-        Range::TaskResult { task } | Range::TaskTranscript { task } => task != 0,
-        Range::EscalationDecision { task, revision } => task != 0 && revision != 0,
-        Range::ProposalDecision { proposal } => proposal != 0,
-        Range::Turns { task, attempt } => task != 0 && attempt != 0,
+        | Range::Calls
+        | Range::Notes(jig_core_notes::Range::Lines { .. }) => true,
+        Range::TaskResult { task } | Range::TaskTranscript { task } => *task != 0,
+        Range::EscalationDecision { task, revision } => *task != 0 && *revision != 0,
+        Range::ProposalDecision { proposal } => *proposal != 0,
+        Range::Turns { task, attempt } => *task != 0 && *attempt != 0,
+        Range::Notes(jig_core_notes::Range::Entry { name }) => *name != 0,
     }
 }
 

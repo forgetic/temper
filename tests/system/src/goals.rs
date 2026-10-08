@@ -80,23 +80,23 @@ fn configured() -> Driver {
     config.run.turns = 64;
     config.run.time = Duration::from_secs(3600);
     config.resume_bytes = 8192;
-    config.chat_authority.tools = authority::Tools(1);
+    config.chat_authority.tools = authority::Tools(3);
     config.chat_authority.delegation.kinds = Box::new([authority::Executor::Charter(1)]);
     config.chat_authority.delegation.tasks = 3;
     config.chat_authority.delegation.depth = 1;
     let mut rules = config.authority.rules().clone();
     // Leave the standing goal and chat room to fund their planned delegates.
     rules.maximum_run_spend = 10;
-    rules.ceiling.tools = authority::Tools(1);
+    rules.ceiling.tools = authority::Tools(3);
     rules.ceiling.delegation.depth = 2;
     rules.ceiling.delegation.tasks = 4;
     let mut domain = authority::Domain::new(rules, limits.authority).expect("larger authority");
     let mut policy = config.authority.policy(1).expect("configured project").clone();
-    policy.ceiling.tools = authority::Tools(1);
+    policy.ceiling.tools = authority::Tools(3);
     policy.ceiling.delegation.depth = 2;
     policy.ceiling.delegation.tasks = 4;
     let mut owner = policy.roles[0].clone();
-    owner.authority.tools = authority::Tools(1);
+    owner.authority.tools = authority::Tools(3);
     owner.authority.delegation.depth = 2;
     owner.authority.delegation.tasks = 4;
     let mut maintainer = owner.clone();
@@ -267,7 +267,7 @@ fn a_smith_goal_is_proposed_accepted_planned_and_done() {
 }
 
 fn burst_parent_script() -> Script {
-    let child = r#"{"executor":{"kind":"agent","charter":1},"spec":{"words":"@burst Send one coordinator update"},"contract":{"kind":"report","words":128},"authority":{"tools":1,"grants":[],"delegation":{"kinds":[],"tasks":0,"depth":0},"budget":{"spend":10},"notes":0}}"#;
+    let child = r#"{"executor":{"kind":"agent","charter":1},"spec":{"words":"@burst Send one coordinator update"},"contract":{"kind":"report","words":128},"authority":{"tools":2,"grants":[],"delegation":{"kinds":[],"tasks":0,"depth":0},"budget":{"spend":10},"notes":0}}"#;
     let delegate = format!(r#"{{"batch":[{child},{child},{child}]}}"#).into_bytes();
     Script {
         cue: b"@burstplan".as_slice().into(),

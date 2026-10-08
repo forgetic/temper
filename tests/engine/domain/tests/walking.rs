@@ -20,6 +20,7 @@ fn ended(world: &World) -> &tasks::TaskRecord {
             Record::Deployment(_)
             | Record::Turn(_)
             | Record::People(_)
+            | Record::Notes(_)
             | Record::RunProof(_)
             | Record::EscalationDecision(_)
             | Record::Forge { .. }

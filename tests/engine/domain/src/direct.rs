@@ -68,7 +68,7 @@ impl Driver {
                     self.store.pending.push_back((number, writes));
                 }
                 engine::Request::Load { owner, range, after, most, bytes } => {
-                    let (rows, next) = self.store.page(range, after, most);
+                    let (rows, next) = self.store.page(&range, after.as_ref(), most);
                     if range == temper_engine_domain::Range::EndedResults {
                         self.result_loads.push((most, rows.len()));
                     }

@@ -129,7 +129,9 @@ fn rendered(answer: &CallAnswer) -> Result<HostAnswer, Problem> {
             forge_error(&mut text, *refusal)?;
             true
         }
-        CallAnswer::ForgeEffectDenied { answer, findings } | CallAnswer::DelegationDenied { answer, findings } => {
+        CallAnswer::ForgeEffectDenied { answer, findings }
+        | CallAnswer::ToolDenied { answer, findings }
+        | CallAnswer::DelegationDenied { answer, findings } => {
             text.add(b"Authority ")?;
             authority(&mut text, *answer)?;
             text.add(b": ")?;
@@ -217,6 +219,44 @@ fn rendered(answer: &CallAnswer) -> Result<HostAnswer, Problem> {
                 text.number(*id)?;
             }
             false
+        }
+        CallAnswer::NoteWritten { name, revision } => {
+            text.add(b"Note ")?;
+            text.number(*name)?;
+            text.add(b" revision ")?;
+            text.number(u64::from(*revision))?;
+            text.add(b" written")?;
+            false
+        }
+        CallAnswer::NoteRecalled { entries, more } => {
+            for entry in entries {
+                text.add(b"Note ")?;
+                text.number(entry.name)?;
+                text.add(b" revision ")?;
+                text.number(u64::from(entry.revision))?;
+                text.add(b": ")?;
+                text.add(&entry.description)?;
+                text.add(b"\n")?;
+                text.add(&entry.body)?;
+                text.add(b"\n")?;
+            }
+            if *more {
+                text.add(b"More notes are available.")?;
+            }
+            false
+        }
+        CallAnswer::NoteRefused(why) => {
+            text.add(b"Note refused: ")?;
+            text.add(match why {
+                jig_core_notes::Refusal::Busy => b"busy",
+                jig_core_notes::Refusal::Oversized => b"oversized",
+                jig_core_notes::Refusal::Full => b"full",
+                jig_core_notes::Refusal::Exists => b"already exists",
+                jig_core_notes::Refusal::Missing => b"missing",
+                jig_core_notes::Refusal::Moved => b"revision moved",
+                jig_core_notes::Refusal::RevisionExhausted => b"revision exhausted",
+            })?;
+            true
         }
         CallAnswer::Unavailable => {
             text.add(b"This engine tool is unavailable.")?;

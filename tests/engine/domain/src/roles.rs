@@ -236,6 +236,7 @@ impl World {
                 | Record::Terminal(_)
                 | Record::EscalationDecision(_)
                 | Record::ProposalDecision(_)
+                | Record::Notes(_)
                 | Record::Forge { .. } => {}
             }
         }
@@ -474,7 +475,7 @@ impl World {
                 }
                 engine::Request::Load { owner, range, after, most, .. } => {
                     self.pages += 1;
-                    let (rows, next) = self.store.page(range, after, most);
+                    let (rows, next) = self.store.page(&range, after.as_ref(), most);
                     self.queue(engine::Event::Loaded { owner, rows, next }, self.settings.page_delay);
                 }
                 engine::Request::Deliver(Delivery::WebReply { to, reply, .. }) => {

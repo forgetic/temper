@@ -113,6 +113,7 @@ pub struct BriefBudgets {
     pub pull: u32,
     pub attempts: u32,
     pub plan: u32,
+    pub notes: u32,
 }
 
 /// Startup configuration owned by the root, bounded by the corresponding
@@ -157,6 +158,8 @@ pub struct Config {
     pub person_budget: u64,
     /// Exact task authority checked for each authenticated chat.
     pub chat_authority: authority::Authority,
+    /// One-bit family assignments for the engine tools in this charter.
+    pub tools: jig_core::ToolFamilies,
     /// Account required by the chat charter, configured through the accounts child.
     pub account: u32,
     /// Existing secret-free generation at startup.
@@ -191,6 +194,7 @@ fn split_config(config: Config, projects: List<u32>) -> (jig_core::Config, RootC
         period_budget,
         person_budget,
         chat_authority,
+        tools,
         account,
         account_generation,
         account_valid,
@@ -215,6 +219,7 @@ fn split_config(config: Config, projects: List<u32>) -> (jig_core::Config, RootC
                 period_budget,
                 person_budget,
                 chat_authority,
+                tools,
                 account,
                 account_generation,
                 account_valid,
@@ -340,6 +345,10 @@ pub struct Turn {
 /// (domain/engine.md, section 7.3). Later routes extend this vocabulary.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Tool {
+    /// Write or correct one scoped note by the revision this run recalled.
+    Note { entry: jig_core_notes::New, recalled: Option<u32> },
+    /// Read one bounded page of notes by name or description.
+    Recall { by: jig_core_notes::Recall, page: u32 },
     /// Queue one checked forge write with a root-derived idempotency key.
     EffectForge {
         repository: forge_client::api::Repository,
@@ -382,6 +391,8 @@ pub enum Tool {
     RejectedControl(tasks::Refusal),
     /// Root-normalized proposal shape refusal before retaining its action.
     RejectedProposal(tasks::Refusal),
+    /// A note or recall failed bounded ingress.
+    RejectedNote(jig_core_notes::Refusal),
     /// The engine records an unavailable answer for a route not yet installed.
     Unavailable,
 }
@@ -735,6 +746,7 @@ enum Read {
     Transcript { task: u64 },
     Dependency(DependencyRead),
     InputCheck(InputCheck),
+    Notes { owner: Token },
 }
 
 #[derive(Debug)]
@@ -763,7 +775,7 @@ struct ResultPage {
     next: Option<Key>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum Startup {
     Cold,
     Loading(Range),
@@ -1098,6 +1110,7 @@ fn core_limits(limits: &Limits) -> jig_core::Limits {
             dependencies: limits.brief.budgets.dependencies,
             attempts: limits.brief.budgets.attempts,
             plan: limits.brief.budgets.plan,
+            notes: limits.brief.budgets.notes,
         },
         accounts: limits.accounts,
         notes: limits.notes,
@@ -1131,6 +1144,7 @@ fn view_requests(routed: jig_core::Requests, room: u32) -> Queue<views::Request>
                 | jig_core::Now::NotesIndexed { .. }
                 | jig_core::Now::NotesRecalled { .. }
                 | jig_core::Now::NotesRefused { .. }
+                | jig_core::Now::NoteBusy { .. }
                 | jig_core::Now::DropPayload { .. }
                 | jig_core::Now::DropAssignment { .. }
                 | jig_core::Now::TurnPayload { .. }
@@ -1209,6 +1223,7 @@ fn open_watch(
                 | jig_core::Now::NotesIndexed { .. }
                 | jig_core::Now::NotesRecalled { .. }
                 | jig_core::Now::NotesRefused { .. }
+                | jig_core::Now::NoteBusy { .. }
                 | jig_core::Now::DropPayload { .. }
                 | jig_core::Now::DropAssignment { .. }
                 | jig_core::Now::TurnPayload { .. }
@@ -1396,7 +1411,7 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 out.push(Request::Deliver(Delivery::Refuse { channel }));
                 return;
             }
-            if !header_loaded(domain.startup) {
+            if !header_loaded(domain.startup.clone()) {
                 if domain.cold_channels.contains_key(&channel) {
                     out.push(Request::Deliver(Delivery::Refuse { channel }));
                     return;
@@ -1417,7 +1432,7 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
             domain.work.push(Work::Fleet(fleet::Event::Hello { channel, hello }));
         }
         Event::Lost { channel } => {
-            if !header_loaded(domain.startup) {
+            if !header_loaded(domain.startup.clone()) {
                 if let Some(lost) = domain.cold_channels.get_mut(&channel) {
                     *lost = true;
                 }
@@ -1469,6 +1484,34 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 out.push(Request::CallBusy { channel, task, attempt, call });
                 return;
             }
+            let note_valid = match &body.tool {
+                Tool::Note { entry, .. } => notes::valid_new(entry, &env.limits.notes),
+                Tool::Recall { by, .. } => notes::valid_recall(by, &env.limits.notes),
+                Tool::Delegate { .. }
+                | Tool::Message { .. }
+                | Tool::Amend { .. }
+                | Tool::Cancel { .. }
+                | Tool::Release { .. }
+                | Tool::Decide { .. }
+                | Tool::DecideEscalation { .. }
+                | Tool::Withdraw { .. }
+                | Tool::Propose { .. }
+                | Tool::Introduce { .. }
+                | Tool::Subscribe { .. }
+                | Tool::SubscribeForge { .. }
+                | Tool::ReadForge { .. }
+                | Tool::EffectForge { .. }
+                | Tool::Unsubscribe { .. }
+                | Tool::Unavailable
+                | Tool::Rejected(_)
+                | Tool::RejectedMessage(_)
+                | Tool::RejectedControl(_)
+                | Tool::RejectedProposal(_)
+                | Tool::RejectedNote(_) => true,
+            };
+            if !note_valid {
+                body.tool = Tool::RejectedNote(notes::Refusal::Oversized);
+            }
             if let Some(why) = call_shape(&body.tool, &env.limits.tasks) {
                 body.tool = match body.tool {
                     Tool::Message { .. } => Tool::RejectedMessage(why),
@@ -1476,6 +1519,7 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                         Tool::RejectedControl(why)
                     }
                     Tool::Propose { .. } | Tool::Decide { .. } | Tool::Withdraw { .. } => Tool::RejectedProposal(why),
+                    Tool::Note { .. } | Tool::Recall { .. } => Tool::RejectedNote(jig_core_notes::Refusal::Oversized),
                     Tool::Delegate { .. }
                     | Tool::Introduce { .. }
                     | Tool::Subscribe { .. }
@@ -1487,6 +1531,7 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                     | Tool::RejectedMessage(_)
                     | Tool::RejectedControl(_)
                     | Tool::RejectedProposal(_)
+                    | Tool::RejectedNote(_)
                     | Tool::Unavailable => Tool::Rejected(why),
                 };
             }
@@ -1740,7 +1785,8 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
                     | Read::Proposal(_)
                     | Read::Transcript { .. }
                     | Read::Dependency(_)
-                    | Read::InputCheck(_),
+                    | Read::InputCheck(_)
+                    | Read::Notes { .. },
                 )
                 | None,
             )
@@ -1797,6 +1843,7 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
                     | Read::Transcript { .. }
                     | Read::Dependency(_)
                     | Read::InputCheck(_)
+                    | Read::Notes { .. }
                     | Read::Escalation(escalation::Query::Read { .. })
                     | Read::Proposal(_) => {
                         unreachable!("decision archive waiter")
@@ -1819,7 +1866,8 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
                     | Read::Proposal(_)
                     | Read::Transcript { .. }
                     | Read::Dependency(_)
-                    | Read::InputCheck(_) => {
+                    | Read::InputCheck(_)
+                    | Read::Notes { .. } => {
                         unreachable!("result waiter")
                     }
                 }
@@ -1835,7 +1883,8 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
                             | Read::Proposal(_)
                             | Read::Transcript { .. }
                             | Read::Dependency(_)
-                            | Read::InputCheck(_),
+                            | Read::InputCheck(_)
+                            | Read::Notes { .. },
                         )
                         | None,
                     )
@@ -1866,7 +1915,7 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
         close(domain, env, decision, out);
         return;
     }
-    if domain.ready() || startup_adopting(domain.startup) {
+    if domain.ready() || startup_adopting(domain.startup.clone()) {
         if domain.forge.is_ready() {
             let mut decision =
                 route_decision(domain, &env.limits).expect("journal room checked before connector continuation");
@@ -1919,7 +1968,7 @@ fn fire_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>)
     if !admits(domain, &env.limits) {
         return;
     }
-    if startup_adopting(domain.startup) {
+    if startup_adopting(domain.startup.clone()) {
         let mut decision =
             route_decision(domain, &env.limits).expect("journal room checked before forge restart timer");
         let mut forge_out = Queue::with_capacity(forge::max_out(&env.limits.forge));
@@ -2025,7 +2074,10 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                             jig_core::Record::Tasks(row) => {
                                 save(decision, &env.limits, Write::Save(Record::Tasks(row)));
                             }
-                            jig_core::Record::Core(_) | jig_core::Record::Notes(_) => {
+                            jig_core::Record::Notes(row) => {
+                                save(decision, &env.limits, Write::Save(Record::Notes(row)));
+                            }
+                            jig_core::Record::Core(_) => {
                                 unreachable!("the core route owns its write family")
                             }
                         },
@@ -2045,10 +2097,10 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                 | jig_core::CoreKey::Terminal { .. }
                                 | jig_core::CoreKey::ProposalDecision(_)
                                 | jig_core::CoreKey::EscalationDecision { .. },
-                            )
-                            | jig_core::Key::Notes(_) => {
+                            ) => {
                                 unreachable!("the core route owns its erase family")
                             }
+                            jig_core::Key::Notes(key) => save(decision, &env.limits, Write::Erase(Key::Notes(key))),
                         },
                     },
                     jig_core::Request::Ask { connector, ask } => {
@@ -2482,9 +2534,19 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                         jig_core::Held::StopRun { task, attempt } => {
                             emit(decision, &env.limits, Delivery::Fleet(Core::stop_run(task, attempt)));
                         }
-                        jig_core::Held::NotesLoad { .. }
-                        | jig_core::Held::NotesWritten { .. }
-                        | jig_core::Held::NotesDeleted { .. } => {
+                        jig_core::Held::NotesLoad { owner, range } => {
+                            match domain.result_reads.insert(Some(Read::Notes { owner })) {
+                                Ok(id) => emit(
+                                    decision,
+                                    &env.limits,
+                                    Delivery::Load { waiter: id.token(), range: Range::Notes(range), after: None },
+                                ),
+                                Err(_) => domain.work.push(Work::Core(jig_core::Event::Notes(
+                                    jig_core_notes::Event::LoadFailed { owner },
+                                ))),
+                            }
+                        }
+                        jig_core::Held::NotesWritten { .. } | jig_core::Held::NotesDeleted { .. } => {
                             unreachable!("the current application has no note caller")
                         }
                     },
@@ -2766,6 +2828,15 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                         jig_core::Now::DropAssignment { task } => {
                             drop(domain.assignments.remove(&task));
                         }
+                        jig_core::Now::NoteBusy { to, key: _ } => {
+                            relay_call(
+                                domain,
+                                &env.limits,
+                                decision,
+                                to,
+                                CallAnswer::NoteRefused(jig_core_notes::Refusal::Busy),
+                            );
+                        }
                         jig_core::Now::RestoreRefused => domain.startup = Startup::Failed,
                         jig_core::Now::Account(_)
                         | jig_core::Now::View(_)
@@ -2854,6 +2925,9 @@ fn call_needs_input(tool: &Tool) -> bool {
         | Tool::RejectedMessage(_)
         | Tool::RejectedControl(_)
         | Tool::RejectedProposal(_)
+        | Tool::RejectedNote(_)
+        | Tool::Note { .. }
+        | Tool::Recall { .. }
         | Tool::Message { .. }
         | Tool::Introduce { .. }
         | Tool::Subscribe { .. }
@@ -2948,6 +3022,9 @@ fn call_shape(tool: &Tool, limits: &tasks::Limits) -> Option<tasks::Refusal> {
         | Tool::RejectedMessage(_)
         | Tool::RejectedControl(_)
         | Tool::RejectedProposal(_)
+        | Tool::RejectedNote(_)
+        | Tool::Note { .. }
+        | Tool::Recall { .. }
         | Tool::Introduce { .. }
         | Tool::Subscribe { .. }
         | Tool::SubscribeForge { .. }
@@ -3028,6 +3105,7 @@ fn decide_call(
     let connector_owned = match &part {
         jig_core::CallPart::Connector { .. } => true,
         jig_core::CallPart::EffectDenied { .. }
+        | jig_core::CallPart::ToolDenied { .. }
         | jig_core::CallPart::EscalationDecided { .. }
         | jig_core::CallPart::EscalationRefused(_)
         | jig_core::CallPart::Proposed { .. }
@@ -3045,6 +3123,9 @@ fn decide_call(
         | jig_core::CallPart::Delegated(_)
         | jig_core::CallPart::DelegationDenied { .. }
         | jig_core::CallPart::DelegationRefused(_)
+        | jig_core::CallPart::NoteWritten { .. }
+        | jig_core::CallPart::NoteRecalled { .. }
+        | jig_core::CallPart::NoteRefused(_)
         | jig_core::CallPart::Unavailable => false,
     };
     if !domain.core.decide_named_call(key, part) {
@@ -3233,156 +3314,204 @@ fn relay_payload(
     assert!(current_proof(domain, key.task, key.attempt), "fleet only relays a current claim");
     match call_answer(domain, key) {
         Some(answer) => relay_call(domain, &env.limits, decision, reply_to, answer),
-        None => match body.tool {
-            Tool::Unavailable => {
-                domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
-                    to: reply_to,
-                    key,
-                    part: jig_core::CallPart::Unavailable,
-                }));
+        None => {
+            if let Some(kind) = tool_kind(&body.tool)
+                && let Some(part) = domain.core.authorize_tool(key, kind)
+            {
+                domain.work.push(Work::Core(jig_core::Event::NamedAnswer { to: reply_to, key, part }));
+                return;
             }
-            Tool::Rejected(why) => domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
-                to: reply_to,
-                key,
-                part: jig_core::CallPart::DelegationRefused(tasks::Problem { task: None, why, blocked_by: None }),
-            })),
-            Tool::RejectedMessage(why) => domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
-                to: reply_to,
-                key,
-                part: jig_core::CallPart::MessageRefused(tasks::Problem { task: None, why, blocked_by: None }),
-            })),
-            Tool::RejectedControl(why) => domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
-                to: reply_to,
-                key,
-                part: jig_core::CallPart::ControlRefused(tasks::Problem { task: None, why, blocked_by: None }),
-            })),
-            Tool::RejectedProposal(why) => domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
-                to: reply_to,
-                key,
-                part: jig_core::CallPart::ProposalRefused(tasks::Problem { task: None, why, blocked_by: None }),
-            })),
-            Tool::Delegate { batch } => {
-                delegate_call(domain, env, decision, reply_to, key, batch, false, Box::new([]));
-            }
-            Tool::Propose { action, reason, as_holder } => {
-                proposals::propose_call(domain, reply_to, key, action, reason, as_holder);
-            }
-            Tool::Decide { proposer, proposal, decision: choice } => {
-                domain.work.push(Work::Core(jig_core::Event::NamedAction {
-                    to: reply_to,
-                    key,
-                    action: jig_core::NamedAction::DecideProposal {
-                        proposer,
-                        proposal,
-                        choice: match choice {
-                            ProposalChoice::Accept => jig_core::ProposalChoice::Accept,
-                            ProposalChoice::Reject { reason } => jig_core::ProposalChoice::Reject { reason },
-                            ProposalChoice::Pass => jig_core::ProposalChoice::Pass,
-                        },
-                    },
-                }));
-            }
-            Tool::Withdraw { proposal } => {
-                domain.work.push(Work::Core(jig_core::Event::NamedAction {
-                    to: reply_to,
-                    key,
-                    action: jig_core::NamedAction::WithdrawProposal { proposal },
-                }));
-            }
-            Tool::DecideEscalation { task, revision, decision: choice } => {
-                domain.work.push(Work::Core(jig_core::Event::NamedAction {
-                    to: reply_to,
-                    key,
-                    action: jig_core::NamedAction::DecideEscalation {
-                        task,
-                        revision,
-                        choice: match choice {
-                            EscalationChoice::Release => jig_core::EscalationChoice::Release,
-                            EscalationChoice::Reject { reason } => jig_core::EscalationChoice::Reject { reason },
-                            EscalationChoice::Pass => jig_core::EscalationChoice::Pass,
-                        },
-                    },
-                }));
-            }
-            Tool::Amend { target, amendment } => {
-                domain.work.push(Work::Core(jig_core::Event::NamedAction {
-                    to: reply_to,
-                    key,
-                    action: jig_core::NamedAction::Amend { target, amendment },
-                }));
-            }
-            Tool::Cancel { target, reason } => {
-                domain.work.push(Work::Core(jig_core::Event::NamedAction {
-                    to: reply_to,
-                    key,
-                    action: jig_core::NamedAction::Control { target, control: tasks::Control::Cancel { reason } },
-                }));
-            }
-            Tool::Release { target } => {
-                domain.work.push(Work::Core(jig_core::Event::NamedAction {
-                    to: reply_to,
-                    key,
-                    action: jig_core::NamedAction::Control { target, control: tasks::Control::Release },
-                }));
-            }
-            Tool::Message { target, form, words } => {
-                let kind = match form {
-                    MessageForm::Words => tasks::MessageKind::Words,
-                    MessageForm::Question => tasks::MessageKind::Question,
-                    MessageForm::Answer { question } => tasks::MessageKind::Answer { question },
-                };
-                domain.work.push(Work::Core(jig_core::Event::NamedAction {
-                    to: reply_to,
-                    key,
-                    action: jig_core::NamedAction::Message { target, kind, words },
-                }));
-            }
-            Tool::Introduce { left, right } => {
-                domain.work.push(Work::Core(jig_core::Event::NamedAction {
-                    to: reply_to,
-                    key,
-                    action: jig_core::NamedAction::Introduce { left, right },
-                }));
-            }
-            Tool::Subscribe { kind } => domain.work.push(Work::Core(jig_core::Event::NamedAction {
-                to: reply_to,
-                key,
-                action: jig_core::NamedAction::Subscribe { kind },
-            })),
-            Tool::SubscribeForge { topic, own_change, paths } => {
-                forge_route::subscribe_call(domain, env, decision, reply_to, key, topic, own_change, paths);
-            }
-            Tool::ReadForge { repository, read } => {
-                forge_route::read_call(domain, env, decision, reply_to, key, repository, read);
-            }
-            Tool::EffectForge { repository, resource, write } => {
-                forge_route::effect_call(domain, env, decision, reply_to, key, repository, resource, *write);
-            }
-            Tool::Unsubscribe { subscription } => {
-                let token = reply_to.into_token();
-                if let Some(topic) = domain.forge.subscription(key.task, subscription) {
-                    assert!(
-                        domain.forge_unsubscribing.insert(token, (key.task, topic)) == Ok(None),
-                        "one connector unsubscribe"
-                    );
+            match body.tool {
+                Tool::Unavailable => {
+                    domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
+                        to: reply_to,
+                        key,
+                        part: jig_core::CallPart::Unavailable,
+                    }));
                 }
-                domain.work.push(Work::Core(jig_core::Event::NamedAction {
-                    to: ReplyTo::new(token),
+                Tool::RejectedNote(why) => domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
+                    to: reply_to,
                     key,
-                    action: jig_core::NamedAction::Unsubscribe { subscription },
-                }));
+                    part: jig_core::CallPart::NoteRefused(why),
+                })),
+                Tool::Note { entry, recalled } => domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                    to: reply_to,
+                    key,
+                    action: jig_core::NamedAction::Note { entry, recalled },
+                })),
+                Tool::Recall { by, page } => domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                    to: reply_to,
+                    key,
+                    action: jig_core::NamedAction::Recall { by, page },
+                })),
+                Tool::Rejected(why) => domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
+                    to: reply_to,
+                    key,
+                    part: jig_core::CallPart::DelegationRefused(tasks::Problem { task: None, why, blocked_by: None }),
+                })),
+                Tool::RejectedMessage(why) => domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
+                    to: reply_to,
+                    key,
+                    part: jig_core::CallPart::MessageRefused(tasks::Problem { task: None, why, blocked_by: None }),
+                })),
+                Tool::RejectedControl(why) => domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
+                    to: reply_to,
+                    key,
+                    part: jig_core::CallPart::ControlRefused(tasks::Problem { task: None, why, blocked_by: None }),
+                })),
+                Tool::RejectedProposal(why) => domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
+                    to: reply_to,
+                    key,
+                    part: jig_core::CallPart::ProposalRefused(tasks::Problem { task: None, why, blocked_by: None }),
+                })),
+                Tool::Delegate { batch } => {
+                    delegate_call(domain, env, decision, reply_to, key, batch, false, Box::new([]));
+                }
+                Tool::Propose { action, reason, as_holder } => {
+                    proposals::propose_call(domain, reply_to, key, action, reason, as_holder);
+                }
+                Tool::Decide { proposer, proposal, decision: choice } => {
+                    domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                        to: reply_to,
+                        key,
+                        action: jig_core::NamedAction::DecideProposal {
+                            proposer,
+                            proposal,
+                            choice: match choice {
+                                ProposalChoice::Accept => jig_core::ProposalChoice::Accept,
+                                ProposalChoice::Reject { reason } => jig_core::ProposalChoice::Reject { reason },
+                                ProposalChoice::Pass => jig_core::ProposalChoice::Pass,
+                            },
+                        },
+                    }));
+                }
+                Tool::Withdraw { proposal } => {
+                    domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                        to: reply_to,
+                        key,
+                        action: jig_core::NamedAction::WithdrawProposal { proposal },
+                    }));
+                }
+                Tool::DecideEscalation { task, revision, decision: choice } => {
+                    domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                        to: reply_to,
+                        key,
+                        action: jig_core::NamedAction::DecideEscalation {
+                            task,
+                            revision,
+                            choice: match choice {
+                                EscalationChoice::Release => jig_core::EscalationChoice::Release,
+                                EscalationChoice::Reject { reason } => jig_core::EscalationChoice::Reject { reason },
+                                EscalationChoice::Pass => jig_core::EscalationChoice::Pass,
+                            },
+                        },
+                    }));
+                }
+                Tool::Amend { target, amendment } => {
+                    domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                        to: reply_to,
+                        key,
+                        action: jig_core::NamedAction::Amend { target, amendment },
+                    }));
+                }
+                Tool::Cancel { target, reason } => {
+                    domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                        to: reply_to,
+                        key,
+                        action: jig_core::NamedAction::Control { target, control: tasks::Control::Cancel { reason } },
+                    }));
+                }
+                Tool::Release { target } => {
+                    domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                        to: reply_to,
+                        key,
+                        action: jig_core::NamedAction::Control { target, control: tasks::Control::Release },
+                    }));
+                }
+                Tool::Message { target, form, words } => {
+                    let kind = match form {
+                        MessageForm::Words => tasks::MessageKind::Words,
+                        MessageForm::Question => tasks::MessageKind::Question,
+                        MessageForm::Answer { question } => tasks::MessageKind::Answer { question },
+                    };
+                    domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                        to: reply_to,
+                        key,
+                        action: jig_core::NamedAction::Message { target, kind, words },
+                    }));
+                }
+                Tool::Introduce { left, right } => {
+                    domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                        to: reply_to,
+                        key,
+                        action: jig_core::NamedAction::Introduce { left, right },
+                    }));
+                }
+                Tool::Subscribe { kind } => domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                    to: reply_to,
+                    key,
+                    action: jig_core::NamedAction::Subscribe { kind },
+                })),
+                Tool::SubscribeForge { topic, own_change, paths } => {
+                    forge_route::subscribe_call(domain, env, decision, reply_to, key, topic, own_change, paths);
+                }
+                Tool::ReadForge { repository, read } => {
+                    forge_route::read_call(domain, env, decision, reply_to, key, repository, read);
+                }
+                Tool::EffectForge { repository, resource, write } => {
+                    forge_route::effect_call(domain, env, decision, reply_to, key, repository, resource, *write);
+                }
+                Tool::Unsubscribe { subscription } => {
+                    let token = reply_to.into_token();
+                    if let Some(topic) = domain.forge.subscription(key.task, subscription) {
+                        assert!(
+                            domain.forge_unsubscribing.insert(token, (key.task, topic)) == Ok(None),
+                            "one connector unsubscribe"
+                        );
+                    }
+                    domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                        to: ReplyTo::new(token),
+                        key,
+                        action: jig_core::NamedAction::Unsubscribe { subscription },
+                    }));
+                }
             }
-        },
+        }
     }
+}
+
+fn tool_kind(tool: &Tool) -> Option<jig_core::ToolKind> {
+    Some(match tool {
+        Tool::Delegate { .. } => jig_core::ToolKind::Delegate,
+        Tool::Message { target, .. } => jig_core::ToolKind::Message { target: *target },
+        Tool::Introduce { left, .. } => jig_core::ToolKind::Message { target: *left },
+        Tool::Amend { .. } | Tool::Cancel { .. } | Tool::Release { .. } => jig_core::ToolKind::Control,
+        Tool::Decide { .. } | Tool::Withdraw { .. } | Tool::DecideEscalation { .. } => jig_core::ToolKind::Decide,
+        Tool::Propose { .. } => jig_core::ToolKind::Propose,
+        Tool::Subscribe { .. } | Tool::SubscribeForge { .. } | Tool::Unsubscribe { .. } => {
+            jig_core::ToolKind::Subscribe
+        }
+        Tool::EffectForge { .. } => jig_core::ToolKind::Effect,
+        Tool::Note { entry, .. } => jig_core::ToolKind::Note { scope: entry.scope.clone() },
+        Tool::Recall { by, .. } => jig_core::ToolKind::Recall { by: by.clone() },
+        Tool::ReadForge { .. } => jig_core::ToolKind::Read,
+        Tool::Unavailable
+        | Tool::Rejected(_)
+        | Tool::RejectedMessage(_)
+        | Tool::RejectedControl(_)
+        | Tool::RejectedProposal(_)
+        | Tool::RejectedNote(_) => return None,
+    })
 }
 
 fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<Key>, out: &mut Queue<Request>) {
     let mut load_out = Queue::with_capacity(1);
-    let most = match range {
+    let most = match &range {
         Range::Deployment
         | Range::TaskResult { .. }
         | Range::EscalationDecision { .. }
-        | Range::ProposalDecision { .. } => 1,
+        | Range::ProposalDecision { .. }
+        | Range::Notes(jig_core_notes::Range::Entry { .. }) => 1,
         Range::Calls
         | Range::Tasks
         | Range::EndedResults
@@ -3391,8 +3520,11 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
         | Range::RunProofs
         | Range::Turns { .. }
         | Range::TaskTranscript { .. } => domain.limits.loads.rows,
+        Range::Notes(jig_core_notes::Range::Lines { .. }) => {
+            domain.limits.loads.rows.min(domain.limits.notes.load_rows)
+        }
     };
-    if loads::begin(&mut domain.loads, waiter, range, after, most, &mut load_out).is_none() {
+    if loads::begin(&mut domain.loads, waiter, range.clone(), after, most, &mut load_out).is_none() {
         match range {
             Range::TaskTranscript { .. } => {
                 transcript_failed(domain, waiter);
@@ -3409,6 +3541,10 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
             | Range::Forge
             | Range::TaskResult { .. }
             | Range::Turns { .. } => {}
+            Range::Notes(_) => {
+                note_failed(domain, waiter);
+                return;
+            }
         }
         match range {
             Range::ProposalDecision { .. } => {
@@ -3431,6 +3567,7 @@ fn request_load(domain: &mut Domain, waiter: Token, range: Range, after: Option<
             | Range::TaskResult { .. } => {
                 unreachable!("startup/result load room reserved")
             }
+            Range::Notes(_) => unreachable!("notes load failure handled above"),
         }
     }
     match load_out.pop().expect("load issued") {
@@ -3451,7 +3588,8 @@ fn transcript_waiter(domain: &Domain, waiter: Token) -> bool {
                 | Read::Escalation(_)
                 | Read::Proposal(_)
                 | Read::Dependency(_)
-                | Read::InputCheck(_),
+                | Read::InputCheck(_)
+                | Read::Notes { .. },
             )
             | None,
         )
@@ -3469,7 +3607,8 @@ fn proposal_waiter(domain: &Domain, waiter: Token) -> bool {
                 | Read::Escalation(_)
                 | Read::Transcript { .. }
                 | Read::Dependency(_)
-                | Read::InputCheck(_),
+                | Read::InputCheck(_)
+                | Read::Notes { .. },
             )
             | None,
         )
@@ -3487,7 +3626,8 @@ fn inbox_waiter(domain: &Domain, waiter: Token) -> bool {
                 | Read::Proposal(_)
                 | Read::Transcript { .. }
                 | Read::Dependency(_)
-                | Read::InputCheck(_),
+                | Read::InputCheck(_)
+                | Read::Notes { .. },
             )
             | None,
         )
@@ -3505,7 +3645,8 @@ fn dependency_waiter(domain: &Domain, waiter: Token) -> bool {
                 | Read::Escalation(_)
                 | Read::Proposal(_)
                 | Read::Transcript { .. }
-                | Read::InputCheck(_),
+                | Read::InputCheck(_)
+                | Read::Notes { .. },
             )
             | None,
         )
@@ -3523,7 +3664,8 @@ fn input_waiter(domain: &Domain, waiter: Token) -> bool {
                 | Read::Escalation(_)
                 | Read::Proposal(_)
                 | Read::Transcript { .. }
-                | Read::Dependency(_),
+                | Read::Dependency(_)
+                | Read::Notes { .. },
             )
             | None,
         )
@@ -3557,6 +3699,7 @@ fn input_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: O
         | Record::Terminal(_)
         | Record::Tasks(_)
         | Record::People(_)
+        | Record::Notes(_)
         | Record::Forge { .. } => {
             input_failed(domain, waiter);
             return;
@@ -3585,6 +3728,90 @@ fn input_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: O
     }));
 }
 
+fn note_waiter(domain: &Domain, waiter: Token) -> bool {
+    match domain.result_reads.get(Id::from_token(waiter)) {
+        Some(Some(Read::Notes { .. })) => true,
+        Some(
+            Some(
+                Read::Result(_)
+                | Read::Inbox(_)
+                | Read::Escalation(_)
+                | Read::Proposal(_)
+                | Read::Transcript { .. }
+                | Read::Dependency(_)
+                | Read::InputCheck(_),
+            )
+            | None,
+        )
+        | None => false,
+    }
+}
+
+fn take_note_owner(domain: &mut Domain, waiter: Token) -> Option<Token> {
+    match take_read(domain, waiter) {
+        Some(Read::Notes { owner }) => Some(owner),
+        Some(
+            Read::Result(_)
+            | Read::Inbox(_)
+            | Read::Escalation(_)
+            | Read::Proposal(_)
+            | Read::Transcript { .. }
+            | Read::Dependency(_)
+            | Read::InputCheck(_),
+        )
+        | None => None,
+    }
+}
+
+fn note_failed(domain: &mut Domain, waiter: Token) {
+    let Some(owner) = take_note_owner(domain, waiter) else { return };
+    domain.result_reads.retire(Id::from_token(waiter));
+    domain.work.push(Work::Core(jig_core::Event::Notes(jig_core_notes::Event::LoadFailed { owner })));
+}
+
+fn note_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: Option<Key>, cut: Option<loads::Cut>) {
+    if cut.is_some() {
+        note_failed(domain, waiter);
+        return;
+    }
+    let mut kept = List::with_capacity(u32::try_from(rows.len()).expect("bounded note page"));
+    for row in rows {
+        match row {
+            Record::Notes(record) => {
+                let valid = match &record {
+                    notes::Record::Entry(entry) => notes::valid_entry(entry, &domain.limits.notes),
+                    notes::Record::Line(line) => notes::valid_line(line, &domain.limits.notes),
+                };
+                if !valid {
+                    note_failed(domain, waiter);
+                    return;
+                }
+                kept.push(record).expect("note page room");
+            }
+            Record::Call(_)
+            | Record::Deployment(_)
+            | Record::EscalationDecision(_)
+            | Record::ProposalDecision(_)
+            | Record::Turn(_)
+            | Record::RunProof(_)
+            | Record::Terminal(_)
+            | Record::Tasks(_)
+            | Record::People(_)
+            | Record::Forge { .. } => {
+                note_failed(domain, waiter);
+                return;
+            }
+        }
+    }
+    let Some(owner) = take_note_owner(domain, waiter) else { return };
+    domain.result_reads.retire(Id::from_token(waiter));
+    domain.work.push(Work::Core(jig_core::Event::Notes(jig_core_notes::Event::Loaded {
+        owner,
+        rows: jig_core_notes::Rows { records: kept },
+        more: next.is_some(),
+    })));
+}
+
 #[expect(clippy::too_many_lines, reason = "one store terminal dispatcher covers every live read owner")]
 fn load_outputs(
     domain: &mut Domain,
@@ -3595,6 +3822,10 @@ fn load_outputs(
     for _ in 0..load_out.len() {
         match load_out.pop().expect("load terminal count") {
             loads::Request::Loaded { waiter, rows, next, cut } => {
+                if note_waiter(domain, waiter) {
+                    note_loaded(domain, waiter, rows, next, cut);
+                    return;
+                }
                 if input_waiter(domain, waiter) {
                     if cut.is_some() {
                         input_failed(domain, waiter);
@@ -3641,7 +3872,8 @@ fn load_outputs(
                                 | Read::Inbox(_)
                                 | Read::Transcript { .. }
                                 | Read::Dependency(_)
-                                | Read::InputCheck(_),
+                                | Read::InputCheck(_)
+                                | Read::Notes { .. },
                             )
                             | None,
                         )
@@ -3669,7 +3901,8 @@ fn load_outputs(
                                 | Read::Inbox(_)
                                 | Read::Transcript { .. }
                                 | Read::Dependency(_)
-                                | Read::InputCheck(_),
+                                | Read::InputCheck(_)
+                                | Read::Notes { .. },
                             )
                             | None,
                         )
@@ -3683,6 +3916,10 @@ fn load_outputs(
                 }
             }
             loads::Request::Unloaded { waiter, .. } => {
+                if note_waiter(domain, waiter) {
+                    note_failed(domain, waiter);
+                    return;
+                }
                 if input_waiter(domain, waiter) {
                     input_failed(domain, waiter);
                     return;
@@ -3716,7 +3953,8 @@ fn load_outputs(
                                 | Read::Inbox(_)
                                 | Read::Transcript { .. }
                                 | Read::Dependency(_)
-                                | Read::InputCheck(_),
+                                | Read::InputCheck(_)
+                                | Read::Notes { .. },
                             )
                             | None,
                         )
@@ -3791,6 +4029,7 @@ fn dependency_loaded(
         | Record::Terminal(_)
         | Record::Tasks(_)
         | Record::People(_)
+        | Record::Notes(_)
         | Record::Forge { .. } => {
             dependency_failed(domain, waiter);
             return;
@@ -3843,6 +4082,7 @@ fn transcript_loaded(
             | Record::Terminal(_)
             | Record::Tasks(_)
             | Record::People(_)
+            | Record::Notes(_)
             | Record::Forge { .. } => {
                 transcript_failed(domain, waiter);
                 return;
@@ -3982,7 +4222,7 @@ fn startup_page(
     next: Option<Key>,
     out: &mut Queue<Request>,
 ) {
-    let range = match domain.startup {
+    let range = match domain.startup.clone() {
         Startup::Loading(range) => range,
         Startup::Cold | Startup::Adopting(_) | Startup::Running | Startup::Failed => return,
     };
@@ -4031,6 +4271,7 @@ fn startup_page(
         | Range::EndedResults => {
             unreachable!("startup range")
         }
+        Range::Notes(_) => unreachable!("notes load is outside startup"),
     };
     if range == Range::Tasks {
         for project in &domain.core.projects {
@@ -4046,7 +4287,7 @@ fn startup_page(
         }
     }
     if let Some(range) = following {
-        domain.startup = Startup::Loading(range);
+        domain.startup = Startup::Loading(range.clone());
         emit(&mut decision, &env.limits, Delivery::Load { waiter: Token::new(u64::MAX), range, after: None });
         close(domain, env, decision, out);
         return;
@@ -4126,6 +4367,7 @@ fn account_outputs(routed: jig_core::Requests, out: &mut Queue<Request>) {
                 | jig_core::Now::NotesIndexed { .. }
                 | jig_core::Now::NotesRecalled { .. }
                 | jig_core::Now::NotesRefused { .. }
+                | jig_core::Now::NoteBusy { .. }
                 | jig_core::Now::DropPayload { .. }
                 | jig_core::Now::DropAssignment { .. }
                 | jig_core::Now::TurnPayload { .. }
@@ -4717,7 +4959,8 @@ fn header_loaded(startup: Startup) -> bool {
             | Range::ProposalDecision { .. }
             | Range::Turns { .. }
             | Range::TaskTranscript { .. }
-            | Range::TaskResult { .. },
+            | Range::TaskResult { .. }
+            | Range::Notes(_),
         )
         | Startup::Adopting(_)
         | Startup::Running => true,
@@ -4833,6 +5076,7 @@ fn valid_connector_answer(answer: &CallAnswer, deployment: &crate::Deployment, l
         },
         CallAnswer::ForgeEffectRefused(_)
         | CallAnswer::ForgeEffectDenied { .. }
+        | CallAnswer::ToolDenied { .. }
         | CallAnswer::Unavailable
         | CallAnswer::Introduced
         | CallAnswer::Unsubscribed
@@ -4850,7 +5094,10 @@ fn valid_connector_answer(answer: &CallAnswer, deployment: &crate::Deployment, l
         | CallAnswer::EscalationRefused(_)
         | CallAnswer::SubscriptionRefused(_)
         | CallAnswer::DelegationRefused(_)
-        | CallAnswer::ControlRefused(_) => true,
+        | CallAnswer::ControlRefused(_)
+        | CallAnswer::NoteWritten { .. }
+        | CallAnswer::NoteRecalled { .. }
+        | CallAnswer::NoteRefused(_) => true,
     }
 }
 
@@ -4957,6 +5204,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                 domain.startup = Startup::Failed;
             }
         }
+        Record::Notes(_) => unreachable!("notes are loaded on demand, outside startup"),
         Record::Turn(_) | Record::Terminal(_) | Record::EscalationDecision(_) | Record::ProposalDecision(_) => {
             unreachable!("startup excludes archive families")
         }

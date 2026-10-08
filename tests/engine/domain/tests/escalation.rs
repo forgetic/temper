@@ -352,3 +352,12 @@ fn read_pressure_consumes_one_immediate_terminal_and_requires_a_fresh_right() {
         .expect("retry registers a new outside read obligation");
     assert_eq!(referee.busy_reads(), 2);
 }
+
+#[test]
+fn a_historical_query_retries_busy_with_a_fresh_reply_right() {
+    let settings =
+        Settings { cut: Cut::Held, commit_delay: 2, page_delay: 2, ..Settings::calm(9208, Story::RaceRelease) };
+    let world = run_replayed(settings);
+    assert!(world.referee.done());
+    assert!(world.referee.busy_asks() > 0, "the retained seed exercises named-query pressure");
+}

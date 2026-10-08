@@ -95,6 +95,7 @@ pub struct Referee {
     reads: BTreeMap<Token, (u64, tasks::Escalation)>,
     read_terminals: BTreeSet<Token>,
     busy_reads: BTreeSet<Token>,
+    busy_asks: BTreeSet<Token>,
     start_replies: u32,
     results: u32,
 }
@@ -156,6 +157,7 @@ impl Referee {
             reads: BTreeMap::new(),
             read_terminals: BTreeSet::new(),
             busy_reads: BTreeSet::new(),
+            busy_asks: BTreeSet::new(),
             start_replies: 0,
             results: 0,
         }
@@ -558,6 +560,25 @@ impl Referee {
         Ok(())
     }
 
+    /// Consume a retryable named query's terminal and track its fresh reply right.
+    ///
+    /// # Errors
+    /// Rejects an unsolicited terminal, a non-busy reply, or a reused reply right.
+    pub fn ask_refused(&mut self, to: Token, reply: people::Reply, retry: Token) -> Result<(), &'static str> {
+        if reply != people::Reply::Refused(people::Refusal::Busy)
+            && reply != people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Busy))
+        {
+            return Err("named query pressure requires Busy");
+        }
+        if to == retry || self.asks.contains_key(&retry) || self.busy_asks.contains(&retry) {
+            return Err("named query retry requires a fresh right");
+        }
+        let expected = self.asks.remove(&to).ok_or("unsolicited named query pressure terminal")?;
+        assert!(self.busy_asks.insert(to));
+        assert!(self.asks.insert(retry, expected).is_none());
+        Ok(())
+    }
+
     /// Consume an immediate `Busy` terminal for an outstanding current-view read.
     /// The person must retry using a fresh right; no keyed outcome is saved
     /// (domain/people.md, section 5.1).
@@ -582,6 +603,12 @@ impl Referee {
     #[must_use]
     pub fn busy_reads(&self) -> usize {
         self.busy_reads.len()
+    }
+
+    /// Count the named queries that consumed Busy and retried with a fresh right.
+    #[must_use]
+    pub fn busy_asks(&self) -> usize {
+        self.busy_asks.len()
     }
 
     /// Check one authenticated held view and its durable semantic record.

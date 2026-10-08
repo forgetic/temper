@@ -23,6 +23,8 @@ pub enum CallAnswer {
     ForgeEffectRefused(temper_engine_domain_forge_client::api::Error),
     /// The pure policy check declined a forge write, retaining its bounded reasons.
     ForgeEffectDenied { answer: jig_core_authority::Answer, findings: Box<[jig_core_authority::Finding]> },
+    /// An engine tool was refused with the authority findings.
+    ToolDenied { answer: jig_core_authority::Answer, findings: Box<[jig_core_authority::Finding]> },
     /// One fresh bounded forge read, retained for named-call replay.
     ForgeRead(
         Box<Result<temper_engine_domain_forge_client::api::Answer, temper_engine_domain_forge_client::api::Error>>,
@@ -61,6 +63,12 @@ pub enum CallAnswer {
     DelegationDenied { answer: jig_core_authority::Answer, findings: Box<[jig_core_authority::Finding]> },
     /// A whole batch refused by structural or finite-funding admission.
     DelegationRefused(jig_core_tasks::Problem),
+    /// A note write's durable name and revision.
+    NoteWritten { name: u64, revision: u32 },
+    /// One bounded notes recall page.
+    NoteRecalled { entries: Box<[jig_core_notes::Entry]>, more: bool },
+    /// A note request changed nothing.
+    NoteRefused(jig_core_notes::Refusal),
     /// The named tool is deferred to a later engine route.
     Unavailable,
 }
@@ -76,6 +84,9 @@ impl CallAnswer {
             }
             CallAnswer::ForgeEffectDenied { answer, findings } => {
                 jig_core::CallPart::EffectDenied { answer: *answer, findings: findings.clone() }
+            }
+            CallAnswer::ToolDenied { answer, findings } => {
+                jig_core::CallPart::ToolDenied { answer: *answer, findings: findings.clone() }
             }
             CallAnswer::EscalationDecided { task, revision, outcome } => {
                 jig_core::CallPart::EscalationDecided { task: *task, revision: *revision, outcome: *outcome }
@@ -100,6 +111,13 @@ impl CallAnswer {
                 jig_core::CallPart::DelegationDenied { answer: *answer, findings: findings.clone() }
             }
             CallAnswer::DelegationRefused(problem) => jig_core::CallPart::DelegationRefused(problem.clone()),
+            CallAnswer::NoteWritten { name, revision } => {
+                jig_core::CallPart::NoteWritten { name: *name, revision: *revision }
+            }
+            CallAnswer::NoteRecalled { entries, more } => {
+                jig_core::CallPart::NoteRecalled { entries: entries.clone(), more: *more }
+            }
+            CallAnswer::NoteRefused(why) => jig_core::CallPart::NoteRefused(*why),
             CallAnswer::Unavailable => jig_core::CallPart::Unavailable,
         }
     }
@@ -112,6 +130,9 @@ impl CallAnswer {
             jig_core::CallPart::Connector { .. } => return None,
             jig_core::CallPart::EffectDenied { answer, findings } => {
                 CallAnswer::ForgeEffectDenied { answer: *answer, findings: findings.clone() }
+            }
+            jig_core::CallPart::ToolDenied { answer, findings } => {
+                CallAnswer::ToolDenied { answer: *answer, findings: findings.clone() }
             }
             jig_core::CallPart::EscalationDecided { task, revision, outcome } => {
                 CallAnswer::EscalationDecided { task: *task, revision: *revision, outcome: *outcome }
@@ -136,6 +157,13 @@ impl CallAnswer {
                 CallAnswer::DelegationDenied { answer: *answer, findings: findings.clone() }
             }
             jig_core::CallPart::DelegationRefused(problem) => CallAnswer::DelegationRefused(problem.clone()),
+            jig_core::CallPart::NoteWritten { name, revision } => {
+                CallAnswer::NoteWritten { name: *name, revision: *revision }
+            }
+            jig_core::CallPart::NoteRecalled { entries, more } => {
+                CallAnswer::NoteRecalled { entries: entries.clone(), more: *more }
+            }
+            jig_core::CallPart::NoteRefused(why) => CallAnswer::NoteRefused(*why),
             jig_core::CallPart::Unavailable => CallAnswer::Unavailable,
         })
     }
@@ -149,10 +177,10 @@ pub struct CallRecord {
     pub answer: CallAnswer,
 }
 
-/// Ordered fixed-size address of a durable row. Root-issued and child-issued
-/// identities stay in their own variants; keys contain no payload bytes or IO
-/// handles (domain/engine.md, 5.3–5.6).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+/// Ordered address of a durable row. Root and child identities keep their own
+/// variants; a scoped note index includes its bounded resource pattern
+/// (jig's domain/engine.md, 5.3–5.6).
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
     /// Immutable outcome of a person-decided proposal, loaded by its root-issued number.
     ProposalDecision(u64),
@@ -200,6 +228,8 @@ pub enum Key {
         /// People-issued key for its durable secret-free records.
         jig_core_people::Key,
     ),
+    /// A scoped note entry or one line of its scope index.
+    Notes(jig_core_notes::Key),
     /// Stable root store address for a connector row.
     Forge(u64),
 }
@@ -208,7 +238,7 @@ pub enum Key {
 /// The root asks the store for strictly ordered rows from one range; child
 /// records already have concrete task/people wrappers. These values issue no
 /// request on their own and promise no cross-page snapshot (domain/engine.md, 5.3).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Range {
     /// One immutable decision for a later authenticated proposal caller.
     ProposalDecision { proposal: u64 },
@@ -251,6 +281,8 @@ pub enum Range {
     },
     /// All committed turns of one task, in attempt and turn order, for preparing its next run.
     TaskTranscript { task: u64 },
+    /// One bounded notes-child load by name or by scope and cursor.
+    Notes(jig_core_notes::Range),
 }
 
 impl Range {
@@ -259,9 +291,9 @@ impl Range {
     /// owner. It does not validate a child row's payload or its task links.
     #[must_use]
     #[expect(clippy::too_many_lines, reason = "all store families are checked exhaustively in one range matcher")]
-    pub const fn contains(self, key: Key) -> bool {
-        match self {
-            Range::Forge => match key {
+    pub fn contains(&self, key: &Key) -> bool {
+        match self.clone() {
+            Range::Forge => match key.clone() {
                 Key::Forge(id) => id != 0,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
@@ -271,9 +303,10 @@ impl Range {
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
-                | Key::People(_) => false,
+                | Key::People(_)
+                | Key::Notes(_) => false,
             },
-            Range::ProposalDecision { proposal } => match key {
+            Range::ProposalDecision { proposal } => match key.clone() {
                 Key::ProposalDecision(number) => proposal != 0 && number == proposal,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
@@ -283,9 +316,10 @@ impl Range {
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
                 | Key::People(_)
+                | Key::Notes(_)
                 | Key::Forge(_) => false,
             },
-            Range::Calls => match key {
+            Range::Calls => match key.clone() {
                 Key::Call(call) => call.task != 0 && call.attempt != 0 && call.completion != 0,
                 Key::EscalationDecision { .. }
                 | Key::ProposalDecision(_)
@@ -295,9 +329,10 @@ impl Range {
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
                 | Key::People(_)
+                | Key::Notes(_)
                 | Key::Forge(_) => false,
             },
-            Range::EscalationDecision { task, revision } => match key {
+            Range::EscalationDecision { task, revision } => match key.clone() {
                 Key::EscalationDecision { task: found, revision: current } => {
                     task != 0 && revision != 0 && task == found && revision == current
                 }
@@ -309,9 +344,10 @@ impl Range {
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
                 | Key::People(_)
+                | Key::Notes(_)
                 | Key::Forge(_) => false,
             },
-            Range::Deployment => match key {
+            Range::Deployment => match key.clone() {
                 Key::Deployment => true,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
@@ -321,9 +357,10 @@ impl Range {
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
                 | Key::People(_)
+                | Key::Notes(_)
                 | Key::Forge(_) => false,
             },
-            Range::Tasks => match key {
+            Range::Tasks => match key.clone() {
                 Key::Tasks(child) => match child {
                     jig_core_tasks::Key::Live(_)
                     | jig_core_tasks::Key::Ledger(_)
@@ -341,9 +378,10 @@ impl Range {
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
                 | Key::People(_)
+                | Key::Notes(_)
                 | Key::Forge(_) => false,
             },
-            Range::EndedResults => match key {
+            Range::EndedResults => match key.clone() {
                 Key::Tasks(jig_core_tasks::Key::Ended(number)) => number != 0,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
@@ -354,9 +392,10 @@ impl Range {
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
                 | Key::People(_)
+                | Key::Notes(_)
                 | Key::Forge(_) => false,
             },
-            Range::People => match key {
+            Range::People => match key.clone() {
                 Key::People(_) => true,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
@@ -366,9 +405,10 @@ impl Range {
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
+                | Key::Notes(_)
                 | Key::Forge(_) => false,
             },
-            Range::RunProofs => match key {
+            Range::RunProofs => match key.clone() {
                 Key::RunProof { task } => task != 0,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
@@ -378,9 +418,10 @@ impl Range {
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
                 | Key::People(_)
+                | Key::Notes(_)
                 | Key::Forge(_) => false,
             },
-            Range::TaskResult { task } => match key {
+            Range::TaskResult { task } => match key.clone() {
                 Key::Tasks(jig_core_tasks::Key::Ended(number)) => task == number,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
@@ -391,9 +432,10 @@ impl Range {
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
                 | Key::People(_)
+                | Key::Notes(_)
                 | Key::Forge(_) => false,
             },
-            Range::Turns { task, attempt } => match key {
+            Range::Turns { task, attempt } => match key.clone() {
                 Key::Turn { task: found, attempt: run, turn } => found == task && run == attempt && turn != 0,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
@@ -403,14 +445,44 @@ impl Range {
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
                 | Key::People(_)
+                | Key::Notes(_)
                 | Key::Forge(_) => false,
             },
-            Range::TaskTranscript { task } => match key {
+            Range::TaskTranscript { task } => match key.clone() {
                 Key::Turn { task: found, attempt, turn } => task != 0 && found == task && attempt != 0 && turn != 0,
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
                 | Key::ProposalDecision(_)
                 | Key::Deployment
+                | Key::RunProof { .. }
+                | Key::Terminal { .. }
+                | Key::Tasks(_)
+                | Key::People(_)
+                | Key::Notes(_)
+                | Key::Forge(_) => false,
+            },
+            Range::Notes(range) => match key {
+                Key::Notes(child) => match range {
+                    jig_core_notes::Range::Entry { name } => match child {
+                        jig_core_notes::Key::Entry { name: found } => name == *found,
+                        jig_core_notes::Key::Line { .. } => false,
+                    },
+                    jig_core_notes::Range::Lines { scope, after } => match child {
+                        jig_core_notes::Key::Line { scope: found, name } => {
+                            let past_cursor = match after {
+                                Some(cursor) => *name > cursor,
+                                None => true,
+                            };
+                            scope == *found && past_cursor
+                        }
+                        jig_core_notes::Key::Entry { .. } => false,
+                    },
+                },
+                Key::Call(_)
+                | Key::EscalationDecision { .. }
+                | Key::ProposalDecision(_)
+                | Key::Deployment
+                | Key::Turn { .. }
                 | Key::RunProof { .. }
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
@@ -462,6 +534,8 @@ pub enum Record {
         /// Owned secret-free child row, deep bytes checked before retention.
         jig_core_people::Stored,
     ),
+    /// A note entry or scope-index line owned by jig's notes child.
+    Notes(jig_core_notes::Record),
     /// One connector row with its root allocated store identity.
     Forge { id: u64, row: Box<temper_engine_domain_forge::Stored> },
 }
@@ -470,7 +544,7 @@ impl Record {
     /// Pure fixed-size key projection; it emits no request and neither copies payloads nor
     /// validates their bounds.
     #[must_use]
-    pub const fn key(&self) -> Key {
+    pub fn key(&self) -> Key {
         match self {
             Record::ProposalDecision(row) => Key::ProposalDecision(row.proposal),
             Record::Call(row) => Key::Call(row.key),
@@ -481,6 +555,12 @@ impl Record {
             Record::Terminal(row) => Key::Terminal { task: row.task, attempt: row.attempt },
             Record::Tasks(row) => Key::Tasks(row.key()),
             Record::People(row) => Key::People(row.key()),
+            Record::Notes(jig_core_notes::Record::Entry(row)) => {
+                Key::Notes(jig_core_notes::Key::Entry { name: row.name })
+            }
+            Record::Notes(jig_core_notes::Record::Line(row)) => {
+                Key::Notes(jig_core_notes::Key::Line { scope: row.scope.clone(), name: row.name })
+            }
             Record::Forge { id, .. } => Key::Forge(*id),
         }
     }
@@ -501,10 +581,10 @@ impl Write {
     /// Pure fixed-size key projection for replacement/erase coalescing; it emits no effect or
     /// terminal.
     #[must_use]
-    pub const fn key(&self) -> Key {
+    pub fn key(&self) -> Key {
         match self {
             Write::Save(row) => row.key(),
-            Write::Erase(key) => *key,
+            Write::Erase(key) => key.clone(),
         }
     }
 }
@@ -541,13 +621,24 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
             | CallAnswer::Subscribed { .. }
             | CallAnswer::Unsubscribed
             | CallAnswer::SubscriptionRefused(_)
-            | CallAnswer::DelegationRefused(_) => Some(0),
-            CallAnswer::Delegated(numbers) => u64::try_from(numbers.len()).ok()?.checked_mul(8),
-            CallAnswer::DelegationDenied { findings, .. } | CallAnswer::ForgeEffectDenied { findings, .. } => {
-                u64::try_from(findings.len())
+            | CallAnswer::DelegationRefused(_)
+            | CallAnswer::NoteWritten { .. }
+            | CallAnswer::NoteRefused(_) => Some(0),
+            CallAnswer::NoteRecalled { entries, .. } => {
+                let mut bytes = u64::try_from(entries.len())
                     .ok()?
-                    .checked_mul(u64::try_from(size_of::<jig_core_authority::Finding>()).ok()?)
+                    .checked_mul(u64::try_from(size_of::<jig_core_notes::Entry>()).ok()?)?;
+                for entry in entries {
+                    bytes = bytes.checked_add(note_entry_bytes(entry)?)?;
+                }
+                Some(bytes)
             }
+            CallAnswer::Delegated(numbers) => u64::try_from(numbers.len()).ok()?.checked_mul(8),
+            CallAnswer::DelegationDenied { findings, .. }
+            | CallAnswer::ForgeEffectDenied { findings, .. }
+            | CallAnswer::ToolDenied { findings, .. } => u64::try_from(findings.len())
+                .ok()?
+                .checked_mul(u64::try_from(size_of::<jig_core_authority::Finding>()).ok()?),
         },
         Record::ProposalDecision(_) | Record::Deployment(_) => Some(0),
         Record::Turn(turn) => u64::try_from(turn.transcript.len()).ok(),
@@ -557,6 +648,12 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
         },
         Record::Terminal(row) => terminal_bytes(row),
         Record::Tasks(row) => jig_core_tasks::stored_bytes(row),
+        Record::Notes(row) => match row {
+            jig_core_notes::Record::Entry(entry) => note_entry_bytes(entry),
+            jig_core_notes::Record::Line(line) => {
+                note_scope_bytes(&line.scope)?.checked_add(u64::try_from(line.description.len()).ok()?)
+            }
+        },
         Record::Forge { row, .. } => temper_engine_domain_forge::stored_bytes(row),
         Record::People(row) => match row {
             jig_core_people::Stored::Person { identity, .. } => u64::try_from(identity.key.subject.len())
@@ -647,12 +744,50 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
     }
 }
 
-/// Pure checked deep-byte projection for journal admission; erases own no payload and saves use
-/// `record_bytes`. No request or terminal is emitted.
+fn note_scope_bytes(scope: &jig_core_notes::Scope) -> Option<u64> {
+    match scope {
+        jig_core_notes::Scope::Resources { pattern, .. } => {
+            let mut bytes =
+                u64::try_from(pattern.segments.len()).ok()?.checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?;
+            for segment in &pattern.segments {
+                bytes = bytes.checked_add(u64::try_from(segment.len()).ok()?)?;
+            }
+            let last = match &pattern.last {
+                jig_core_notes::Last::Exact(value) | jig_core_notes::Last::Open(value) => value.len(),
+            };
+            bytes.checked_add(u64::try_from(last).ok()?)
+        }
+        jig_core_notes::Scope::Deployment
+        | jig_core_notes::Scope::Project { .. }
+        | jig_core_notes::Scope::Goal { .. } => Some(0),
+    }
+}
+
+fn note_entry_bytes(entry: &jig_core_notes::Entry) -> Option<u64> {
+    note_scope_bytes(&entry.scope)?
+        .checked_add(u64::try_from(entry.description.len()).ok()?)?
+        .checked_add(u64::try_from(entry.body.len()).ok()?)?
+        .checked_add(u64::from(entry.references.len()).checked_mul(8)?)
+}
+
+/// Checked deep-byte projection for journal admission, including scoped erase keys.
 pub(crate) fn owned_bytes(write: &Write) -> Option<u64> {
     match write {
         Write::Save(record) => record_bytes(record),
-        Write::Erase(_) => Some(0),
+        Write::Erase(Key::Notes(jig_core_notes::Key::Line { scope, .. })) => note_scope_bytes(scope),
+        Write::Erase(
+            Key::Notes(jig_core_notes::Key::Entry { .. })
+            | Key::Deployment
+            | Key::Call(_)
+            | Key::EscalationDecision { .. }
+            | Key::ProposalDecision(_)
+            | Key::Turn { .. }
+            | Key::RunProof { .. }
+            | Key::Terminal { .. }
+            | Key::Tasks(_)
+            | Key::People(_)
+            | Key::Forge(_),
+        ) => Some(0),
     }
 }
 

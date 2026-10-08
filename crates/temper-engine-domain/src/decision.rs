@@ -381,8 +381,14 @@ impl Decision {
                     }
             }
             Write::Save(Record::ProposalDecision(row)) => row.project != 0 && row.proposal != 0 && row.by != 0,
-            Write::Save(
-                Record::Tasks(_) | Record::People(_) | Record::Forge { .. } | Record::RunProof(_) | Record::Terminal(_),
+            Write::Erase(Key::Notes(_))
+            | Write::Save(
+                Record::Tasks(_)
+                | Record::People(_)
+                | Record::Notes(_)
+                | Record::Forge { .. }
+                | Record::RunProof(_)
+                | Record::Terminal(_),
             ) => match crate::store::owned_bytes(&write) {
                 Some(bytes) => bytes <= u64::from(limits.transcript_bytes),
                 None => false,

@@ -33,7 +33,7 @@ fn economic_rows(world: &World) -> Vec<(Key, Record)> {
                 Key::Tasks(tasks::Key::Ledger(_)) | Key::RunProof { .. } | Key::Terminal { .. } | Key::Turn { .. }
             )
         })
-        .map(|(key, row)| (*key, row.clone()))
+        .map(|(key, row)| (key.clone(), row.clone()))
         .collect()
 }
 

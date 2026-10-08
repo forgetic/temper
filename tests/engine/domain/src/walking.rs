@@ -128,6 +128,7 @@ pub fn limits() -> engine::Limits {
                 pull: 128,
                 attempts: 128,
                 plan: 128,
+                notes: 64,
             },
             brief_bytes: 384,
             gather: Duration::from_secs(1),
@@ -150,7 +151,7 @@ pub fn limits() -> engine::Limits {
             facts: 8,
         },
         notes: jig_core_notes::Limits {
-            scopes: 1,
+            scopes: 4,
             entries_per_scope: 1,
             pattern_bytes: 64,
             description_bytes: 64,
@@ -183,7 +184,7 @@ fn authority_limits() -> authority::Limits {
 
 fn authority_value(spend: u64, kinds: Box<[authority::Executor]>) -> authority::Authority {
     authority::Authority {
-        tools: authority::Tools(0),
+        tools: authority::Tools(1023),
         grants: Box::new([]),
         delegation: authority::Delegation { kinds, tasks: 2, depth: 1 },
         budget: authority::Budget { spend, deadline: None },
@@ -280,6 +281,7 @@ pub fn config(seed: u64) -> engine::Config {
         period_budget: 1000,
         person_budget: 500,
         chat_authority,
+        tools: jig_core::ToolFamilies::standard(),
         account: 1,
         account_generation: 1,
         account_valid: Some(Duration::from_secs(60)),
@@ -613,7 +615,7 @@ impl World {
                 }
                 engine::Request::Load { owner, range, after, most, .. } => {
                     self.pages += 1;
-                    let (rows, next) = self.store.page(range, after, most);
+                    let (rows, next) = self.store.page(&range, after.as_ref(), most);
                     self.queue(engine::Event::Loaded { owner, rows, next }, self.settings.page_delay);
                 }
                 engine::Request::Deliver(delivery) => self.delivery(delivery),

@@ -18,6 +18,7 @@ mod finish;
 mod forge;
 mod json;
 mod nested;
+mod notes;
 mod start;
 
 pub use answers::answer;

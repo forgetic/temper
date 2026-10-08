@@ -23,7 +23,7 @@ fn key(turn: u32) -> Key {
 }
 
 fn begin(loads: &mut Loads, after: Option<Key>, most: u32, out: &mut Queue<Request>) -> Token {
-    let owner = loads::begin(loads, Token::new(51), Range::Turns { task: 1, attempt: 1 }, after, most, out)
+    let owner = loads::begin(loads, Token::new(51), Range::Turns { task: 1, attempt: 1 }, after.clone(), most, out)
         .expect("load admitted");
     assert_eq!(
         out.pop(),
@@ -51,10 +51,10 @@ fn each_page_has_one_terminal_and_reads_the_answered_commit() {
     let mut after = None;
     let mut observed = Vec::new();
     for expected_turns in [vec![1, 2], vec![3, 4]] {
-        let owner = begin(&mut loads, after, 2, &mut out);
-        let (rows, next) = world.store.page(Range::Turns { task: 1, attempt: 1 }, after, 2);
+        let owner = begin(&mut loads, after.clone(), 2, &mut out);
+        let (rows, next) = world.store.page(&Range::Turns { task: 1, attempt: 1 }, after.as_ref(), 2);
         let expected_rows = rows.clone();
-        loads::loaded(&mut loads, owner, rows, next, &mut out);
+        loads::loaded(&mut loads, owner, rows, next.clone(), &mut out);
         let Request::Loaded { waiter, rows, next: found, cut } = out.pop().expect("page terminal") else {
             panic!("loaded");
         };

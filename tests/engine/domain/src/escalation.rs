@@ -117,6 +117,8 @@ pub struct World {
     assigned: usize,
     worker_answer: WorkerAnswer,
     asks: BTreeMap<Token, AskInput>,
+    ask_rights: BTreeMap<Token, Token>,
+    next_ask: u64,
     pending_read: Option<PendingRead>,
     next_read: u64,
     sign_in_script: SignInScript,
@@ -214,6 +216,8 @@ impl World {
             assigned: 0,
             worker_answer: WorkerAnswer::Idle,
             asks: BTreeMap::new(),
+            ask_rights: BTreeMap::new(),
+            next_ask: 400,
             pending_read: None,
             next_read: 300,
             sign_in_script: SignInScript::Waiting,
@@ -293,6 +297,18 @@ impl World {
             },
             0,
         );
+    }
+
+    fn retry_ask(&mut self, to: Token, reply: people::Reply) {
+        assert!(self.next_ask < 416, "bounded named-query pressure retries");
+        let fresh = Token::new(self.next_ask);
+        self.next_ask += 1;
+        self.referee.ask_refused(to, reply, fresh).expect("one retryable named-query right");
+        let logical = self.ask_rights.remove(&to).unwrap_or(to);
+        assert!(self.ask_rights.insert(fresh, logical).is_none());
+        let input = self.asks.remove(&to).expect("one pending named query");
+        self.ask_input(fresh, &input);
+        assert!(self.asks.insert(fresh, input).is_none());
     }
 
     fn ask(
@@ -598,7 +614,7 @@ impl World {
                 }
                 engine::Request::Load { owner, range, after, most, .. } => {
                     self.pages += 1;
-                    let (rows, next) = self.store.page(range, after, most);
+                    let (rows, next) = self.store.page(&range, after.as_ref(), most);
                     self.queue(engine::Event::Loaded { owner, rows, next }, self.settings.page_delay);
                 }
                 engine::Request::Deliver(delivery) => self.delivery(delivery),
@@ -631,6 +647,21 @@ impl World {
     )]
     fn delivery(&mut self, delivery: Delivery) {
         match delivery {
+            Delivery::WebReply {
+                to,
+                reply:
+                    reply @ (people::Reply::Refused(people::Refusal::Busy)
+                    | people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Busy))),
+                ..
+            } => {
+                let token = to.into_token();
+                if self.pending_read.as_ref().is_some_and(|read| read.to == token) {
+                    self.retry_read(token, people::Refusal::Busy);
+                } else {
+                    self.retry_ask(token, reply);
+                }
+            }
+
             Delivery::View(_) => panic!("internal view event reached shell"),
             Delivery::WebReply { to, sign_in, reply: people::Reply::SignedIn { person, .. } } => {
                 let index = usize::try_from(to.into_token().raw() - 101).expect("two named sign-in reply rights");
@@ -659,11 +690,11 @@ impl World {
             }
             Delivery::WebReply { to, reply: people::Reply::Outcome(outcome), .. } => {
                 let token = to.into_token();
-                self.referee
-                    .replied(&self.store.rows, token, people::Reply::Outcome(outcome))
-                    .expect("independent keyed terminal and archive referee");
+                let checked = self.referee.replied(&self.store.rows, token, people::Reply::Outcome(outcome));
+                assert!(checked.is_ok(), "keyed terminal: {checked:?}; {:?}; {token:?}: {outcome:?}", self.settings);
                 self.asks.remove(&token).expect("one pending outside ask terminal");
-                match token.raw() {
+                let logical = self.ask_rights.remove(&token).unwrap_or(token);
+                match logical.raw() {
                     210 if self.settings.story.passes() => self.read(
                         202,
                         1,
@@ -686,7 +717,8 @@ impl World {
                     assert_eq!(refusal, people::Refusal::Busy, "retryable current-view refusal for {token:?}");
                     self.retry_read(token, refusal);
                 } else {
-                    assert_eq!(token, Token::new(232), "sole immediate key-conflict right; refusal {refusal:?}");
+                    let logical = self.ask_rights.remove(&token).unwrap_or(token);
+                    assert_eq!(logical, Token::new(232), "sole immediate key-conflict right; refusal {refusal:?}");
                     self.referee
                         .replied(&self.store.rows, token, people::Reply::Refused(refusal))
                         .expect("immediate refusal preserves the original saved winner");

@@ -48,6 +48,7 @@ pub(super) fn read(
             | Read::Transcript { .. }
             | Read::Dependency(_)
             | Read::InputCheck(_)
+            | Read::Notes { .. }
             | Read::Escalation(Query::Historical { .. }) => {
                 unreachable!("inserted named read")
             }
@@ -114,6 +115,7 @@ pub(super) fn loaded(domain: &mut Domain, _env: &Env<Limits>, waiter: Token, row
             | Record::Terminal(_)
             | Record::Tasks(_)
             | Record::People(_)
+            | Record::Notes(_)
             | Record::Forge { .. }
             | Record::ProposalDecision(_) => None,
         }
@@ -152,6 +154,7 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token) {
         | Read::Transcript { .. }
         | Read::Dependency(_)
         | Read::InputCheck(_)
+        | Read::Notes { .. }
         | Read::Escalation(Query::Read { .. }) => {
             unreachable!("only decision history loads here")
         }

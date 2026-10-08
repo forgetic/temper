@@ -160,7 +160,7 @@ impl World {
                 // after the run reserves its capped allowance at claim.
                 rules.maximum_run_spend = 60;
             }
-            rules.ceiling.tools = authority::Tools(1);
+            rules.ceiling.tools = authority::Tools(1023);
             let grants: Box<[authority::Grant]> = if with_change {
                 Box::new([
                     grant.clone(),
@@ -212,7 +212,7 @@ impl World {
                 rules.ceiling.delegation.depth = 3;
             }
             let mut policy = config.authority.policy(1).expect("walk policy").clone();
-            policy.ceiling.tools = authority::Tools(1);
+            policy.ceiling.tools = authority::Tools(1023);
             policy.ceiling.grants.clone_from(&grants);
             if approval.is_some() || agent_gate || owner_gate {
                 let mut maintainer = policy.roles[0].clone();
@@ -221,7 +221,7 @@ impl World {
                 member.number = 2;
                 policy.roles = Box::new([policy.roles[0].clone(), maintainer, member]);
             }
-            policy.roles[0].authority.tools = authority::Tools(1);
+            policy.roles[0].authority.tools = authority::Tools(1023);
             policy.roles[0].authority.grants.clone_from(&grants);
             if with_change {
                 policy.ceiling.delegation = rules.ceiling.delegation.clone();
@@ -232,7 +232,7 @@ impl World {
             authority::step(&mut domain, authority::Event::Policy { project: 1, policy }, &mut facts);
             assert_eq!(facts.pop(), Some(authority::PolicyFact::Added { project: 1 }));
             config.authority = domain;
-            config.chat_authority.tools = authority::Tools(1);
+            config.chat_authority.tools = authority::Tools(1023);
             config.chat_authority.grants = grants;
             if with_change {
                 config.chat_authority.delegation.kinds =
@@ -241,6 +241,7 @@ impl World {
                 config.chat_authority.delegation.depth = 2;
             }
         }
+        limits.notes.scopes = 3 + limits.authority.grants;
         let mut fake_config = forge_world::fake_config();
         fake_config.limits.repositories = 2;
         let mut fake = fake::Domain::new(&fake_config, 71);
@@ -370,7 +371,7 @@ impl World {
             match self.out.pop().expect("counted root output") {
                 engine::Request::Commit { number, writes } => self.store.pending.push_back((number, writes)),
                 engine::Request::Load { owner, range, after, most, .. } => {
-                    let (rows, next) = self.store.page(range, after, most);
+                    let (rows, next) = self.store.page(&range, after.as_ref(), most);
                     self.events.push_back(engine::Event::Loaded { owner, rows, next });
                 }
                 engine::Request::Forge { call, repository, op } => {
@@ -679,7 +680,7 @@ fn change_world_with_policy(
         },
     };
     let child_authority = tasks::Authority {
-        tools: tasks::Tools(1),
+        tools: tasks::Tools(1023),
         grants: Box::new([tasks::Grant { kind: 3, ..grant.clone() }, tasks::Grant { kind: 4, ..grant }]),
         delegation: tasks::Delegation { kinds: Box::new([tasks::AuthorityExecutor::Charter(1)]), tasks: 4, depth: 1 },
         budget: tasks::Budget { spend: 20, deadline: None },
@@ -794,7 +795,7 @@ fn a_small_fix_made_in_a_chat_lands() {
         },
     };
     let child_authority = tasks::Authority {
-        tools: tasks::Tools(1),
+        tools: tasks::Tools(1023),
         grants: Box::new([grant.clone(), tasks::Grant { kind: 3, ..grant.clone() }, tasks::Grant { kind: 4, ..grant }]),
         delegation: tasks::Delegation { kinds: Box::new([tasks::AuthorityExecutor::Charter(1)]), tasks: 2, depth: 1 },
         budget: tasks::Budget { spend: 20, deadline: None },

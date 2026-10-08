@@ -2190,6 +2190,7 @@ pub(super) fn outputs(
                             CallAnswer::ForgeEffect { .. }
                             | CallAnswer::ForgeEffectRefused(_)
                             | CallAnswer::ForgeEffectDenied { .. }
+                            | CallAnswer::ToolDenied { .. }
                             | CallAnswer::ForgeRead(_)
                             | CallAnswer::EscalationDecided { .. }
                             | CallAnswer::EscalationRefused(_)
@@ -2208,6 +2209,9 @@ pub(super) fn outputs(
                             | CallAnswer::Delegated(_)
                             | CallAnswer::DelegationDenied { .. }
                             | CallAnswer::DelegationRefused(_)
+                            | CallAnswer::NoteWritten { .. }
+                            | CallAnswer::NoteRecalled { .. }
+                            | CallAnswer::NoteRefused(_)
                             | CallAnswer::Unavailable => {}
                         }
                     }

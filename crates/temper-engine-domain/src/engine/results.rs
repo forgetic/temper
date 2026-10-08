@@ -67,7 +67,8 @@ pub(super) fn begin(
                 | RootRead::Inbox(_)
                 | RootRead::Transcript { .. }
                 | RootRead::Dependency(_)
-                | RootRead::InputCheck(_),
+                | RootRead::InputCheck(_)
+                | RootRead::Notes { .. },
             )
             | None,
         ) => unreachable!("inserted result read"),
@@ -87,7 +88,8 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, o
         | RootRead::Proposal(_)
         | RootRead::Transcript { .. }
         | RootRead::Dependency(_)
-        | RootRead::InputCheck(_) => unreachable!("result load owns result read"),
+        | RootRead::InputCheck(_)
+        | RootRead::Notes { .. } => unreachable!("result load owns result read"),
     };
     assert!(domain.core.release_result_read(read.person, waiter), "result reader index names its waiter");
     domain.result_reads.retire(Id::from_token(waiter));
@@ -124,6 +126,7 @@ pub(super) fn page(
             | Record::RunProof(_)
             | Record::Terminal(_)
             | Record::People(_)
+            | Record::Notes(_)
             | Record::Forge { .. } => unreachable!("ended-result range contains only ended tasks"),
         };
         if task.requester != tasks::Party::Person(read.person) {

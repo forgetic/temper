@@ -81,29 +81,15 @@ impl Store {
     /// Key-range paging, derived directly from the fake store's durable map.
     /// Each page is a separate request and has a cursor only when rows remain.
     #[must_use]
-    pub fn page(&self, range: Range, after: Option<Key>, most: u32) -> (Box<[Record]>, Option<Key>) {
+    pub fn page(&self, range: &Range, after: Option<&Key>, most: u32) -> (Box<[Record]>, Option<Key>) {
         let count = usize::try_from(most).expect("small page");
-        let mut selected: Vec<Record> = self.rows.iter().filter(|(key, _)| {
-            let within = match range {
-                Range::Calls => matches!(key, Key::Call(call) if call.task != 0 && call.attempt != 0 && call.completion != 0),
-                Range::ProposalDecision { proposal } => matches!(key, Key::ProposalDecision(number) if *number == proposal),
-                Range::EscalationDecision { task, revision } => matches!(key, Key::EscalationDecision { task: found, revision: current } if *found == task && *current == revision),
-                Range::Deployment => **key == Key::Deployment,
-                Range::Tasks => match key {
-                    Key::Tasks(jig_core_tasks::Key::Live(_) | jig_core_tasks::Key::Stub(_) | jig_core_tasks::Key::Ledger(_) | jig_core_tasks::Key::Writer(_) | jig_core_tasks::Key::Pool(_) | jig_core_tasks::Key::PersonProposal(_)) => true,
-                    Key::Tasks(jig_core_tasks::Key::Ended(_) | jig_core_tasks::Key::History { .. })
-                        | Key::Call(_) | Key::EscalationDecision { .. } | Key::ProposalDecision(_) | Key::Deployment | Key::Turn { .. } | Key::RunProof { .. } | Key::Terminal { .. } | Key::People(_) | Key::Forge(_) => false,
-                },
-                Range::EndedResults => matches!(key, Key::Tasks(jig_core_tasks::Key::Ended(number)) if *number != 0),
-                Range::RunProofs => matches!(key, Key::RunProof { task } if *task != 0),
-                Range::People => matches!(key, Key::People(_)),
-                Range::Forge => matches!(key, Key::Forge(_)),
-                Range::TaskResult { task } => matches!(key, Key::Tasks(jig_core_tasks::Key::Ended(number)) if *number == task),
-                Range::Turns { task, attempt } => matches!(key, Key::Turn { task: found, attempt: run, turn } if *found == task && *run == attempt && *turn != 0),
-                Range::TaskTranscript { task } => matches!(key, Key::Turn { task: found, attempt, turn } if *found == task && *attempt != 0 && *turn != 0),
-            };
-            within && after.is_none_or(|old| **key > old)
-        }).take(count.saturating_add(1)).map(|(_, row)| row.clone()).collect();
+        let mut selected: Vec<Record> = self
+            .rows
+            .iter()
+            .filter(|(key, _)| range.contains(key) && after.is_none_or(|old| *key > old))
+            .take(count.saturating_add(1))
+            .map(|(_, row)| row.clone())
+            .collect();
         let more = selected.len() > count;
         if more {
             selected.pop();

@@ -291,7 +291,7 @@ impl World {
             match self.out.pop().expect("counted root output") {
                 engine::Request::Commit { number, writes } => self.store.pending.push_back((number, writes)),
                 engine::Request::Load { owner, range, after, most, .. } => {
-                    let (rows, next) = self.store.page(range, after, most);
+                    let (rows, next) = self.store.page(&range, after.as_ref(), most);
                     self.events.push_back(engine::Event::Loaded { owner, rows, next });
                 }
                 engine::Request::Forge { call, repository, op } => {

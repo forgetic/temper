@@ -11,6 +11,7 @@ skein-lib.workspace = true
 skein-json.workspace = true
 temper-engine-domain.workspace = true
 jig-core-brief.workspace = true
+jig-core-notes.workspace = true
 jig-core-tasks.workspace = true
 temper-engine-domain-forge-client.workspace = true
 temper-engine-domain-forge.workspace = true

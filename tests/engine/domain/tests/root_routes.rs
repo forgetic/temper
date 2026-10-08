@@ -2,6 +2,7 @@ use jig_core_accounts as accounts;
 use jig_core_authority as authority;
 use jig_core_brief as brief;
 use jig_core_fleet as fleet;
+use jig_core_notes as notes;
 use jig_core_people as people;
 use jig_core_tasks as tasks;
 use jig_core_views as views;
@@ -417,6 +418,7 @@ fn a_maintainer_prioritises_project_goals_and_a_member_cannot() {
             )
             | Record::People(_)
             | Record::Call(_)
+            | Record::Notes(_)
             | Record::Deployment(_)
             | Record::Turn(_)
             | Record::RunProof(_)
@@ -902,7 +904,8 @@ fn restart_recovers_named_ended_result_without_replaying_a_raw_notice() {
             | Record::Forge { .. }
             | Record::ProposalDecision(_)
             | Record::Terminal(_)
-            | Record::Call(_) => None,
+            | Record::Call(_)
+            | Record::Notes(_) => None,
         })
         .expect("ended task");
     let mut driver = Driver::new(world.store);
@@ -1018,6 +1021,7 @@ fn a_full_inbox_pages_the_rest_from_the_store() {
         .find_map(|row| match row {
             Record::Tasks(tasks::Stored::Ended(task)) => Some(task.as_ref().clone()),
             Record::Call(_)
+            | Record::Notes(_)
             | Record::EscalationDecision(_)
             | Record::Forge { .. }
             | Record::ProposalDecision(_)
@@ -1520,7 +1524,8 @@ fn invalid_nonfinal_task_restore_page_stops_before_issuing_its_continuation() {
             | Record::Forge { .. }
             | Record::ProposalDecision(_)
             | Record::Terminal(_)
-            | Record::Call(_) => None,
+            | Record::Call(_)
+            | Record::Notes(_) => None,
         })
         .expect("ended fixture");
     record.spec.words = vec![b'x'; 65].into_boxed_slice();
@@ -1609,7 +1614,8 @@ fn authenticated_result_query_refuses_monotonic_expiry_after_backward_wall_jump_
             | Record::Forge { .. }
             | Record::ProposalDecision(_)
             | Record::Terminal(_)
-            | Record::Call(_) => None,
+            | Record::Call(_)
+            | Record::Notes(_) => None,
         })
         .expect("ended chat");
     let mut driver = Driver::new(world.store);
@@ -1804,13 +1810,325 @@ fn batch_fixture_custom(
     (driver, assignment)
 }
 
+fn note_config() -> engine::Config {
+    let mut configuration = config(3100);
+    let mut rules = configuration.authority.rules().clone();
+    rules.ceiling.notes = authority::Scopes(7);
+    let mut policy = configuration.authority.policy(1).expect("project policy").clone();
+    policy.ceiling.notes = authority::Scopes(7);
+    policy.roles[0].authority.notes = authority::Scopes(7);
+    let mut checked = authority::Domain::new(rules, *configuration.authority.limits()).expect("note policy");
+    let mut facts = Queue::with_capacity(authority::POLICY_MAX_OUT);
+    authority::step(&mut checked, authority::Event::Policy { project: 1, policy }, &mut facts);
+    assert_eq!(facts.pop(), Some(authority::PolicyFact::Added { project: 1 }));
+    configuration.authority = checked;
+    configuration.chat_authority.notes = authority::Scopes(7);
+    configuration
+}
+
+fn note_fixture() -> (Driver, engine::Assignment) {
+    let mut driver = Driver::configured(Store::new(), note_config(), &limits());
+    hello(&mut driver);
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    chat(&mut driver, 12);
+    driver.settle();
+    let assignment = assigned(&driver);
+    (driver, assignment)
+}
+
+#[test]
+fn a_new_runs_brief_carries_the_durable_note_index() {
+    let mut store = Store::new();
+    let scope = notes::Scope::Project { project: 1 };
+    store.rows.insert(
+        Key::Notes(notes::Key::Entry { name: 1 }),
+        Record::Notes(notes::Record::Entry(notes::Entry {
+            name: 1,
+            scope: scope.clone(),
+            description: b"seeded hint".as_slice().into(),
+            body: b"full text".as_slice().into(),
+            references: skein_lib::List::with_capacity(1),
+            author: notes::Author::Task { task: 1, attempt: 1 },
+            revision: 1,
+        })),
+    );
+    store.rows.insert(
+        Key::Notes(notes::Key::Line { scope: scope.clone(), name: 1 }),
+        Record::Notes(notes::Record::Line(notes::Line {
+            scope,
+            name: 1,
+            description: b"seeded hint".as_slice().into(),
+            revision: 1,
+        })),
+    );
+    let mut driver = Driver::configured(store, note_config(), &limits());
+    hello(&mut driver);
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    chat(&mut driver, 12);
+    driver.settle();
+    let assignment = assigned(&driver);
+    assert!(assignment.sections.iter().any(|section| matches!(section,
+        engine::BriefSection {
+            kind: engine::BriefKind::Core(brief::Core::NotesIndex),
+            body: engine::BriefBody::Text(text),
+        } if text.windows(b"seeded hint".len()).any(|window| window == b"seeded hint")
+    )));
+}
+
+#[test]
+fn a_note_tool_without_its_family_is_refused_with_an_authority_finding() {
+    let mut configuration = note_config();
+    configuration.chat_authority.tools = authority::Tools(1023 & !128);
+    let mut driver = Driver::configured(Store::new(), configuration, &limits());
+    hello(&mut driver);
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    chat(&mut driver, 12);
+    driver.settle();
+    let assignment = assigned(&driver);
+    tool_call(
+        &mut driver,
+        &assignment,
+        3104,
+        engine::Tool::Note {
+            entry: notes::New {
+                name: 0,
+                scope: notes::Scope::Project { project: 1 },
+                description: b"not authorized".as_slice().into(),
+                body: b"none".as_slice().into(),
+                references: skein_lib::List::with_capacity(1),
+                author: notes::Author::Task { task: assignment.task, attempt: assignment.attempt },
+            },
+            recalled: None,
+        },
+    );
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::ToolDenied { answer: authority::Answer::Propose, findings }, .. }
+            if *call == Token::new(3104) && findings.contains(&authority::Finding::Tool)
+    )));
+    assert!(!driver.store.rows.values().any(|record| matches!(record, Record::Notes(_))));
+}
+
+fn written_note_name(driver: &Driver, expected_call: u64) -> u64 {
+    driver
+        .delivered
+        .iter()
+        .find_map(|delivery| {
+            if let Delivery::CallAnswer {
+                call,
+                answer: temper_engine_domain::CallAnswer::NoteWritten { name, revision: 1 },
+                ..
+            } = delivery
+                && *call == Token::new(expected_call)
+            {
+                Some(*name)
+            } else {
+                None
+            }
+        })
+        .expect("note write answered after commit")
+}
+
+#[test]
+fn a_note_written_corrected_by_a_person_and_recalled_is_durable() {
+    let (mut driver, assignment) = note_fixture();
+    tool_call(
+        &mut driver,
+        &assignment,
+        3101,
+        engine::Tool::Note {
+            entry: notes::New {
+                name: 0,
+                scope: notes::Scope::Project { project: 1 },
+                description: b"original".as_slice().into(),
+                body: b"first body".as_slice().into(),
+                references: skein_lib::List::with_capacity(1),
+                author: notes::Author::Task { task: assignment.task, attempt: assignment.attempt },
+            },
+            recalled: None,
+        },
+    );
+    let name = written_note_name(&driver, 3101);
+    assert!(matches!(driver.store.rows.get(&Key::Notes(notes::Key::Entry { name })),
+        Some(Record::Notes(notes::Record::Entry(entry))) if entry.body.as_ref() == b"first body"
+    ));
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(3102)),
+        sign_in: driver.session(),
+        key: [31; 16],
+        ask: people::Ask::EditNote {
+            project: 1,
+            name,
+            scope: Box::new(people::NoteScope::Project),
+            change: Box::new(people::NoteChange::Correct {
+                description: b"corrected".as_slice().into(),
+                body: b"second body".as_slice().into(),
+                references: Box::new([]),
+                recalled: 1,
+            }),
+        },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::WebReply { to, reply: people::Reply::Outcome(people::Outcome::NoteEdited { name: found }), .. }
+            if *to == ReplyTo::new(Token::new(3102)) && *found == name
+    )));
+    tool_call(&mut driver, &assignment, 3103, engine::Tool::Recall { by: notes::Recall::Name { name }, page: 0 });
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::NoteRecalled { entries, more: false }, .. }
+            if *call == Token::new(3103)
+                && entries.len() == 1
+                && entries[0].revision == 2
+                && entries[0].body.as_ref() == b"second body"
+    )));
+    let mut restarted = Driver::configured(driver.store, note_config(), &limits());
+    restarted.send(engine::Event::Hello {
+        channel: Token::new(7),
+        hello: fleet::Hello {
+            stop_bound: Duration::from_secs(1),
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([fleet::Hosted {
+                run: Token::new(assignment.task),
+                attempt: Token::new(assignment.attempt),
+                phase: fleet::Phase::Active,
+            }]),
+        },
+    });
+    restarted.settle();
+    tool_call(
+        &mut restarted,
+        &assignment,
+        3101,
+        engine::Tool::Note {
+            entry: notes::New {
+                name: 0,
+                scope: notes::Scope::Project { project: 1 },
+                description: b"original".as_slice().into(),
+                body: b"first body".as_slice().into(),
+                references: skein_lib::List::with_capacity(1),
+                author: notes::Author::Task { task: assignment.task, attempt: assignment.attempt },
+            },
+            recalled: None,
+        },
+    );
+    assert!(restarted.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::NoteWritten { name: found, revision: 1 }, .. }
+            if *call == Token::new(3101) && *found == name
+    )));
+    assert_eq!(
+        restarted.store.rows.values().filter(|record| matches!(record, Record::Notes(notes::Record::Entry(_)))).count(),
+        1,
+        "reasking a named note did not write a second entry"
+    );
+}
+
+#[test]
+fn a_person_deletes_a_note_only_in_its_authorized_scope_and_after_commit() {
+    let (mut driver, assignment) = note_fixture();
+    tool_call(
+        &mut driver,
+        &assignment,
+        3110,
+        engine::Tool::Note {
+            entry: notes::New {
+                name: 0,
+                scope: notes::Scope::Project { project: 1 },
+                description: b"hint".as_slice().into(),
+                body: b"body".as_slice().into(),
+                references: skein_lib::List::with_capacity(0),
+                author: notes::Author::Task { task: 0, attempt: 0 },
+            },
+            recalled: None,
+        },
+    );
+    let name = written_note_name(&driver, 3110);
+    for (request, scope, expected) in [
+        (3111, people::NoteScope::Deployment, people::Outcome::Refused(people::Refusal::NoteMoved)),
+        (3112, people::NoteScope::Project, people::Outcome::NoteEdited { name }),
+    ] {
+        driver.send(engine::Event::Ask {
+            reply_to: ReplyTo::new(Token::new(request)),
+            sign_in: driver.session(),
+            key: [u8::try_from(request - 3000).expect("small request"); 16],
+            ask: people::Ask::EditNote {
+                project: 1,
+                name,
+                scope: Box::new(scope),
+                change: Box::new(people::NoteChange::Delete { recalled: 1 }),
+            },
+        });
+        for _ in 0..10 {
+            driver.advance(false);
+        }
+        assert!(
+            !driver.delivered.iter().any(|delivery| matches!(delivery,
+                Delivery::WebReply { to, .. } if *to == ReplyTo::new(Token::new(request))
+            )),
+            "party answer waits for its commit"
+        );
+        assert!(driver.store.rows.contains_key(&Key::Notes(notes::Key::Entry { name })));
+        driver.settle();
+        assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+            Delivery::WebReply { to, reply: people::Reply::Outcome(outcome), .. }
+                if *to == ReplyTo::new(Token::new(request)) && *outcome == expected
+        )));
+    }
+    assert!(!driver.store.rows.keys().any(|key| matches!(key, Key::Notes(_))));
+}
+
+#[test]
+fn a_pending_note_reserves_its_named_answer_until_the_store_returns() {
+    let mut bound = limits();
+    bound.call_records = 1;
+    bound.fleet.calls = 2;
+    let mut driver = Driver::configured(Store::new(), note_config(), &bound);
+    hello(&mut driver);
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    chat(&mut driver, 12);
+    driver.settle();
+    let assignment = assigned(&driver);
+    driver.send(engine::Event::Call {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        call: Token::new(3120),
+        body: engine::Call {
+            completion: 1,
+            position: 3120,
+            tool: engine::Tool::Recall { by: notes::Recall::Name { name: 99 }, page: 0 },
+        },
+    });
+    driver.send(engine::Event::Call {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        call: Token::new(3121),
+        body: engine::Call { completion: 1, position: 3121, tool: engine::Tool::Unavailable },
+    });
+    assert_eq!(driver.call_busy, [Token::new(3121)]);
+    driver.settle();
+    assert_eq!(driver.store.header().calls, 1);
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::NoteRecalled { entries, more: false }, .. }
+            if *call == Token::new(3120) && entries.is_empty()
+    )));
+}
+
 fn report_delegate(words: &[u8], dependencies: Box<[engine::Dependency]>) -> engine::Delegate {
     engine::Delegate {
         executor: tasks::Executor::Agent { charter: 1 },
         spec: tasks::Spec { words: words.into(), parameters: Box::new([]), inputs: Box::new([]) },
         contract: tasks::Contract::Report { words: 128 },
         authority: tasks::Authority {
-            tools: tasks::Tools(0),
+            tools: tasks::Tools(1023),
             grants: Box::new([]),
             delegation: tasks::Delegation { kinds: Box::new([]), tasks: 0, depth: 0 },
             budget: tasks::Budget { spend: 10, deadline: None },
@@ -3869,6 +4187,7 @@ fn a_policy_change_applies_to_later_decisions_only() {
             Record::Tasks(tasks::Stored::Live(task)) => Some((task.number, task.authority.budget.spend)),
             Record::ProposalDecision(_)
             | Record::Call(_)
+            | Record::Notes(_)
             | Record::EscalationDecision(_)
             | Record::Deployment(_)
             | Record::Turn(_)
@@ -4099,7 +4418,8 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
             | Record::EscalationDecision(_)
             | Record::Forge { .. }
             | Record::ProposalDecision(_)
-            | Record::Call(_) => None,
+            | Record::Call(_)
+            | Record::Notes(_) => None,
         })
         .collect();
     assert_eq!(original.len(), 2, "two genuine task admissions and priced failures");

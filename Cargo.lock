@@ -655,6 +655,7 @@ dependencies = [
 name = "temper-engine-domain-world"
 version = "0.0.0"
 dependencies = [
+ "jig-core",
  "jig-core-accounts",
  "jig-core-authority",
  "jig-core-brief",
@@ -710,6 +711,7 @@ dependencies = [
  "jig-core-accounts",
  "jig-core-authority",
  "jig-core-brief",
+ "jig-core-notes",
  "jig-core-tasks",
  "skein-json",
  "skein-lib",

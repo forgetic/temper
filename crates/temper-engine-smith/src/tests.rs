@@ -140,6 +140,8 @@ fn every_declared_tool_decodes_its_minimum_shape_and_rejects_a_wrong_shape() {
         (b"decide", br#"{"proposer":3,"proposal":1,"decision":"accept"}"#, br#"{"proposer":3,"proposal":1,"decision":"unknown"}"#),
         (b"subscribe", br#"{"kind":"task","target":3}"#, br#"{"kind":"task"}"#),
         (b"propose", br#"{"action":"release","task":3,"reason":"x"}"#, br#"{"action":"release","reason":"x"}"#),
+        (b"note", br#"{"scope":{"kind":"project","project":1},"description":"slow start","body":"warm it first"}"#, br#"{"scope":{"kind":"project"},"description":"slow start","body":"warm it first"}"#),
+        (b"recall", br#"{"kind":"name","name":1}"#, br#"{"kind":"name","name":0}"#),
     ];
     let declared = tools(Duration::from_secs(10));
     assert_eq!(declared.len(), cases.len());
