@@ -366,10 +366,11 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 03.5 LLM connection component | merged locally | smith 5055d65 | fmt/clippy pass; 1,300 focused / 4.126 s; 15 fuzzy / 5.118 s; protocol LLM world 57 / 2.271 s serial, 12 new stories / 0.060 s. |
 | 05.0 inherited-pipe and signal skein repin | merged locally | smith d43cbc1 | fmt/clippy pass; 1,300 focused / 7.062 s; 15 fuzzy / 6.635 s. |
 | 05.0 checked file IO accounting skein repin | merged locally | smith 5d27277 | fmt/clippy pass; 1,300 focused / 6.824 s; 15 fuzzy / 6.495 s. |
+| 05.0 simulator inherited-pipe skein repin | merged locally | smith ca80666 | fmt/clippy pass; 1,319 focused / 6.914 s; 15 fuzzy / 6.880 s. |
 | 05.1 agent service | merged locally | smith f5b9f9f | fmt/clippy pass; 1,306 focused / 4.084 s; 15 fuzzy / 4.625 s. |
 | 05.2 configuration and startup | merged locally | smith 04d9357 | fmt/clippy pass; 1,311 focused / 4.909 s; 15 fuzzy / 5.099 s. |
 | 05.3 facts, traces, signals and end | merged locally | smith a5b0de7 | fmt/clippy pass; 1,319 focused / 5.017 s; 15 fuzzy / 5.662 s. |
-| 05.4 simulated agent process world | blocked | — | Skein simulator lacks a host-fed inherited pipe pair for the agent's channel; the scripted fake-channel peer cannot drive the service through its adopted read and write descriptors. |
+| 05.4 simulated agent process world | blocked | smith branch 3d8b795 | The simulated host observes the final Answer, but Skein IO leaves an inherited write pipe open if `Down::Finish` arrives while its write is in flight. The channel cannot emit Ended and the agent cannot exit. The reproducing world is checkpointed on an unmerged branch. |
 
 ## jig extraction
 
