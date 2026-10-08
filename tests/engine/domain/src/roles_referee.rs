@@ -90,25 +90,31 @@ impl Referee {
         let role_rows: Vec<_> = writes
             .iter()
             .filter_map(|write| match write {
-                Write::Save(Record::People(people::Stored::Roles { project, holdings })) => Some((*project, holdings)),
+                Write::Save(Record::Core(jig_core::Record::People(people::Stored::Roles { project, holdings }))) => {
+                    Some((*project, holdings))
+                }
                 Write::Save(
-                    Record::People(
-                        people::Stored::Person { .. }
-                        | people::Stored::ReadPosition { .. }
-                        | people::Stored::SignIn { .. }
-                        | people::Stored::Policy { .. }
-                        | people::Stored::Answer { .. },
+                    Record::Core(
+                        jig_core::Record::People(
+                            people::Stored::Person { .. }
+                            | people::Stored::ReadPosition { .. }
+                            | people::Stored::SignIn { .. }
+                            | people::Stored::Policy { .. }
+                            | people::Stored::Answer { .. },
+                        )
+                        | jig_core::Record::Tasks(_)
+                        | jig_core::Record::Core(
+                            jig_core::CoreRecord::Projection(_)
+                            | jig_core::CoreRecord::Call(_)
+                            | jig_core::CoreRecord::Deployment(_)
+                            | jig_core::CoreRecord::Turn(_)
+                            | jig_core::CoreRecord::RunProof(_)
+                            | jig_core::CoreRecord::Terminal(_)
+                            | jig_core::CoreRecord::EscalationDecision(_)
+                            | jig_core::CoreRecord::ProposalDecision(_),
+                        )
+                        | jig_core::Record::Notes(_),
                     )
-                    | Record::Tasks(_)
-                    | Record::Projection(_)
-                    | Record::Call(_)
-                    | Record::Deployment(_)
-                    | Record::Turn(_)
-                    | Record::RunProof(_)
-                    | Record::Terminal(_)
-                    | Record::EscalationDecision(_)
-                    | Record::ProposalDecision(_)
-                    | Record::Notes(_)
                     | Record::Forge { .. },
                 )
                 | Write::Erase(_) => None,
@@ -117,7 +123,12 @@ impl Referee {
         let answers: Vec<_> = writes
             .iter()
             .filter_map(|write| match write {
-                Write::Save(Record::People(people::Stored::Answer { key, ask, outcome, .. })) => {
+                Write::Save(Record::Core(jig_core::Record::People(people::Stored::Answer {
+                    key,
+                    ask,
+                    outcome,
+                    ..
+                }))) => {
                     if let people::Ask::SetRoles { .. } = ask.as_ref() {
                         Some((*key, ask.as_ref(), *outcome))
                     } else {
@@ -125,23 +136,27 @@ impl Referee {
                     }
                 }
                 Write::Save(
-                    Record::People(
-                        people::Stored::Person { .. }
-                        | people::Stored::ReadPosition { .. }
-                        | people::Stored::SignIn { .. }
-                        | people::Stored::Roles { .. }
-                        | people::Stored::Policy { .. },
+                    Record::Core(
+                        jig_core::Record::People(
+                            people::Stored::Person { .. }
+                            | people::Stored::ReadPosition { .. }
+                            | people::Stored::SignIn { .. }
+                            | people::Stored::Roles { .. }
+                            | people::Stored::Policy { .. },
+                        )
+                        | jig_core::Record::Tasks(_)
+                        | jig_core::Record::Core(
+                            jig_core::CoreRecord::Projection(_)
+                            | jig_core::CoreRecord::Call(_)
+                            | jig_core::CoreRecord::Deployment(_)
+                            | jig_core::CoreRecord::Turn(_)
+                            | jig_core::CoreRecord::RunProof(_)
+                            | jig_core::CoreRecord::Terminal(_)
+                            | jig_core::CoreRecord::EscalationDecision(_)
+                            | jig_core::CoreRecord::ProposalDecision(_),
+                        )
+                        | jig_core::Record::Notes(_),
                     )
-                    | Record::Tasks(_)
-                    | Record::Projection(_)
-                    | Record::Call(_)
-                    | Record::Deployment(_)
-                    | Record::Turn(_)
-                    | Record::RunProof(_)
-                    | Record::Terminal(_)
-                    | Record::EscalationDecision(_)
-                    | Record::ProposalDecision(_)
-                    | Record::Notes(_)
                     | Record::Forge { .. },
                 )
                 | Write::Erase(_) => None,
@@ -171,31 +186,37 @@ impl Referee {
             }
             for (number, expected_task) in &replacement.tasks {
                 let found = writes.iter().find_map(|write| match write {
-                    Write::Save(Record::Tasks(tasks::Stored::Live(record))) if record.number == *number => {
+                    Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(record))))
+                        if record.number == *number =>
+                    {
                         Some(record.as_ref())
                     }
                     Write::Save(
-                        Record::Tasks(
-                            tasks::Stored::Live(_)
-                            | tasks::Stored::Ended(_)
-                            | tasks::Stored::Stub(_)
-                            | tasks::Stored::Ledger(_)
-                            | tasks::Stored::Milestone(_)
-                            | tasks::Stored::History(_)
-                            | tasks::Stored::PersonProposal(_)
-                            | tasks::Stored::Writer(_)
-                            | tasks::Stored::Pool(_),
+                        Record::Core(
+                            jig_core::Record::Tasks(
+                                tasks::Stored::Live(_)
+                                | tasks::Stored::Ended(_)
+                                | tasks::Stored::Stub(_)
+                                | tasks::Stored::Ledger(_)
+                                | tasks::Stored::Milestone(_)
+                                | tasks::Stored::History(_)
+                                | tasks::Stored::PersonProposal(_)
+                                | tasks::Stored::Writer(_)
+                                | tasks::Stored::Pool(_),
+                            )
+                            | jig_core::Record::People(_)
+                            | jig_core::Record::Core(
+                                jig_core::CoreRecord::Projection(_)
+                                | jig_core::CoreRecord::Call(_)
+                                | jig_core::CoreRecord::Deployment(_)
+                                | jig_core::CoreRecord::Turn(_)
+                                | jig_core::CoreRecord::RunProof(_)
+                                | jig_core::CoreRecord::Terminal(_)
+                                | jig_core::CoreRecord::EscalationDecision(_)
+                                | jig_core::CoreRecord::ProposalDecision(_),
+                            )
+                            | jig_core::Record::Notes(_),
                         )
-                        | Record::People(_)
-                        | Record::Projection(_)
-                        | Record::Call(_)
-                        | Record::Deployment(_)
-                        | Record::Turn(_)
-                        | Record::RunProof(_)
-                        | Record::Terminal(_)
-                        | Record::EscalationDecision(_)
-                        | Record::ProposalDecision(_)
-                        | Record::Notes(_)
                         | Record::Forge { .. },
                     )
                     | Write::Erase(_) => None,
@@ -235,38 +256,47 @@ impl Referee {
         }
         for write in writes {
             match write {
-                Write::Save(Record::Tasks(tasks::Stored::Live(record))) => {
+                Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(record)))) => {
                     if replacement.is_none_or(|replacement| !replacement.tasks.contains_key(&record.number)) {
                         return Err("unchanged or rejected task was rewritten");
                     }
                 }
-                Write::Save(
-                    Record::Tasks(_)
-                    | Record::Projection(_)
-                    | Record::Call(_)
-                    | Record::RunProof(_)
-                    | Record::Terminal(_)
-                    | Record::EscalationDecision(_)
-                    | Record::ProposalDecision(_)
-                    | Record::Turn(_)
-                    | Record::Notes(_),
-                )
-                | Write::Erase(
-                    Key::Projection(_)
-                    | Key::Call(_)
-                    | Key::Tasks(_)
-                    | Key::RunProof { .. }
-                    | Key::Terminal { .. }
-                    | Key::EscalationDecision { .. }
-                    | Key::ProposalDecision(_)
-                    | Key::Turn { .. }
-                    | Key::Notes(_),
-                ) => return Err("role administration changed funding or accepted work"),
-                Write::Save(Record::People(_) | Record::Deployment(_)) | Write::Erase(Key::People(_)) => {}
+                Write::Save(Record::Core(
+                    jig_core::Record::Tasks(_)
+                    | jig_core::Record::Core(
+                        jig_core::CoreRecord::Projection(_)
+                        | jig_core::CoreRecord::Call(_)
+                        | jig_core::CoreRecord::RunProof(_)
+                        | jig_core::CoreRecord::Terminal(_)
+                        | jig_core::CoreRecord::EscalationDecision(_)
+                        | jig_core::CoreRecord::ProposalDecision(_)
+                        | jig_core::CoreRecord::Turn(_),
+                    )
+                    | jig_core::Record::Notes(_),
+                ))
+                | Write::Erase(Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Projection(_)
+                        | jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::EscalationDecision { .. }
+                        | jig_core::CoreKey::ProposalDecision(_)
+                        | jig_core::CoreKey::Turn { .. },
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::Notes(_),
+                )) => return Err("role administration changed funding or accepted work"),
+                Write::Save(Record::Core(
+                    jig_core::Record::People(_) | jig_core::Record::Core(jig_core::CoreRecord::Deployment(_)),
+                ))
+                | Write::Erase(Key::Core(jig_core::Key::People(_))) => {}
                 Write::Save(Record::Forge { .. }) | Write::Erase(Key::Forge(_)) => {
                     return Err("role administration changed forge state");
                 }
-                Write::Erase(Key::Deployment) => return Err("role administration erased deployment"),
+                Write::Erase(Key::Core(jig_core::Key::Core(jig_core::CoreKey::Deployment))) => {
+                    return Err("role administration erased deployment");
+                }
             }
         }
         if replacement.is_some() {
@@ -301,8 +331,10 @@ impl Referee {
         if reply != obligation.reply {
             return Err("role terminal differs from outside expectation");
         }
-        let answer_key =
-            Key::People(people::Key::Answer(people::RequestKey { person: obligation.person, key: obligation.key }));
+        let answer_key = Key::Core(jig_core::Key::People(people::Key::Answer(people::RequestKey {
+            person: obligation.person,
+            key: obligation.key,
+        })));
         match reply {
             people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Busy | people::Refusal::NotReady)) => {
                 if rows.contains_key(&answer_key) {
@@ -310,7 +342,7 @@ impl Referee {
                 }
             }
             people::Reply::Outcome(outcome) => {
-                if !matches!(rows.get(&answer_key), Some(Record::People(people::Stored::Answer { ask, outcome: saved, .. })) if ask.as_ref() == &obligation.ask && *saved == outcome)
+                if !matches!(rows.get(&answer_key), Some(Record::Core(jig_core::Record::People(people::Stored::Answer { ask, outcome: saved, .. }))) if ask.as_ref() == &obligation.ask && *saved == outcome)
                 {
                     return Err("role terminal before exact durable keyed answer");
                 }

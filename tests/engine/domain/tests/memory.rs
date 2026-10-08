@@ -1,5 +1,7 @@
 use skein_lib::{Queue, Token, Wall};
-use temper_engine_domain::{self as root, Counters, Decision, Delivery, Journal, Output, Record, TurnRecord, Write};
+use temper_engine_domain::{
+    self as root, Counters, Decision, Delivery, Journal, JournalOutput as Output, Record, TurnRecord, Write,
+};
 use temper_engine_domain_world::commits::{HEADER, LIMITS};
 use temper_world::heap::{self, Meter};
 
@@ -17,7 +19,7 @@ fn retired_and_abandoned_load_slots_and_a_partial_page_fit_without_payload_clone
     let mut domain = loads::Loads::new(&limits);
     let incoming: Box<[Record]> = (1..=4)
         .map(|turn| {
-            Record::Turn(TurnRecord {
+            Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(TurnRecord {
                 task: 1,
                 attempt: 1,
                 turn,
@@ -25,20 +27,35 @@ fn retired_and_abandoned_load_slots_and_a_partial_page_fit_without_payload_clone
                 read: None,
                 at: Wall::EPOCH,
                 transcript: vec![b'x'; 4].into_boxed_slice(),
-            })
+            })))
         })
         .collect();
     let mut addresses = [core::ptr::null(); 4];
     for (address, row) in addresses.iter_mut().zip(incoming.iter()) {
-        let Record::Turn(row) = row else {
+        let Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(row))) = row else {
             panic!("turn");
         };
         *address = row.transcript.as_ptr();
     }
-    let first = loads::begin(&mut domain, Token::new(1), Range::Turns { task: 1, attempt: 1 }, None, 4, &mut out)
-        .expect("first slot");
+    let first = loads::begin(
+        &mut domain,
+        Token::new(1),
+        Range::Core(temper_engine_domain::CoreRange::Turns { task: 1, attempt: 1 }),
+        None,
+        4,
+        &mut out,
+    )
+    .expect("first slot");
     drop(out.pop().expect("first IO"));
-    let second = loads::begin(&mut domain, Token::new(2), Range::Deployment, None, 1, &mut out).expect("second slot");
+    let second = loads::begin(
+        &mut domain,
+        Token::new(2),
+        Range::Core(temper_engine_domain::CoreRange::Deployment),
+        None,
+        1,
+        &mut out,
+    )
+    .expect("second slot");
     drop(out.pop().expect("second IO"));
     loads::abandon(&mut domain, second);
     meter.start();
@@ -50,7 +67,7 @@ fn retired_and_abandoned_load_slots_and_a_partial_page_fit_without_payload_clone
     assert_eq!(rows.len(), 2);
     assert_eq!(cut.expect("cut").rows, 2);
     for (row, original) in rows.iter().zip(addresses) {
-        let Record::Turn(row) = row else {
+        let Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(row))) = row else {
             panic!("turn");
         };
         assert_eq!(row.transcript.as_ptr(), original, "owned bytes moved directly");
@@ -58,11 +75,29 @@ fn retired_and_abandoned_load_slots_and_a_partial_page_fit_without_payload_clone
     drop(rows);
     meter.check(measured, loads::worst_case(&limits).expect("valid bound"), limits);
     assert!(
-        loads::begin(&mut domain, Token::new(3), Range::Deployment, None, 1, &mut out).is_none(),
+        loads::begin(
+            &mut domain,
+            Token::new(3),
+            Range::Core(temper_engine_domain::CoreRange::Deployment),
+            None,
+            1,
+            &mut out
+        )
+        .is_none(),
         "retired and abandoned both retain slots"
     );
     loads::reclaim(&mut domain);
-    assert!(loads::begin(&mut domain, Token::new(3), Range::Deployment, None, 1, &mut out).is_some());
+    assert!(
+        loads::begin(
+            &mut domain,
+            Token::new(3),
+            Range::Core(temper_engine_domain::CoreRange::Deployment),
+            None,
+            1,
+            &mut out
+        )
+        .is_some()
+    );
     drop(out.pop().expect("reclaimed first slot"));
     loads::unloaded(&mut domain, second, &mut out);
     assert!(out.is_empty(), "abandoned terminal does not wake its old waiter");
@@ -117,7 +152,7 @@ fn partial_write_transfer_moves_values_without_shrinking_the_source() {
         decision
             .write(
                 &limits,
-                Write::Save(Record::Turn(TurnRecord {
+                Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(TurnRecord {
                     task: 1,
                     attempt: 1,
                     turn,
@@ -125,7 +160,7 @@ fn partial_write_transfer_moves_values_without_shrinking_the_source() {
                     read: None,
                     at: Wall::EPOCH,
                     transcript: Box::new([]),
-                })),
+                })))),
             )
             .expect("partial write bound");
     }
@@ -154,7 +189,7 @@ fn full_decisions_and_maximum_held_results_fit_the_declared_root_journal_bound()
             decision
                 .write(
                     &LIMITS,
-                    Write::Save(Record::Turn(TurnRecord {
+                    Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(TurnRecord {
                         task: commit,
                         attempt: 1,
                         turn,
@@ -163,7 +198,7 @@ fn full_decisions_and_maximum_held_results_fit_the_declared_root_journal_bound()
                         at: Wall::EPOCH,
                         transcript: vec![b'x'; usize::try_from(LIMITS.transcript_bytes).expect("small transcript")]
                             .into_boxed_slice(),
-                    })),
+                    })))),
                 )
                 .expect("maximum admitted turn");
         }
@@ -172,7 +207,7 @@ fn full_decisions_and_maximum_held_results_fit_the_declared_root_journal_bound()
         decision
             .write(
                 &LIMITS,
-                Write::Save(Record::Turn(TurnRecord {
+                Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(TurnRecord {
                     task: commit,
                     attempt: 1,
                     turn: 1,
@@ -181,7 +216,7 @@ fn full_decisions_and_maximum_held_results_fit_the_declared_root_journal_bound()
                     at: Wall::EPOCH,
                     transcript: vec![b'y'; usize::try_from(LIMITS.transcript_bytes).expect("small transcript")]
                         .into_boxed_slice(),
-                })),
+                })))),
             )
             .expect("bounded replacement");
         for task in 1_u64..=u64::from(LIMITS.deliveries) {

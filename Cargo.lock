@@ -861,6 +861,7 @@ dependencies = [
 name = "temper-system-world"
 version = "0.0.0"
 dependencies = [
+ "jig-core",
  "jig-core-authority",
  "jig-core-brief",
  "jig-core-fleet",

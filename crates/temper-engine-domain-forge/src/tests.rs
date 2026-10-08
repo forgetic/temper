@@ -35,6 +35,7 @@ const LIMITS: Limits = Limits {
     holds: 8,
     subscriptions: 8,
     entries: 8,
+    named_calls: 16,
     changes: 8,
     issues: 8,
     resources_per_task: 4,
@@ -146,7 +147,11 @@ fn a_hold_and_writer_slot_are_exclusive_until_answered() {
     assert_eq!(first.len(), 1);
     assert_eq!(
         first[0],
-        Request::Save { record: Stored::Hold(Hold { name: name.clone(), task: 7, writer: None, drift: None }) }
+        Request::Save {
+            read_afresh: Some(name.clone()),
+            release: None,
+            record: Stored::Hold(Hold { name: name.clone(), task: 7, writer: None, drift: None })
+        }
     );
     assert_eq!(
         outputs(&mut d, Event::Hold { task: 8, resource: name.clone(), from: None }).as_ref(),
@@ -169,6 +174,8 @@ fn a_hold_and_writer_slot_are_exclusive_until_answered() {
     assert_eq!(
         claimed.as_ref(),
         &[Request::Save {
+            read_afresh: None,
+            release: None,
             record: Stored::Hold(Hold {
                 name,
                 task: 7,
@@ -210,7 +217,7 @@ fn an_outbox_entry_waits_for_its_commit() {
     };
     assert_eq!(
         outputs(&mut d, Event::Enqueue { entry: entry.clone() }).as_ref(),
-        &[Request::Save { record: Stored::Entry(entry) }]
+        &[Request::Save { read_afresh: None, release: Some(11), record: Stored::Entry(entry) }]
     );
     assert!(ready(&mut d).is_empty());
     outputs(&mut d, Event::Committed { entry: 11 });
@@ -252,6 +259,7 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::News { .. }
         | Request::Drift { .. }
         | Request::ProjectionEffect { .. }
+        | Request::WakeProcedure { .. }
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
         | Request::ProjectionSettled { .. }
@@ -295,6 +303,7 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::News { .. }
         | Request::Drift { .. }
         | Request::ProjectionEffect { .. }
+        | Request::WakeProcedure { .. }
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
         | Request::ProjectionSettled { .. }
@@ -338,6 +347,7 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::News { .. }
         | Request::Drift { .. }
         | Request::ProjectionEffect { .. }
+        | Request::WakeProcedure { .. }
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
         | Request::ProjectionSettled { .. }

@@ -1,5 +1,7 @@
 use skein_lib::{Queue, Token};
-use temper_engine_domain::{self as root, Counters, Decision, Delivery, Family, Journal, Output, Record, Write};
+use temper_engine_domain::{
+    self as root, Counters, Decision, Delivery, Family, Journal, JournalOutput as Output, Record, Write,
+};
 use temper_engine_domain_world::commits::{HEADER, LIMITS, Referee, Store, World, random};
 
 #[test]
@@ -54,7 +56,7 @@ fn a_route_past_its_reserved_room_stops_with_earlier_outputs_held() {
         overrun
             .write(
                 &LIMITS,
-                Write::Save(Record::Turn(root::TurnRecord {
+                Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(root::TurnRecord {
                     task: 1,
                     attempt: 1,
                     turn,
@@ -62,7 +64,7 @@ fn a_route_past_its_reserved_room_stops_with_earlier_outputs_held() {
                     read: None,
                     at: skein_lib::Wall::from_nanos(u64::from(turn)),
                     transcript: Box::new([]),
-                })),
+                })))),
             )
             .expect("reserved write room");
     }
@@ -70,7 +72,7 @@ fn a_route_past_its_reserved_room_stops_with_earlier_outputs_held() {
         overrun
             .write(
                 &LIMITS,
-                Write::Save(Record::Turn(root::TurnRecord {
+                Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(root::TurnRecord {
                     task: 1,
                     attempt: 1,
                     turn: LIMITS.writes,
@@ -78,7 +80,7 @@ fn a_route_past_its_reserved_room_stops_with_earlier_outputs_held() {
                     read: None,
                     at: skein_lib::Wall::from_nanos(u64::from(LIMITS.writes)),
                     transcript: Box::new([]),
-                })),
+                })))),
             )
             .is_err()
     );
@@ -174,7 +176,9 @@ fn the_referee_rejects_missing_records_wrong_numbers_and_unsolicited_commits() {
         let mut judge = Referee::new();
         let mut store = Store::new();
         judge.decision(1, b"first", true, true);
-        let writes = Box::new([Write::Save(Record::Deployment(root::Deployment { tasks: 1, commits: 1, ..HEADER }))]);
+        let writes = Box::new([Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(
+            root::Deployment { tasks: 1, commits: 1, ..HEADER },
+        ))))]);
         let expected = if wrong_number { "commit number" } else { "atomic records" };
         assert_eq!(
             judge.observe(&mut store, Output::Commit { number: if wrong_number { 2 } else { 1 }, writes }),

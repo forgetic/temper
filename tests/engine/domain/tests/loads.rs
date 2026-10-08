@@ -7,7 +7,7 @@ use temper_engine_domain_world::commits::World;
 const LIMITS: Limits = Limits { loads: 2, rows: 4, bytes: 1024, reply_bytes: 2048, transcript_bytes: 128 };
 
 fn row(turn: u32, bytes: usize) -> Record {
-    Record::Turn(TurnRecord {
+    Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(TurnRecord {
         task: 1,
         attempt: 1,
         turn,
@@ -15,21 +15,28 @@ fn row(turn: u32, bytes: usize) -> Record {
         read: None,
         at: Wall::EPOCH,
         transcript: vec![b'x'; bytes].into_boxed_slice(),
-    })
+    })))
 }
 
 fn key(turn: u32) -> Key {
-    Key::Turn { task: 1, attempt: 1, turn }
+    Key::Core(jig_core::Key::Core(jig_core::CoreKey::Turn { task: 1, attempt: 1, turn }))
 }
 
 fn begin(loads: &mut Loads, after: Option<Key>, most: u32, out: &mut Queue<Request>) -> Token {
-    let owner = loads::begin(loads, Token::new(51), Range::Turns { task: 1, attempt: 1 }, after.clone(), most, out)
-        .expect("load admitted");
+    let owner = loads::begin(
+        loads,
+        Token::new(51),
+        Range::Core(temper_engine_domain::CoreRange::Turns { task: 1, attempt: 1 }),
+        after.clone(),
+        most,
+        out,
+    )
+    .expect("load admitted");
     assert_eq!(
         out.pop(),
         Some(Request::Load {
             owner,
-            range: Range::Turns { task: 1, attempt: 1 },
+            range: Range::Core(temper_engine_domain::CoreRange::Turns { task: 1, attempt: 1 }),
             after,
             most,
             bytes: LIMITS.reply_bytes
@@ -52,7 +59,11 @@ fn each_page_has_one_terminal_and_reads_the_answered_commit() {
     let mut observed = Vec::new();
     for expected_turns in [vec![1, 2], vec![3, 4]] {
         let owner = begin(&mut loads, after.clone(), 2, &mut out);
-        let (rows, next) = world.store.page(&Range::Turns { task: 1, attempt: 1 }, after.as_ref(), 2);
+        let (rows, next) = world.store.page(
+            &Range::Core(temper_engine_domain::CoreRange::Turns { task: 1, attempt: 1 }),
+            after.as_ref(),
+            2,
+        );
         let expected_rows = rows.clone();
         loads::loaded(&mut loads, owner, rows, next.clone(), &mut out);
         let Request::Loaded { waiter, rows, next: found, cut } = out.pop().expect("page terminal") else {
@@ -65,7 +76,7 @@ fn each_page_has_one_terminal_and_reads_the_answered_commit() {
         assert_eq!(
             rows.iter()
                 .map(|r| {
-                    let Record::Turn(r) = r else {
+                    let Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(r))) = r else {
                         panic!("turn");
                     };
                     r.turn
@@ -93,11 +104,29 @@ fn abandoned_io_keeps_capacity_until_its_real_terminal_and_old_tokens_are_fenced
     let old = begin(&mut loads, None, 1, &mut out);
     loads::abandon(&mut loads, old);
     loads::reclaim(&mut loads);
-    assert!(loads::begin(&mut loads, Token::new(8), Range::Deployment, None, 1, &mut out).is_none());
+    assert!(
+        loads::begin(
+            &mut loads,
+            Token::new(8),
+            Range::Core(temper_engine_domain::CoreRange::Deployment),
+            None,
+            1,
+            &mut out
+        )
+        .is_none()
+    );
     loads::loaded(&mut loads, old, vec![row(1, 4)].into_boxed_slice(), None, &mut out);
     assert!(out.is_empty());
     assert!(
-        loads::begin(&mut loads, Token::new(8), Range::Deployment, None, 1, &mut out).is_none(),
+        loads::begin(
+            &mut loads,
+            Token::new(8),
+            Range::Core(temper_engine_domain::CoreRange::Deployment),
+            None,
+            1,
+            &mut out
+        )
+        .is_none(),
         "retired until reclaim"
     );
     loads::reclaim(&mut loads);
@@ -117,7 +146,13 @@ fn malformed_pages_are_refused_whole_before_any_row_is_delivered() {
     let cases = [
         (vec![row(1, 0), row(1, 0)], None, Failure::Order),
         (vec![row(2, 0), row(1, 0)], None, Failure::Order),
-        (vec![Record::Deployment(temper_engine_domain_world::commits::HEADER)], None, Failure::Range),
+        (
+            vec![Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(
+                temper_engine_domain_world::commits::HEADER,
+            )))],
+            None,
+            Failure::Range,
+        ),
         (vec![row(1, 0)], Some(key(2)), Failure::Cursor),
         (vec![], Some(key(1)), Failure::Cursor),
         ((1..=5).map(|turn| row(turn, 0)).collect(), None, Failure::Rows),

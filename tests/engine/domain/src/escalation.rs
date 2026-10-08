@@ -573,8 +573,13 @@ impl World {
                 self.commit_wait -= 1;
             } else {
                 let writes = &self.store.pending.front().expect("pending commit").1;
-                let held = writes.iter().any(|write| matches!(write, Write::Save(Record::Terminal(terminal)) if terminal.end == tasks::End::Failed(tasks::Class::Run)));
-                let decided = writes.iter().any(|write| matches!(write, Write::Save(Record::EscalationDecision(_))));
+                let held = writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Terminal(terminal)))) if terminal.end == tasks::End::Failed(tasks::Class::Run)));
+                let decided = writes.iter().any(|write| {
+                    matches!(
+                        write,
+                        Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(_))))
+                    )
+                });
                 let number = self.store.apply();
                 self.trace.push(format!("applied {number}"));
                 self.commit_wait = self.settings.commit_delay;
@@ -594,8 +599,9 @@ impl World {
         while let Some(request) = self.out.pop() {
             self.trace.push(format!("output {request:?}"));
             match request {
+                engine::Request::ToChild(released) => self.queue(engine::Event::Released(released), 0),
                 engine::Request::Commit { number, writes } => {
-                    if writes.iter().any(|write| matches!(write, Write::Save(Record::Terminal(terminal)) if terminal.end == tasks::End::Refused)) {
+                    if writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Terminal(terminal)))) if terminal.end == tasks::End::Refused)) {
                         assert!(self.unplaced_referee.is_none(), "one unassigned-claim terminal in this script");
                         self.unplaced_referee = Some(self.referee.clone());
                     }
@@ -604,9 +610,16 @@ impl World {
                     if self.store.pending.is_empty() {
                         self.commit_wait = self.settings.commit_delay;
                     }
-                    let held_cut = self.settings.cut == Cut::Held && writes.iter().any(|write| matches!(write, Write::Save(Record::Terminal(terminal)) if terminal.end == tasks::End::Failed(tasks::Class::Run)));
+                    let held_cut = self.settings.cut == Cut::Held && writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Terminal(terminal)))) if terminal.end == tasks::End::Failed(tasks::Class::Run)));
                     let decision_cut = self.settings.cut == Cut::Decision
-                        && writes.iter().any(|write| matches!(write, Write::Save(Record::EscalationDecision(_))));
+                        && writes.iter().any(|write| {
+                            matches!(
+                                write,
+                                Write::Save(Record::Core(jig_core::Record::Core(
+                                    jig_core::CoreRecord::EscalationDecision(_)
+                                )))
+                            )
+                        });
                     self.store.pending.push_back((number, writes));
                     if self.restarts == 0 && (held_cut || decision_cut) {
                         self.frozen_cut = Some(self.settings.cut);

@@ -1,8 +1,8 @@
 use skein_lib::{Queue, Rng, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{
-    self as root, Counters, Decision, Delivery, Deployment, Family, Journal, JournalLimits, Key, Output, Range, Record,
-    TurnRecord, Write,
+    self as root, Counters, Decision, Delivery, Deployment, Family, Journal, JournalLimits, JournalOutput as Output,
+    Key, Range, Record, TurnRecord, Write,
 };
 
 pub const LIMITS: JournalLimits = JournalLimits {
@@ -41,7 +41,10 @@ impl Store {
     pub fn new() -> Store {
         Store {
             applied: 0,
-            rows: BTreeMap::from([(Key::Deployment, Record::Deployment(HEADER))]),
+            rows: BTreeMap::from([(
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::Deployment)),
+                Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(HEADER))),
+            )]),
             pending: VecDeque::new(),
         }
     }
@@ -62,7 +65,9 @@ impl Store {
                 }
             }
         }
-        let Some(Record::Deployment(header)) = self.rows.get(&Key::Deployment) else {
+        let Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(header)))) =
+            self.rows.get(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Deployment)))
+        else {
             panic!("durable deployment");
         };
         assert_eq!(header.commits, number, "header and records applied atomically");
@@ -72,7 +77,9 @@ impl Store {
 
     #[must_use]
     pub fn header(&self) -> Deployment {
-        let Some(Record::Deployment(header)) = self.rows.get(&Key::Deployment) else {
+        let Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(header)))) =
+            self.rows.get(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Deployment)))
+        else {
             panic!("deployment");
         };
         *header
@@ -128,17 +135,20 @@ impl Referee {
         }
         if writing || fresh {
             self.header.commits += 1;
-            let mut writes = vec![Write::Save(Record::Deployment(self.header))];
+            let mut writes =
+                vec![Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(self.header))))];
             if writing {
-                writes.push(Write::Save(Record::Turn(TurnRecord {
-                    task: 1,
-                    attempt: 1,
-                    turn,
-                    spent: u64::from(turn),
-                    read: Some(u64::from(turn)),
-                    at: Wall::from_nanos(u64::from(turn)),
-                    transcript: payload.into(),
-                })));
+                writes.push(Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(
+                    TurnRecord {
+                        task: 1,
+                        attempt: 1,
+                        turn,
+                        spent: u64::from(turn),
+                        read: Some(u64::from(turn)),
+                        at: Wall::from_nanos(u64::from(turn)),
+                        transcript: payload.into(),
+                    },
+                )))));
             }
             self.writes.push_back(writes);
         }
@@ -153,7 +163,9 @@ impl Referee {
         match output {
             Output::Commit { number, writes } => {
                 let expected = self.writes.pop_front().ok_or("unsolicited commit")?;
-                let Write::Save(Record::Deployment(header)) = &expected[0] else {
+                let Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(header)))) =
+                    &expected[0]
+                else {
                     panic!("expected header");
                 };
                 if number != header.commits {
@@ -230,7 +242,7 @@ impl World {
             decision
                 .write(
                     &LIMITS,
-                    Write::Save(Record::Turn(TurnRecord {
+                    Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(TurnRecord {
                         task: 1,
                         attempt: 1,
                         turn,
@@ -238,7 +250,7 @@ impl World {
                         read: Some(u64::from(turn)),
                         at: Wall::from_nanos(u64::from(turn)),
                         transcript: payload.into(),
-                    })),
+                    })))),
                 )
                 .expect("bounded transcript");
         }

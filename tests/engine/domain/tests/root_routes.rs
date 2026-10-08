@@ -360,8 +360,8 @@ fn a_person_answers_a_numbered_question_from_their_task() {
             task, question: answered, ..
         }), .. } if *task == parent.task && *answered == question
     )));
-    let Some(Record::Tasks(tasks::Stored::Live(row))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(parent.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(parent.task))))
     else {
         panic!("parent remains live")
     };
@@ -405,29 +405,35 @@ fn a_maintainer_prioritises_project_goals_and_a_member_cannot() {
         .rows
         .values()
         .filter_map(|row| match row {
-            Record::Tasks(tasks::Stored::Live(task)) if task.tracked.is_some() => Some(task.number),
-            Record::Tasks(
-                tasks::Stored::Live(_)
-                | tasks::Stored::Ended(_)
-                | tasks::Stored::Stub(_)
-                | tasks::Stored::Milestone(_)
-                | tasks::Stored::History(_)
-                | tasks::Stored::Ledger(_)
-                | tasks::Stored::Writer(_)
-                | tasks::Stored::Pool(_)
-                | tasks::Stored::PersonProposal(_),
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) if task.tracked.is_some() => {
+                Some(task.number)
+            }
+            Record::Core(
+                jig_core::Record::Tasks(
+                    tasks::Stored::Live(_)
+                    | tasks::Stored::Ended(_)
+                    | tasks::Stored::Stub(_)
+                    | tasks::Stored::Milestone(_)
+                    | tasks::Stored::History(_)
+                    | tasks::Stored::Ledger(_)
+                    | tasks::Stored::Writer(_)
+                    | tasks::Stored::Pool(_)
+                    | tasks::Stored::PersonProposal(_),
+                )
+                | jig_core::Record::People(_)
+                | jig_core::Record::Core(
+                    jig_core::CoreRecord::Call(_)
+                    | jig_core::CoreRecord::Projection(_)
+                    | jig_core::CoreRecord::Deployment(_)
+                    | jig_core::CoreRecord::Turn(_)
+                    | jig_core::CoreRecord::RunProof(_)
+                    | jig_core::CoreRecord::Terminal(_)
+                    | jig_core::CoreRecord::EscalationDecision(_)
+                    | jig_core::CoreRecord::ProposalDecision(_),
+                )
+                | jig_core::Record::Notes(_),
             )
-            | Record::People(_)
-            | Record::Call(_)
-            | Record::Notes(_)
-            | Record::Projection(_)
-            | Record::Deployment(_)
-            | Record::Turn(_)
-            | Record::RunProof(_)
-            | Record::Terminal(_)
-            | Record::EscalationDecision(_)
-            | Record::Forge { .. }
-            | Record::ProposalDecision(_) => None,
+            | Record::Forge { .. } => None,
         })
         .collect();
     assert_eq!(goals.len(), 2);
@@ -455,8 +461,8 @@ fn a_maintainer_prioritises_project_goals_and_a_member_cannot() {
         Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Prioritised { project: 1 }), .. }
     )));
     for (number, priority) in priorities {
-        let Some(Record::Tasks(tasks::Stored::Live(task))) =
-            driver.store.rows.get(&Key::Tasks(tasks::Key::Live(number)))
+        let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) =
+            driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(number))))
         else {
             panic!("goal remains live")
         };
@@ -492,14 +498,14 @@ fn a_person_amends_their_live_task_and_the_change_reaches_its_run() {
         Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Amended { task }), .. }
             if *task == assignment.task
     )));
-    let Some(Record::Tasks(tasks::Stored::Live(row))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(assignment.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(assignment.task))))
     else {
         panic!("amended task remains live")
     };
     assert_eq!(row.spec.words.as_ref(), b"revised goal");
     assert!(driver.store.rows.values().any(|record| matches!(record,
-        Record::Tasks(tasks::Stored::History(history))
+        Record::Core(jig_core::Record::Tasks(tasks::Stored::History(history)))
             if history.task == assignment.task && history.change == tasks::Change::Amended
                 && history.by == tasks::Party::Person(1)
     )));
@@ -633,7 +639,8 @@ fn a_members_wider_amendment_waits_for_a_maintainer_to_accept() {
         .unwrap_or_else(|| {
             panic!("widening proposal committed: {:?}", driver.delivered.iter().rev().take(4).collect::<Vec<_>>())
         });
-    let Some(Record::Tasks(tasks::Stored::Live(row))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(task))))
     else {
         panic!("goal remains live")
     };
@@ -659,7 +666,8 @@ fn a_members_wider_amendment_waits_for_a_maintainer_to_accept() {
         "acceptance: {:?}",
         driver.delivered.iter().rev().take(4).collect::<Vec<_>>()
     );
-    let Some(Record::Tasks(tasks::Stored::Live(row))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(task))))
     else {
         panic!("goal remains live")
     };
@@ -695,7 +703,13 @@ fn a_members_goal_past_their_allotment_becomes_a_proposal_a_maintainer_accepts()
             _ => None,
         })
         .expect("member receives proposal identity");
-    assert!(!driver.store.rows.values().any(|row| matches!(row, Record::Tasks(tasks::Stored::Live(_)))));
+    assert!(
+        !driver
+            .store
+            .rows
+            .values()
+            .any(|row| matches!(row, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(_)))))
+    );
     driver.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(2011)),
         sign_in: maintainer_session,
@@ -714,11 +728,11 @@ fn a_members_goal_past_their_allotment_becomes_a_proposal_a_maintainer_accepts()
         }), .. } if *proposer == member && *decided == proposal
     )));
     assert!(driver.store.rows.values().any(|row| matches!(row,
-        Record::Tasks(tasks::Stored::Live(task))
+        Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))
             if task.requester == tasks::Party::Person(member) && task.tracked == Some(7)
     )));
-    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::PersonProposal(proposal))),
-        Some(Record::Tasks(tasks::Stored::PersonProposal(row)))
+    assert!(matches!(driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::PersonProposal(proposal)))),
+        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::PersonProposal(row))))
             if row.state == tasks::PersonProposalState::Accepted { by: tasks::Party::Person(maintainer) }
     ));
 }
@@ -798,7 +812,9 @@ fn two_maintainers_decide_one_proposal_and_the_second_is_told_by_whom_and_how() 
             proposer, proposal: named, by, choice: people::ProposalChoice::Accepted,
         }), .. } if *proposer == member && *named == proposal && *by == first
     )));
-    assert!(driver.store.rows.contains_key(&Key::ProposalDecision(proposal)));
+    assert!(
+        driver.store.rows.contains_key(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::ProposalDecision(proposal))))
+    );
 }
 
 #[test]
@@ -898,19 +914,23 @@ fn restart_recovers_named_ended_result_without_replaying_a_raw_notice() {
         .rows
         .values()
         .find_map(|row| match row {
-            Record::Tasks(tasks::Stored::Ended(task)) => Some(task.number),
-            Record::Tasks(_)
-            | Record::Projection(_)
-            | Record::Deployment(_)
-            | Record::Turn(_)
-            | Record::People(_)
-            | Record::RunProof(_)
-            | Record::EscalationDecision(_)
-            | Record::Forge { .. }
-            | Record::ProposalDecision(_)
-            | Record::Terminal(_)
-            | Record::Call(_)
-            | Record::Notes(_) => None,
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(task))) => Some(task.number),
+            Record::Core(
+                jig_core::Record::Tasks(_)
+                | jig_core::Record::Core(
+                    jig_core::CoreRecord::Projection(_)
+                    | jig_core::CoreRecord::Deployment(_)
+                    | jig_core::CoreRecord::Turn(_)
+                    | jig_core::CoreRecord::RunProof(_)
+                    | jig_core::CoreRecord::EscalationDecision(_)
+                    | jig_core::CoreRecord::ProposalDecision(_)
+                    | jig_core::CoreRecord::Terminal(_)
+                    | jig_core::CoreRecord::Call(_),
+                )
+                | jig_core::Record::People(_)
+                | jig_core::Record::Notes(_),
+            )
+            | Record::Forge { .. } => None,
         })
         .expect("ended task");
     let mut driver = Driver::new(world.store);
@@ -932,7 +952,10 @@ fn restart_recovers_named_ended_result_without_replaying_a_raw_notice() {
     assert!(
         driver.transactions.iter().any(|writes| writes.iter().any(|write| matches!(
             write,
-            Write::Save(Record::People(people::Stored::ReadPosition { person: 1, position: 1 }))
+            Write::Save(Record::Core(jig_core::Record::People(people::Stored::ReadPosition {
+                person: 1,
+                position: 1
+            })))
         ))),
         "read position commits before reply"
     );
@@ -963,23 +986,33 @@ fn unread_results_page_in_commit_order_across_restarts_with_bounded_loads() {
     let mut world = World::new(Settings { restart: false, ..Settings::calm(9300) });
     world.run();
     let mut store = world.store;
-    let original =
-        store
-            .rows
-            .values()
-            .find_map(|row| {
-                if let Record::Tasks(tasks::Stored::Ended(task)) = row { Some(task.as_ref().clone()) } else { None }
-            })
-            .expect("one actual committed result");
-    store.rows.remove(&Key::Tasks(tasks::Key::Ended(original.number)));
+    let original = store
+        .rows
+        .values()
+        .find_map(|row| {
+            if let Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(task))) = row {
+                Some(task.as_ref().clone())
+            } else {
+                None
+            }
+        })
+        .expect("one actual committed result");
+    store.rows.remove(&Key::Core(jig_core::Key::Tasks(tasks::Key::Ended(original.number))));
     for (task, position) in [(1_u64, 3_u64), (2, 1), (3, 4), (4, 2)] {
         let mut row = original.clone();
         row.number = task;
         row.root = task;
         row.result_position = position;
-        store.rows.insert(Key::Tasks(tasks::Key::Ended(task)), Record::Tasks(tasks::Stored::Ended(Box::new(row))));
+        store.rows.insert(
+            Key::Core(jig_core::Key::Tasks(tasks::Key::Ended(task))),
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(Box::new(row)))),
+        );
     }
-    let Some(Record::Deployment(header)) = store.rows.get_mut(&Key::Deployment) else { panic!("header") };
+    let Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(header)))) =
+        store.rows.get_mut(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Deployment)))
+    else {
+        panic!("header")
+    };
     header.tasks = 4;
     header.messages = 4;
     let sign_in = header.sign_ins;
@@ -994,7 +1027,7 @@ fn unread_results_page_in_commit_order_across_restarts_with_bounded_loads() {
         ),
         "a later named result cannot skip older unread results"
     );
-    assert!(!first.store.rows.contains_key(&Key::People(people::Key::ReadPosition(1))));
+    assert!(!first.store.rows.contains_key(&Key::Core(jig_core::Key::People(people::Key::ReadPosition(1)))));
     first.send(engine::Event::ReadInbox { reply_to: ReplyTo::new(Token::new(940)), sign_in, most: 2 });
     first.settle();
     let Some(Delivery::InboxPage { entries, .. }) = first.delivered.pop() else { panic!("first page") };
@@ -1024,30 +1057,41 @@ fn a_full_inbox_pages_the_rest_from_the_store() {
         .rows
         .values()
         .find_map(|row| match row {
-            Record::Tasks(tasks::Stored::Ended(task)) => Some(task.as_ref().clone()),
-            Record::Call(_)
-            | Record::Notes(_)
-            | Record::EscalationDecision(_)
-            | Record::Forge { .. }
-            | Record::ProposalDecision(_)
-            | Record::Projection(_)
-            | Record::Deployment(_)
-            | Record::Turn(_)
-            | Record::RunProof(_)
-            | Record::Terminal(_)
-            | Record::Tasks(_)
-            | Record::People(_) => None,
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(task))) => Some(task.as_ref().clone()),
+            Record::Core(
+                jig_core::Record::Core(
+                    jig_core::CoreRecord::Call(_)
+                    | jig_core::CoreRecord::EscalationDecision(_)
+                    | jig_core::CoreRecord::ProposalDecision(_)
+                    | jig_core::CoreRecord::Projection(_)
+                    | jig_core::CoreRecord::Deployment(_)
+                    | jig_core::CoreRecord::Turn(_)
+                    | jig_core::CoreRecord::RunProof(_)
+                    | jig_core::CoreRecord::Terminal(_),
+                )
+                | jig_core::Record::Notes(_)
+                | jig_core::Record::Tasks(_)
+                | jig_core::Record::People(_),
+            )
+            | Record::Forge { .. } => None,
         })
         .expect("one committed result for the store fixture");
-    store.rows.remove(&Key::Tasks(tasks::Key::Ended(original.number)));
+    store.rows.remove(&Key::Core(jig_core::Key::Tasks(tasks::Key::Ended(original.number))));
     for number in 1..=5 {
         let mut row = original.clone();
         row.number = number;
         row.root = number;
         row.result_position = number;
-        store.rows.insert(Key::Tasks(tasks::Key::Ended(number)), Record::Tasks(tasks::Stored::Ended(Box::new(row))));
+        store.rows.insert(
+            Key::Core(jig_core::Key::Tasks(tasks::Key::Ended(number))),
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(Box::new(row)))),
+        );
     }
-    let Some(Record::Deployment(header)) = store.rows.get_mut(&Key::Deployment) else { panic!("header") };
+    let Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(header)))) =
+        store.rows.get_mut(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Deployment)))
+    else {
+        panic!("header")
+    };
     header.tasks = 5;
     header.messages = 5;
     let sign_in = header.sign_ins;
@@ -1083,8 +1127,8 @@ fn a_full_inbox_pages_the_rest_from_the_store() {
     }
     assert!(driver.result_loads.len() >= 3, "each page scans committed ended rows through bounded store loads");
     assert!(matches!(
-        driver.store.rows.get(&Key::People(people::Key::ReadPosition(1))),
-        Some(Record::People(people::Stored::ReadPosition { position: 5, .. }))
+        driver.store.rows.get(&Key::Core(jig_core::Key::People(people::Key::ReadPosition(1)))),
+        Some(Record::Core(jig_core::Record::People(people::Stored::ReadPosition { position: 5, .. })))
     ));
 }
 
@@ -1184,7 +1228,8 @@ fn a_person_task_addressed_to_a_role_taken_by_one_handed_back_answered_by_anothe
     driver.settle();
     assert!(driver.delivered.iter().any(|item| matches!(item,
         Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::PersonTaken { task: found }), .. } if *found == task)));
-    let Some(Record::Tasks(tasks::Stored::Live(row))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(task))))
     else {
         panic!("claimed task")
     };
@@ -1208,7 +1253,8 @@ fn a_person_task_addressed_to_a_role_taken_by_one_handed_back_answered_by_anothe
         ask: people::Ask::HandBackPerson { project: 1, task },
     });
     driver.settle();
-    let Some(Record::Tasks(tasks::Stored::Live(row))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(task))))
     else {
         panic!("returned task")
     };
@@ -1233,7 +1279,7 @@ fn a_person_task_addressed_to_a_role_taken_by_one_handed_back_answered_by_anothe
     driver.settle();
     assert!(driver.delivered.iter().any(|item| matches!(item,
         Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::PersonAnswered { task: found }), .. } if *found == task)), "{:?}", driver.delivered);
-    assert!(driver.store.rows.contains_key(&Key::Tasks(tasks::Key::Ended(task))));
+    assert!(driver.store.rows.contains_key(&Key::Core(jig_core::Key::Tasks(tasks::Key::Ended(task)))));
 }
 
 #[test]
@@ -1254,8 +1300,8 @@ fn a_person_stops_a_run_and_releases_it() {
             if *task == assignment.task)));
     assert!(driver.delivered.iter().any(|item| matches!(item,
         Delivery::Cancel { task, attempt, .. } if *task == assignment.task && *attempt == assignment.attempt)));
-    let Some(Record::Tasks(tasks::Stored::Live(row))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(assignment.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(assignment.task))))
     else {
         panic!("stopped task")
     };
@@ -1419,8 +1465,10 @@ fn refused_terminal_clears_fleet_handoff_without_charging_rejected_spend() {
     });
     driver.settle();
     assert_eq!(driver.delivered.iter().filter(|delivery| matches!(delivery, Delivery::Acknowledge { .. })).count(), 1);
-    let Some(Record::Tasks(tasks::Stored::Live(task))) =
-        driver.store.rows.get(&temper_engine_domain::Key::Tasks(tasks::Key::Live(assignment.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) = driver
+        .store
+        .rows
+        .get(&temper_engine_domain::Key::Core(jig_core::Key::Tasks(tasks::Key::Live(assignment.task))))
     else {
         panic!("invalid terminal leaves retryable live task");
     };
@@ -1444,8 +1492,8 @@ fn a_refused_assignment_spends_no_try() {
     chat(&mut driver, 12);
     driver.settle();
     assert_eq!(driver.delivered.iter().filter(|delivery| matches!(delivery, Delivery::Assigned { .. })).count(), 1);
-    let Some(Record::Tasks(tasks::Stored::Live(task))) =
-        driver.store.rows.get(&temper_engine_domain::Key::Tasks(tasks::Key::Live(2)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) =
+        driver.store.rows.get(&temper_engine_domain::Key::Core(jig_core::Key::Tasks(tasks::Key::Live(2))))
     else {
         panic!("second chat is durable but unplaced");
     };
@@ -1472,8 +1520,8 @@ fn static_authority_waits_are_durable_holds_and_do_not_spin_the_ready_pass() {
         driver.settle();
         chat(&mut driver, 13);
         driver.settle();
-        let Some(Record::Tasks(tasks::Stored::Live(task))) =
-            driver.store.rows.get(&temper_engine_domain::Key::Tasks(tasks::Key::Live(1)))
+        let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) =
+            driver.store.rows.get(&temper_engine_domain::Key::Core(jig_core::Key::Tasks(tasks::Key::Live(1))))
         else {
             panic!("authorized chat with unavailable run is durable");
         };
@@ -1494,14 +1542,14 @@ fn static_authority_waits_are_durable_holds_and_do_not_spin_the_ready_pass() {
 fn invalid_nonfinal_people_restore_page_stops_before_issuing_its_continuation() {
     let mut store = Store::new();
     for number in 1..=3 {
-        let record = Record::People(people::Stored::Person {
+        let record = Record::Core(jig_core::Record::People(people::Stored::Person {
             number,
             identity: people::Identity {
                 key: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
                 login: b"same".as_slice().into(),
                 name: b"Same".as_slice().into(),
             },
-        });
+        }));
         store.rows.insert(record.key(), record);
     }
     let mut driver = Driver::new(store);
@@ -1523,24 +1571,28 @@ fn invalid_nonfinal_task_restore_page_stops_before_issuing_its_continuation() {
         .rows
         .values()
         .find_map(|row| match row {
-            Record::Tasks(tasks::Stored::Ended(record)) => Some(record.as_ref().clone()),
-            Record::Tasks(_)
-            | Record::Projection(_)
-            | Record::Deployment(_)
-            | Record::Turn(_)
-            | Record::People(_)
-            | Record::RunProof(_)
-            | Record::EscalationDecision(_)
-            | Record::Forge { .. }
-            | Record::ProposalDecision(_)
-            | Record::Terminal(_)
-            | Record::Call(_)
-            | Record::Notes(_) => None,
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(record))) => Some(record.as_ref().clone()),
+            Record::Core(
+                jig_core::Record::Tasks(_)
+                | jig_core::Record::Core(
+                    jig_core::CoreRecord::Projection(_)
+                    | jig_core::CoreRecord::Deployment(_)
+                    | jig_core::CoreRecord::Turn(_)
+                    | jig_core::CoreRecord::RunProof(_)
+                    | jig_core::CoreRecord::EscalationDecision(_)
+                    | jig_core::CoreRecord::ProposalDecision(_)
+                    | jig_core::CoreRecord::Terminal(_)
+                    | jig_core::CoreRecord::Call(_),
+                )
+                | jig_core::Record::People(_)
+                | jig_core::Record::Notes(_),
+            )
+            | Record::Forge { .. } => None,
         })
         .expect("ended fixture");
     record.spec.words = vec![b'x'; 65].into_boxed_slice();
     record.phase = tasks::Phase::Waiting;
-    let row = Record::Tasks(tasks::Stored::Live(Box::new(record)));
+    let row = Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(Box::new(record))));
     world.store.rows.insert(row.key(), row);
     let mut driver = Driver::new(world.store);
     for _ in 0..60 {
@@ -1557,6 +1609,25 @@ fn root_configuration_refuses_a_decoded_page_larger_than_synchronous_route_room(
     let mut limits = limits();
     limits.loads.rows = u32::MAX;
     assert!(engine::worst_case(&limits).is_none());
+}
+
+#[test]
+fn an_early_worker_hello_does_not_number_a_commit_before_the_durable_header() {
+    let mut driver = Driver::configured(Store::new(), config(98), &limits());
+    driver.send(engine::Event::Hello {
+        channel: Token::new(7),
+        hello: fleet::Hello {
+            stop_bound: Duration::from_secs(1),
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
+    });
+    assert!(driver.transactions.is_empty(), "the cold load must precede commit numbering");
+    assert!(driver.delivered.is_empty(), "the core accepts a valid early worker");
+    driver.settle();
+    assert!(driver.root.ready());
+    assert!(!driver.stopped);
 }
 
 #[test]
@@ -1614,19 +1685,23 @@ fn authenticated_result_query_refuses_monotonic_expiry_after_backward_wall_jump_
         .rows
         .values()
         .find_map(|row| match row {
-            Record::Tasks(tasks::Stored::Ended(task)) => Some(task.number),
-            Record::Tasks(_)
-            | Record::Projection(_)
-            | Record::Deployment(_)
-            | Record::Turn(_)
-            | Record::People(_)
-            | Record::RunProof(_)
-            | Record::EscalationDecision(_)
-            | Record::Forge { .. }
-            | Record::ProposalDecision(_)
-            | Record::Terminal(_)
-            | Record::Call(_)
-            | Record::Notes(_) => None,
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(task))) => Some(task.number),
+            Record::Core(
+                jig_core::Record::Tasks(_)
+                | jig_core::Record::Core(
+                    jig_core::CoreRecord::Projection(_)
+                    | jig_core::CoreRecord::Deployment(_)
+                    | jig_core::CoreRecord::Turn(_)
+                    | jig_core::CoreRecord::RunProof(_)
+                    | jig_core::CoreRecord::EscalationDecision(_)
+                    | jig_core::CoreRecord::ProposalDecision(_)
+                    | jig_core::CoreRecord::Terminal(_)
+                    | jig_core::CoreRecord::Call(_),
+                )
+                | jig_core::Record::People(_)
+                | jig_core::Record::Notes(_),
+            )
+            | Record::Forge { .. } => None,
         })
         .expect("ended chat");
     let mut driver = Driver::new(world.store);
@@ -1854,8 +1929,8 @@ fn a_new_runs_brief_carries_the_durable_note_index() {
     let mut store = Store::new();
     let scope = notes::Scope::Project { project: 1 };
     store.rows.insert(
-        Key::Notes(notes::Key::Entry { name: 1 }),
-        Record::Notes(notes::Record::Entry(notes::Entry {
+        Key::Core(jig_core::Key::Notes(notes::Key::Entry { name: 1 })),
+        Record::Core(jig_core::Record::Notes(notes::Record::Entry(notes::Entry {
             name: 1,
             scope: scope.clone(),
             description: b"seeded hint".as_slice().into(),
@@ -1863,16 +1938,16 @@ fn a_new_runs_brief_carries_the_durable_note_index() {
             references: skein_lib::List::with_capacity(1),
             author: notes::Author::Task { task: 1, attempt: 1 },
             revision: 1,
-        })),
+        }))),
     );
     store.rows.insert(
-        Key::Notes(notes::Key::Line { scope: scope.clone(), name: 1 }),
-        Record::Notes(notes::Record::Line(notes::Line {
+        Key::Core(jig_core::Key::Notes(notes::Key::Line { scope: scope.clone(), name: 1 })),
+        Record::Core(jig_core::Record::Notes(notes::Record::Line(notes::Line {
             scope,
             name: 1,
             description: b"seeded hint".as_slice().into(),
             revision: 1,
-        })),
+        }))),
     );
     let mut driver = Driver::configured(store, note_config(), &limits());
     hello(&mut driver);
@@ -1922,7 +1997,7 @@ fn a_note_tool_without_its_family_is_refused_with_an_authority_finding() {
         Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::ToolDenied { answer: authority::Answer::Propose, findings }, .. }
             if *call == Token::new(3104) && findings.contains(&authority::Finding::Tool)
     )));
-    assert!(!driver.store.rows.values().any(|record| matches!(record, Record::Notes(_))));
+    assert!(!driver.store.rows.values().any(|record| matches!(record, Record::Core(jig_core::Record::Notes(_)))));
 }
 
 fn written_note_name(driver: &Driver, expected_call: u64) -> u64 {
@@ -1965,8 +2040,8 @@ fn a_note_written_corrected_by_a_person_and_recalled_is_durable() {
         },
     );
     let name = written_note_name(&driver, 3101);
-    assert!(matches!(driver.store.rows.get(&Key::Notes(notes::Key::Entry { name })),
-        Some(Record::Notes(notes::Record::Entry(entry))) if entry.body.as_ref() == b"first body"
+    assert!(matches!(driver.store.rows.get(&Key::Core(jig_core::Key::Notes(notes::Key::Entry { name }))),
+        Some(Record::Core(jig_core::Record::Notes(notes::Record::Entry(entry)))) if entry.body.as_ref() == b"first body"
     ));
     driver.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(3102)),
@@ -2033,7 +2108,12 @@ fn a_note_written_corrected_by_a_person_and_recalled_is_durable() {
             if *call == Token::new(3101) && *found == name
     )));
     assert_eq!(
-        restarted.store.rows.values().filter(|record| matches!(record, Record::Notes(notes::Record::Entry(_)))).count(),
+        restarted
+            .store
+            .rows
+            .values()
+            .filter(|record| matches!(record, Record::Core(jig_core::Record::Notes(notes::Record::Entry(_)))))
+            .count(),
         1,
         "reasking a named note did not write a second entry"
     );
@@ -2083,14 +2163,14 @@ fn a_person_deletes_a_note_only_in_its_authorized_scope_and_after_commit() {
             )),
             "party answer waits for its commit"
         );
-        assert!(driver.store.rows.contains_key(&Key::Notes(notes::Key::Entry { name })));
+        assert!(driver.store.rows.contains_key(&Key::Core(jig_core::Key::Notes(notes::Key::Entry { name }))));
         driver.settle();
         assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
             Delivery::WebReply { to, reply: people::Reply::Outcome(outcome), .. }
                 if *to == ReplyTo::new(Token::new(request)) && *outcome == expected
         )));
     }
-    assert!(!driver.store.rows.keys().any(|key| matches!(key, Key::Notes(_))));
+    assert!(!driver.store.rows.keys().any(|key| matches!(key, Key::Core(jig_core::Key::Notes(_)))));
 }
 
 #[test]
@@ -2268,9 +2348,9 @@ fn a_proposal_reaches_its_covering_task_and_is_accepted() {
         Delivery::AcknowledgeTurn { task, attempt, turn, .. }
             if *task == parent.task && *attempt == parent.attempt && *turn == 1
     )));
-    let live = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("live child");
+    let live = driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child)))).expect("live child");
     assert!(
-        matches!(live, Record::Tasks(tasks::Stored::Live(row)) if matches!(&row.proposal, Some(p) if p.state == tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Task(parent.task), since: driver.env.wall }))
+        matches!(live, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) if matches!(&row.proposal, Some(p) if p.state == tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Task(parent.task), since: driver.env.wall }))
     );
     tool_call(
         &mut driver,
@@ -2279,9 +2359,9 @@ fn a_proposal_reaches_its_covering_task_and_is_accepted() {
         engine::Tool::Decide { proposer: child, proposal, decision: engine::ProposalChoice::Accept },
     );
     assert!(driver.delivered.iter().any(|item| matches!(item, Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::ProposalDecided { proposal: found, outcome: tasks::ProposalOutcome::Accepted }, .. } if *call == Token::new(63) && *found == proposal)));
-    let live = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("live child");
+    let live = driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child)))).expect("live child");
     assert!(
-        matches!(live, Record::Tasks(tasks::Stored::Live(row)) if row.proposal.is_none() && row.delegates.len() == 1 && row.inbox.iter().any(|word| word.kind == tasks::MessageKind::ProposalDecision { proposal, accepted: true }))
+        matches!(live, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) if row.proposal.is_none() && row.delegates.len() == 1 && row.inbox.iter().any(|word| word.kind == tasks::MessageKind::ProposalDecision { proposal, accepted: true }))
     );
 }
 
@@ -2318,7 +2398,7 @@ fn a_chats_goal_accepted_as_its_persons_outlives_the_chat() {
         .expect("goal proposal routed");
     let person = driver.store.header().people;
     assert!(
-        matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))), Some(Record::Tasks(tasks::Stored::Live(row))) if matches!(&row.proposal, Some(p) if matches!(p.state, tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Person(found), .. } if found == person)))
+        matches!(driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child)))), Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) if matches!(&row.proposal, Some(p) if matches!(p.state, tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Person(found), .. } if found == person)))
     );
     driver.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(406)),
@@ -2338,18 +2418,17 @@ fn a_chats_goal_accepted_as_its_persons_outlives_the_chat() {
         .rows
         .iter()
         .find_map(|(key, value)| match (key, value) {
-            (Key::Tasks(tasks::Key::Live(number)), Record::Tasks(tasks::Stored::Live(row)))
-                if row.requester == tasks::Party::Person(person) && *number != parent.task =>
-            {
-                Some(*number)
-            }
+            (
+                Key::Core(jig_core::Key::Tasks(tasks::Key::Live(number))),
+                Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))),
+            ) if row.requester == tasks::Party::Person(person) && *number != parent.task => Some(*number),
             _ => None,
         })
         .expect("goal owned by accepting person");
     assert_ne!(goal_number, child);
     tool_call(&mut driver, &parent, 67, engine::Tool::Cancel { target: child, reason: b"chat done".as_slice().into() });
     assert!(
-        driver.store.rows.contains_key(&Key::Tasks(tasks::Key::Live(goal_number))),
+        driver.store.rows.contains_key(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(goal_number)))),
         "person's goal survives chat subtree cancellation"
     );
 }
@@ -2380,11 +2459,10 @@ fn a_proposal_routed_past_a_procedure_to_a_person_is_accepted() {
         .rows
         .iter()
         .find_map(|(key, value)| match (key, value) {
-            (Key::Tasks(tasks::Key::Live(number)), Record::Tasks(tasks::Stored::Live(row)))
-                if row.requester == tasks::Party::Task(parent) =>
-            {
-                Some(*number)
-            }
+            (
+                Key::Core(jig_core::Key::Tasks(tasks::Key::Live(number))),
+                Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))),
+            ) if row.requester == tasks::Party::Task(parent) => Some(*number),
             _ => None,
         })
         .expect("procedure delegate committed");
@@ -2416,8 +2494,8 @@ fn a_proposal_routed_past_a_procedure_to_a_person_is_accepted() {
         })
         .expect("proposal routed");
     let person = driver.store.header().people;
-    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))),
-        Some(Record::Tasks(tasks::Stored::Live(row))) if matches!(&row.proposal,
+    assert!(matches!(driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child)))),
+        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) if matches!(&row.proposal,
             Some(p) if matches!(p.state, tasks::ProposalState::Pending {
                 holder: tasks::ProposalHolder::Person(found), ..
             } if found == person)
@@ -2487,11 +2565,10 @@ fn a_recurring_procedure_uses_the_root_period_route() {
         .rows
         .iter()
         .find_map(|(key, value)| match (key, value) {
-            (Key::Tasks(tasks::Key::Live(number)), Record::Tasks(tasks::Stored::Live(row)))
-                if row.recurring.is_some() =>
-            {
-                Some(*number)
-            }
+            (
+                Key::Core(jig_core::Key::Tasks(tasks::Key::Live(number))),
+                Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))),
+            ) if row.recurring.is_some() => Some(*number),
             _ => None,
         })
         .expect("recurring task committed");
@@ -2500,16 +2577,15 @@ fn a_recurring_procedure_uses_the_root_period_route() {
         .rows
         .iter()
         .find_map(|(key, value)| match (key, value) {
-            (Key::Tasks(tasks::Key::Live(number)), Record::Tasks(tasks::Stored::Live(row)))
-                if row.requester == tasks::Party::Task(master) =>
-            {
-                Some(*number)
-            }
+            (
+                Key::Core(jig_core::Key::Tasks(tasks::Key::Live(number))),
+                Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))),
+            ) if row.requester == tasks::Party::Task(master) => Some(*number),
             _ => None,
         })
         .expect("period batch committed");
-    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))),
-        Some(Record::Tasks(tasks::Stored::Live(row))) if row.funder == tasks::Funder::Recurring {
+    assert!(matches!(driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child)))),
+        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) if row.funder == tasks::Funder::Recurring {
             project: 1, task: master, period: 1,
         }
     ));
@@ -2534,16 +2610,15 @@ fn a_recurring_procedure_uses_the_root_period_route() {
         .rows
         .iter()
         .find_map(|(key, value)| match (key, value) {
-            (Key::Tasks(tasks::Key::Live(number)), Record::Tasks(tasks::Stored::Live(row)))
-                if row.requester == tasks::Party::Task(master) && *number != child =>
-            {
-                Some(*number)
-            }
+            (
+                Key::Core(jig_core::Key::Tasks(tasks::Key::Live(number))),
+                Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))),
+            ) if row.requester == tasks::Party::Task(master) && *number != child => Some(*number),
             _ => None,
         })
         .expect("new period batch committed");
-    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(next))),
-        Some(Record::Tasks(tasks::Stored::Live(row))) if row.funder == tasks::Funder::Recurring {
+    assert!(matches!(driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(next)))),
+        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) if row.funder == tasks::Funder::Recurring {
             project: 1, task: master, period: 2,
         }
     ));
@@ -2571,9 +2646,9 @@ fn a_stalled_proposal_passes_up() {
             as_holder: false,
         },
     );
-    let first = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(leaf))).expect("leaf live");
+    let first = driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(leaf)))).expect("leaf live");
     assert!(
-        matches!(first, Record::Tasks(tasks::Stored::Live(row)) if matches!(&row.proposal, Some(p) if matches!(p.state, tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Task(task), .. } if task == middle))),
+        matches!(first, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) if matches!(&row.proposal, Some(p) if matches!(p.state, tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Task(task), .. } if task == middle))),
         "{first:?} delivered {:?}",
         driver.delivered.last()
     );
@@ -2583,9 +2658,9 @@ fn a_stalled_proposal_passes_up() {
     engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     driver.settle();
-    let second = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(leaf))).expect("leaf live");
+    let second = driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(leaf)))).expect("leaf live");
     assert!(
-        matches!(second, Record::Tasks(tasks::Stored::Live(row)) if matches!(&row.proposal, Some(p) if matches!(p.state, tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Task(task), .. } if task == root.task)))
+        matches!(second, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) if matches!(&row.proposal, Some(p) if matches!(p.state, tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Task(task), .. } if task == root.task)))
     );
 }
 
@@ -2628,9 +2703,9 @@ fn a_proposal_rejected_tells_the_proposer_why() {
             decision: engine::ProposalChoice::Reject { reason: b"different plan".as_slice().into() },
         },
     );
-    let row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("proposer live");
+    let row = driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child)))).expect("proposer live");
     assert!(
-        matches!(row, Record::Tasks(tasks::Stored::Live(task)) if task.proposal.is_none() && task.inbox.iter().any(|word| word.kind == tasks::MessageKind::ProposalDecision { proposal, accepted: false } && word.words.as_ref() == b"different plan"))
+        matches!(row, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) if task.proposal.is_none() && task.inbox.iter().any(|word| word.kind == tasks::MessageKind::ProposalDecision { proposal, accepted: false } && word.words.as_ref() == b"different plan"))
     );
     assert!(driver.delivered.iter().any(|item| matches!(item, Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::ProposalDecided { outcome: tasks::ProposalOutcome::Rejected, .. }, .. } if *call == Token::new(73))));
 }
@@ -2667,13 +2742,13 @@ fn an_amendment_reaches_a_live_run() {
             if *call == Token::new(91))));
     assert!(driver.transactions.iter().any(|writes| {
         writes.iter().any(|write| {
-            matches!(write, Write::Save(Record::Call(record))
-            if record.answer == temper_engine_domain::CallAnswer::Controlled)
+            matches!(write, Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Call(record))))
+            if record.part == jig_core::CallPart::Controlled)
         }) && writes.iter().any(|write| {
-            matches!(write, Write::Save(Record::Tasks(tasks::Stored::Live(task)))
+            matches!(write, Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))))
             if task.number == child && task.spec.words.as_ref() == b"revised" && task.numbers.budget == 20)
         }) && writes.iter().any(|write| {
-            matches!(write, Write::Save(Record::Tasks(tasks::Stored::History(row)))
+            matches!(write, Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::History(row))))
             if row.task == child && row.change == tasks::Change::Amended)
         })
     }));
@@ -2681,8 +2756,8 @@ fn an_amendment_reaches_a_live_run() {
         Delivery::Inbound { task, attempt, word, .. }
             if *task == child && *attempt == running.attempt
                 && matches!(word.kind, tasks::MessageKind::Amendment { .. }))));
-    let Some(Record::Tasks(tasks::Stored::Live(parent_row))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(parent.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(parent_row)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(parent.task))))
     else {
         panic!("parent funder")
     };
@@ -2725,8 +2800,8 @@ fn an_ancestor_amends_a_live_grandchild() {
         Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Controlled, .. }
             if *call == Token::new(903)
     )));
-    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(grandchild))),
-        Some(Record::Tasks(tasks::Stored::Live(row))) if row.spec.words.as_ref() == b"revised by ancestor"
+    assert!(matches!(driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(grandchild)))),
+        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) if row.spec.words.as_ref() == b"revised by ancestor"
     ));
     assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
         Delivery::Inbound { task, attempt, word, .. }
@@ -2776,7 +2851,8 @@ fn a_narrowing_stops_the_old_run_and_offers_the_amendment_to_the_next() {
     assert!(second.inbox.iter().any(
         |word| matches!(word.kind, tasks::MessageKind::Amendment { .. }) && word.words.as_ref() == b"smaller scope"
     ));
-    let Some(Record::Tasks(tasks::Stored::Live(task))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child))))
     else {
         panic!("amended child live")
     };
@@ -2832,7 +2908,9 @@ fn a_cancel_closes_three_levels_with_runs_live_deepest_first() {
         .iter()
         .flat_map(|writes| writes.iter())
         .filter_map(|write| match write {
-            Write::Save(Record::Tasks(tasks::Stored::Ended(task))) => Some((task.number, task.phase.clone())),
+            Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(task)))) => {
+                Some((task.number, task.phase.clone()))
+            }
             _ => None,
         })
         .collect();
@@ -2879,7 +2957,8 @@ fn release_tool_resets_a_delegates_exhausted_tries() {
     assert!(driver.delivered.iter().any(|item| matches!(item,
         Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Controlled, .. }
             if *call == Token::new(91))));
-    let Some(Record::Tasks(tasks::Stored::Live(task))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child))))
     else {
         panic!("released child remains live")
     };
@@ -2918,14 +2997,14 @@ fn introduced_siblings_can_exchange_named_words_after_the_references_commit() {
     assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
         Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Introduced, .. }
         if *call == Token::new(203))));
-    let Some(Record::Tasks(tasks::Stored::Live(left))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(numbers[0])))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(left)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(numbers[0]))))
     else {
         panic!("left task live")
     };
     assert_eq!(left.references.as_ref(), [numbers[1]]);
-    let Some(Record::Tasks(tasks::Stored::Live(right))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(numbers[1])))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(right)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(numbers[1]))))
     else {
         panic!("right task live")
     };
@@ -2960,8 +3039,8 @@ fn task_subscriptions_are_named_by_the_root_and_unsubscribe_removes_them() {
             _ => None,
         })
         .expect("subscription answered after commit");
-    let Some(Record::Tasks(tasks::Stored::Live(row))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(parent.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(parent.task))))
     else {
         panic!("subscriber live")
     };
@@ -2976,8 +3055,8 @@ fn task_subscriptions_are_named_by_the_root_and_unsubscribe_removes_them() {
     assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
         Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Unsubscribed, .. }
         if *call == Token::new(213))));
-    let Some(Record::Tasks(tasks::Stored::Live(row))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(parent.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(parent.task))))
     else {
         panic!("subscriber live")
     };
@@ -3074,10 +3153,10 @@ fn a_delegate_batch_and_its_named_answer_commit_together() {
         .expect("delegation answer after commit");
     assert!(driver.transactions.iter().any(|writes| {
         writes.iter().any(|write| {
-            matches!(write, Write::Save(Record::Call(record))
-            if record.answer == temper_engine_domain::CallAnswer::Delegated(Box::new([child])))
+            matches!(write, Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Call(record))))
+            if record.part == jig_core::CallPart::Delegated(Box::new([child])))
         }) && writes.iter().any(|write| {
-            matches!(write, Write::Save(Record::Tasks(tasks::Stored::Live(task)))
+            matches!(write, Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))))
                 if task.number == child && task.requester == tasks::Party::Task(parent.task))
         })
     }));
@@ -3170,14 +3249,20 @@ fn a_delegate_result_enters_its_requesters_inbox_with_the_end() {
     for _ in 0..30 {
         driver.advance(true);
     }
-    let parent_row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(parent.task))).expect("requester stays live");
-    let Record::Tasks(tasks::Stored::Live(parent_row)) = parent_row else { panic!("live requester row") };
+    let parent_row = driver
+        .store
+        .rows
+        .get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(parent.task))))
+        .expect("requester stays live");
+    let Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(parent_row))) = parent_row else {
+        panic!("live requester row")
+    };
     assert!(parent_row.inbox.iter().any(|message| message.from == tasks::Party::Task(child)
         && message.kind == tasks::MessageKind::Result(tasks::ResultKind::Report)
         && message.words.as_ref() == b"spike complete"));
     assert!(driver.transactions.iter().any(|writes| {
-        writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Ended(task))) if task.number == child))
-            && writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Live(task)))
+        writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(task)))) if task.number == child))
+            && writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))))
                 if task.number == parent.task && task.inbox.iter().any(|message| message.from == tasks::Party::Task(child))))
     }));
 }
@@ -3214,8 +3299,14 @@ fn a_plan_of_spikes_a_choice_and_changes_runs_in_dependency_order() {
         &third,
         tasks::TaskResult::Change { connector: 1, kind: 2, resource: 17, words: b"changed".as_slice().into() },
     );
-    let parent_row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(parent.task))).expect("parent remains live");
-    let Record::Tasks(tasks::Stored::Live(parent_row)) = parent_row else { panic!("parent row") };
+    let parent_row = driver
+        .store
+        .rows
+        .get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(parent.task))))
+        .expect("parent remains live");
+    let Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(parent_row))) = parent_row else {
+        panic!("parent row")
+    };
     assert_eq!(parent_row.inbox.len(), 3, "one durable result per delegate");
 }
 
@@ -3244,7 +3335,7 @@ fn a_batch_beyond_authority_is_refused_whole() {
             if *call == Token::new(111) && !findings.is_empty())));
     assert_eq!(driver.store.header().tasks, parent.task, "no member received an ID");
     assert!(!driver.store.rows.values().any(|row| matches!(row,
-        Record::Tasks(tasks::Stored::Live(task)) if task.requester == tasks::Party::Task(parent.task))));
+        Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) if task.requester == tasks::Party::Task(parent.task))));
 }
 
 #[test]
@@ -3263,8 +3354,12 @@ fn a_negative_verdict_starts_dependents_and_a_failure_holds_them() {
     assert!(second.sections.iter().any(|section| section.kind == engine::BriefKind::Core(brief::Core::Results)
         && matches!(&section.body, engine::BriefBody::Text(text) if text.windows(b"verdict 0".len()).any(|part| part == b"verdict 0"))));
     finish_task(&mut driver, &second, tasks::TaskResult::Failure { reason: b"blocked".as_slice().into() });
-    let row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(numbers[2]))).expect("dependent held live");
-    let Record::Tasks(tasks::Stored::Live(task)) = row else { panic!("dependent row") };
+    let row = driver
+        .store
+        .rows
+        .get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(numbers[2]))))
+        .expect("dependent held live");
+    let Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) = row else { panic!("dependent row") };
     assert!(matches!(task.phase, tasks::Phase::Held { why: tasks::Hold::Dependency(id), .. } if id == numbers[1]));
     assert!(!driver.delivered.iter().any(|item| matches!(item, Delivery::Assigned { assignment, .. }
         if assignment.task == numbers[2])));
@@ -3295,8 +3390,8 @@ fn an_ended_delegate_can_be_named_as_a_later_tasks_input() {
     second.spec.inputs = Box::new([first[0]]);
     let second = call_batch(&mut driver, &parent_again, 114, Box::new([second]));
     assert!(matches!(
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Stub(first[0]))),
-        Some(Record::Tasks(tasks::Stored::Stub(stub))) if stub.task == first[0] && stub.result.raw() == first[0]
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Stub(first[0])))),
+        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Stub(stub)))) if stub.task == first[0] && stub.result.raw() == first[0]
     ));
     park_task(&mut driver, &parent_again);
     let assigned = assigned_task(&driver, second[0]);
@@ -3338,13 +3433,13 @@ fn a_call_asked_twice_across_a_restart_is_decided_once() {
     );
     driver.settle();
     assert!(matches!(
-        driver.store.rows.get(&Key::Call(temper_engine_domain::CallKey {
+        driver.store.rows.get(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Call(temper_engine_domain::CallKey {
             task: assignment.task,
             attempt: assignment.attempt,
             completion: 2,
             position: 0,
-        })),
-        Some(Record::Call(record)) if record.answer == temper_engine_domain::CallAnswer::Unavailable
+        })))),
+        Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Call(record)))) if record.part == jig_core::CallPart::Unavailable
     ));
     assert_eq!(driver.store.header().calls, 1);
     assert!(driver.delivered.iter().any(|delivery| matches!(
@@ -3431,7 +3526,9 @@ fn calls_answer_busy_under_backpressure_and_succeed_on_retry() {
     unavailable_call(&mut driver, &assignment, 82);
     assert_eq!(driver.call_busy.as_slice(), [Token::new(82)]);
     assert_eq!(driver.store.header().calls, 0);
-    assert!(!driver.store.rows.keys().any(|key| matches!(key, Key::Call(_))));
+    assert!(
+        !driver.store.rows.keys().any(|key| matches!(key, Key::Core(jig_core::Key::Core(jig_core::CoreKey::Call(_)))))
+    );
     driver.settle();
     unavailable_call(&mut driver, &assignment, 82);
     assert!(
@@ -3456,8 +3553,8 @@ fn invalid_current_proof_stops_before_any_restored_closing_effect_or_result() {
     for corruption in 0..5 {
         let mut store = Store::new();
         store.rows = driver.store.rows.clone();
-        let key = temper_engine_domain::Key::Tasks(tasks::Key::Live(assignment.task));
-        let Some(Record::Tasks(tasks::Stored::Live(task))) = store.rows.get_mut(&key) else {
+        let key = temper_engine_domain::Key::Core(jig_core::Key::Tasks(tasks::Key::Live(assignment.task)));
+        let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) = store.rows.get_mut(&key) else {
             panic!("live task");
         };
         task.last_answer = Some(assignment.attempt);
@@ -3465,8 +3562,11 @@ fn invalid_current_proof_stops_before_any_restored_closing_effect_or_result() {
             stage: tasks::Stage::Effects,
             ending: tasks::Ending::Done(tasks::TaskResult::Report { words: REPORT.into() }),
         });
-        let proof_key = temper_engine_domain::Key::RunProof { task: assignment.task };
-        let Some(Record::RunProof(proof)) = store.rows.get_mut(&proof_key) else {
+        let proof_key =
+            temper_engine_domain::Key::Core(jig_core::Key::Core(jig_core::CoreKey::RunProof(assignment.task)));
+        let Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(proof)))) =
+            store.rows.get_mut(&proof_key)
+        else {
             panic!("proof");
         };
         proof.terminal = Some(temper_engine_domain::TerminalRecord {
@@ -3483,13 +3583,17 @@ fn invalid_current_proof_stops_before_any_restored_closing_effect_or_result() {
                 store.rows.remove(&proof_key);
             }
             1 => {
-                let Some(Record::RunProof(proof)) = store.rows.get_mut(&proof_key) else {
+                let Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(proof)))) =
+                    store.rows.get_mut(&proof_key)
+                else {
                     panic!("proof");
                 };
                 proof.turn.as_mut().expect("kept turn").cumulative = 999;
             }
             2 => {
-                let Some(Record::RunProof(proof)) = store.rows.get_mut(&proof_key) else {
+                let Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(proof)))) =
+                    store.rows.get_mut(&proof_key)
+                else {
                     panic!("proof");
                 };
                 proof.terminal = Some(temper_engine_domain::TerminalRecord {
@@ -3501,18 +3605,23 @@ fn invalid_current_proof_stops_before_any_restored_closing_effect_or_result() {
             }
             3 => {
                 let header = store.header();
-                let Some(Record::Tasks(tasks::Stored::Live(task))) = store.rows.get_mut(&key) else {
+                let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) = store.rows.get_mut(&key)
+                else {
                     panic!("task");
                 };
                 task.attempt = header.runs + 1;
                 task.last_answer = Some(task.attempt);
-                let Some(Record::RunProof(proof)) = store.rows.get_mut(&proof_key) else {
+                let Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(proof)))) =
+                    store.rows.get_mut(&proof_key)
+                else {
                     panic!("proof");
                 };
                 proof.attempt = header.runs + 1;
             }
             4 => {
-                let Some(Record::RunProof(proof)) = store.rows.get_mut(&proof_key) else {
+                let Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(proof)))) =
+                    store.rows.get_mut(&proof_key)
+                else {
                     panic!("proof");
                 };
                 proof.terminal = None;
@@ -3538,8 +3647,9 @@ fn root_restore_refuses_malformed_task_shapes() {
     for malformed in 0..3 {
         let mut store = Store::new();
         store.rows = driver.store.rows.clone();
-        let Some(Record::Tasks(tasks::Stored::Live(task))) =
-            store.rows.get_mut(&temper_engine_domain::Key::Tasks(tasks::Key::Live(assignment.task)))
+        let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) = store
+            .rows
+            .get_mut(&temper_engine_domain::Key::Core(jig_core::Key::Tasks(tasks::Key::Live(assignment.task))))
         else {
             panic!("task");
         };
@@ -3577,18 +3687,25 @@ fn bounded_invalid_typed_terminal_preserves_original_root_evidence_and_charges_o
         end: end.clone(),
     });
     driver.settle();
-    let key = temper_engine_domain::Key::Terminal { task: assignment.task, attempt: assignment.attempt };
+    let key = temper_engine_domain::Key::Core(jig_core::Key::Core(jig_core::CoreKey::Terminal {
+        task: assignment.task,
+        attempt: assignment.attempt,
+    }));
     assert_eq!(
         driver.store.rows.get(&key),
-        Some(&Record::Terminal(temper_engine_domain::TerminalRecord {
-            task: assignment.task,
-            attempt: assignment.attempt,
-            cumulative: 8,
-            end: end.clone()
-        }))
+        Some(&Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Terminal(
+            temper_engine_domain::TerminalRecord {
+                task: assignment.task,
+                attempt: assignment.attempt,
+                cumulative: 8,
+                end: end.clone()
+            }
+        ))))
     );
-    let Some(Record::Tasks(tasks::Stored::Live(task))) =
-        driver.store.rows.get(&temper_engine_domain::Key::Tasks(tasks::Key::Live(assignment.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) = driver
+        .store
+        .rows
+        .get(&temper_engine_domain::Key::Core(jig_core::Key::Tasks(tasks::Key::Live(assignment.task))))
     else {
         panic!("retryable invalid task");
     };
@@ -3617,7 +3734,13 @@ fn escalation_archive_driver() -> (Driver, temper_engine_domain::EscalationDecis
         .store
         .rows
         .values()
-        .find_map(|row| if let Record::EscalationDecision(archive) = row { Some(archive.clone()) } else { None })
+        .find_map(|row| {
+            if let Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(archive))) = row {
+                Some(archive.clone())
+            } else {
+                None
+            }
+        })
         .expect("actual completed escalation archive");
     let configured = escalation::limits();
     let mut driver = Driver::configured(world.store, config(9200), &configured);
@@ -3677,7 +3800,7 @@ fn held_waiting_store() -> Store {
     let mut world = escalation::World::new(escalation::Settings::calm(9202, Story::Reject));
     for _ in 0..300 {
         world.iterate();
-        if world.store.rows.values().any(|row| matches!(row, Record::Tasks(tasks::Stored::Live(task)) if matches!(task.escalation, tasks::Escalation::Waiting { .. }))) {
+        if world.store.rows.values().any(|row| matches!(row, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) if matches!(task.escalation, tasks::Escalation::Waiting { .. }))) {
             return Store { applied: world.store.applied, rows: world.store.rows.clone(), pending: VecDeque::new() };
         }
     }
@@ -3695,7 +3818,7 @@ fn release_rejudges_a_still_expired_deadline_and_escalates_the_new_hold() {
     let mut task_number = 0;
     let mut requester = 0;
     for row in store.rows.values_mut() {
-        if let Record::Tasks(tasks::Stored::Live(task)) = row {
+        if let Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) = row {
             task_number = task.number;
             let tasks::Party::Person(person) = task.requester else { unreachable!() };
             requester = person;
@@ -3707,7 +3830,7 @@ fn release_rejudges_a_still_expired_deadline_and_escalates_the_new_hold() {
         .rows
         .values()
         .find_map(|row| {
-            if let Record::People(people::Stored::SignIn { number, person, .. }) = row
+            if let Record::Core(jig_core::Record::People(people::Stored::SignIn { number, person, .. })) = row
                 && *person == requester
             {
                 Some(*number)
@@ -3746,9 +3869,11 @@ fn release_rejudges_a_still_expired_deadline_and_escalates_the_new_hold() {
         "{:?}",
         driver.delivered
     );
-    assert!(driver.store.rows.values().any(|row| matches!(row, Record::Tasks(tasks::Stored::Live(task))
+    assert!(driver.store.rows.values().any(
+        |row| matches!(row, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))
         if task.number == task_number && matches!(task.phase, tasks::Phase::Held { why: tasks::Hold::Deadline, .. })
-            && matches!(task.escalation, tasks::Escalation::Waiting { revision: 2, .. }))));
+            && matches!(task.escalation, tasks::Escalation::Waiting { revision: 2, .. }))
+    ));
 }
 
 #[test]
@@ -3765,7 +3890,7 @@ fn restored_waiting_rechecks_snapshot_membership_and_same_holder_changes_nothing
         .rows
         .values()
         .find_map(|row| {
-            if let Record::Tasks(tasks::Stored::Live(task)) = row
+            if let Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) = row
                 && let tasks::Party::Person(person) = task.requester
             {
                 return Some(person);
@@ -3774,7 +3899,7 @@ fn restored_waiting_rechecks_snapshot_membership_and_same_holder_changes_nothing
         })
         .expect("person chat");
     for row in store.rows.values_mut() {
-        if let Record::People(people::Stored::Roles { holdings, .. }) = row {
+        if let Record::Core(jig_core::Record::People(people::Stored::Roles { holdings, .. })) = row {
             *holdings = holdings
                 .iter()
                 .copied()
@@ -3786,7 +3911,7 @@ fn restored_waiting_rechecks_snapshot_membership_and_same_holder_changes_nothing
     let mut changed = held_driver(store);
     changed.settle();
     assert!(!changed.stopped);
-    assert!(changed.store.rows.values().any(|row| matches!(row, Record::Tasks(tasks::Stored::Live(task)) if matches!(task.escalation, tasks::Escalation::Waiting { revision: 2, holder: tasks::EscalationHolder::Role { project: 1, role: 0 }, .. }))));
+    assert!(changed.store.rows.values().any(|row| matches!(row, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) if matches!(task.escalation, tasks::Escalation::Waiting { revision: 2, holder: tasks::EscalationHolder::Role { project: 1, role: 0 }, .. }))));
     assert!(
         !changed
             .delivered
@@ -3799,7 +3924,7 @@ fn restored_waiting_rechecks_snapshot_membership_and_same_holder_changes_nothing
 fn exhausted_revision_with_changed_restored_holder_stops_without_committing() {
     let mut store = held_waiting_store();
     for row in store.rows.values_mut() {
-        if let Record::Tasks(tasks::Stored::Live(task)) = row {
+        if let Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) = row {
             task.escalation = tasks::Escalation::Waiting {
                 revision: u64::MAX,
                 holder: tasks::EscalationHolder::Person(1),
@@ -3807,7 +3932,7 @@ fn exhausted_revision_with_changed_restored_holder_stops_without_committing() {
                 since: Wall::EPOCH,
             };
         }
-        if let Record::People(people::Stored::Roles { holdings, .. }) = row {
+        if let Record::Core(jig_core::Record::People(people::Stored::Roles { holdings, .. })) = row {
             *holdings =
                 holdings.iter().copied().filter(|holding| holding.person != 1).collect::<Vec<_>>().into_boxed_slice();
         }
@@ -3835,7 +3960,13 @@ fn rejected_restore_stays_rejected_and_current_read_checks_privacy_and_both_expi
         .store
         .rows
         .values()
-        .find_map(|row| if let Record::Tasks(tasks::Stored::Live(task)) = row { Some(task.number) } else { None })
+        .find_map(|row| {
+            if let Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) = row {
+                Some(task.number)
+            } else {
+                None
+            }
+        })
         .expect("rejected held task");
     let before = world.store.rows.clone();
     let mut configured = escalation::limits();
@@ -3900,7 +4031,13 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
         .store
         .rows
         .values()
-        .find_map(|row| if let Record::EscalationDecision(archive) = row { Some(archive.clone()) } else { None })
+        .find_map(|row| {
+            if let Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(archive))) = row {
+                Some(archive.clone())
+            } else {
+                None
+            }
+        })
         .expect("actual immutable decision");
     let mut configured = escalation::limits();
     configured.people.waiters = 8;
@@ -3935,12 +4072,17 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
             });
         }
     }
-    for _ in 0..20 {
-        if driver.events.len() == 2 {
+    for _ in 0..40 {
+        if driver.events.len() == 2 && driver.events.iter().all(|event| matches!(event, engine::Event::Loaded { .. })) {
             break;
         }
-        engine::release(&mut driver.root, &driver.env, &mut driver.out);
-        driver.collect();
+        if let Some(index) = driver.events.iter().position(|event| matches!(event, engine::Event::Released(_))) {
+            let event = driver.events.remove(index).expect("released continuation");
+            driver.send(event);
+        } else {
+            engine::release(&mut driver.root, &driver.env, &mut driver.out);
+            driver.collect();
+        }
         driver.root.reclaim();
     }
     assert_eq!(driver.events.len(), 2, "one real named IO for each coalesced flight");
@@ -4045,7 +4187,13 @@ fn restored_unreported_claim_spends_no_try_without_committed_work() {
             .store
             .rows
             .values()
-            .filter_map(|row| if let Record::Tasks(tasks::Stored::Ledger(ledger)) = row { Some(*ledger) } else { None })
+            .filter_map(|row| {
+                if let Record::Core(jig_core::Record::Tasks(tasks::Stored::Ledger(ledger))) = row {
+                    Some(*ledger)
+                } else {
+                    None
+                }
+            })
             .collect();
         let mut restored = Driver::new(original.store);
         for _ in 0..200 {
@@ -4067,21 +4215,35 @@ fn restored_unreported_claim_spends_no_try_without_committed_work() {
         let writes = &restored.store.pending.front().expect("loss transaction").1;
         let canonical = writes
             .iter()
-            .find_map(|write| if let Write::Save(Record::Terminal(terminal)) = write { Some(terminal) } else { None })
+            .find_map(|write| {
+                if let Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Terminal(terminal)))) =
+                    write
+                {
+                    Some(terminal)
+                } else {
+                    None
+                }
+            })
             .expect("loss commits actual canonical terminal");
         assert_eq!(
             (canonical.task, canonical.attempt, canonical.cumulative),
             (assignment.task, assignment.attempt, cumulative),
         );
         assert_eq!(canonical.end, end);
-        assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::RunProof(proof)) if proof.task == assignment.task && proof.attempt == assignment.attempt && proof.terminal.as_ref() == Some(canonical))), "canonical terminal and proof share one commit");
-        assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Live(task))) if task.number == assignment.task && task.numbers.spent == cumulative && task.run_spent == cumulative && task.last_answer == Some(assignment.attempt) && task.tries.lost == u32::from(kept_turn))), "canonical terminal and classified try share one commit");
+        assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(proof)))) if proof.task == assignment.task && proof.attempt == assignment.attempt && proof.terminal.as_ref() == Some(canonical))), "canonical terminal and proof share one commit");
+        assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) if task.number == assignment.task && task.numbers.spent == cumulative && task.run_spent == cumulative && task.last_answer == Some(assignment.attempt) && task.tries.lost == u32::from(kept_turn))), "canonical terminal and classified try share one commit");
         restored.settle();
         let after: Vec<_> = restored
             .store
             .rows
             .values()
-            .filter_map(|row| if let Record::Tasks(tasks::Stored::Ledger(ledger)) = row { Some(*ledger) } else { None })
+            .filter_map(|row| {
+                if let Record::Core(jig_core::Record::Tasks(tasks::Stored::Ledger(ledger))) = row {
+                    Some(*ledger)
+                } else {
+                    None
+                }
+            })
             .collect();
         assert_eq!(after, ledgers, "topology loss never charges or posts funding again");
         assert!(
@@ -4132,7 +4294,7 @@ fn an_owner_makes_a_service_once_and_the_service_cannot_start_a_chat() {
         })
         .expect("service creation answered after commit");
     assert!(driver.store.rows.values().any(|row| matches!(row,
-        Record::People(people::Stored::Person { number, identity })
+        Record::Core(jig_core::Record::People(people::Stored::Person { number, identity }))
             if *number == service && identity.key.provider == 1 && identity.key.subject.as_ref() == service.to_be_bytes()
     )));
     let created = driver.store.header().people;
@@ -4187,6 +4349,7 @@ fn an_owner_makes_a_service_once_and_the_service_cannot_start_a_chat() {
 }
 
 #[test]
+#[expect(clippy::too_many_lines, reason = "one policy change, restart and later decision timeline")]
 fn a_policy_change_applies_to_later_decisions_only() {
     let configuration = administration_config(9401);
     let mut driver = Driver::configured(Store::new(), configuration, &limits());
@@ -4208,18 +4371,24 @@ fn a_policy_change_applies_to_later_decisions_only() {
         .rows
         .values()
         .find_map(|row| match row {
-            Record::Tasks(tasks::Stored::Live(task)) => Some((task.number, task.authority.budget.spend)),
-            Record::ProposalDecision(_)
-            | Record::Call(_)
-            | Record::Notes(_)
-            | Record::EscalationDecision(_)
-            | Record::Projection(_)
-            | Record::Deployment(_)
-            | Record::Turn(_)
-            | Record::RunProof(_)
-            | Record::Terminal(_)
-            | Record::Tasks(_)
-            | Record::People(_)
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) => {
+                Some((task.number, task.authority.budget.spend))
+            }
+            Record::Core(
+                jig_core::Record::Core(
+                    jig_core::CoreRecord::ProposalDecision(_)
+                    | jig_core::CoreRecord::Call(_)
+                    | jig_core::CoreRecord::EscalationDecision(_)
+                    | jig_core::CoreRecord::Projection(_)
+                    | jig_core::CoreRecord::Deployment(_)
+                    | jig_core::CoreRecord::Turn(_)
+                    | jig_core::CoreRecord::RunProof(_)
+                    | jig_core::CoreRecord::Terminal(_),
+                )
+                | jig_core::Record::Notes(_)
+                | jig_core::Record::Tasks(_)
+                | jig_core::Record::People(_),
+            )
             | Record::Forge { .. } => None,
         })
         .expect("first chat is durable");
@@ -4254,12 +4423,12 @@ fn a_policy_change_applies_to_later_decisions_only() {
         driver.advance(true);
     }
     assert!(matches!(
-        driver.store.rows.get(&Key::People(people::Key::Policy(1))),
-        Some(Record::People(people::Stored::Policy { project: 1, value })) if value.roles[0].period_spend == 50
+        driver.store.rows.get(&Key::Core(jig_core::Key::People(people::Key::Policy(1)))),
+        Some(Record::Core(jig_core::Record::People(people::Stored::Policy { project: 1, value }))) if value.roles[0].period_spend == 50
     ));
     assert!(
         driver.store.rows.values().any(|row| matches!(row,
-            Record::Tasks(tasks::Stored::Live(task)) if task.number == first.0 && task.authority.budget.spend == first.1
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) if task.number == first.0 && task.authority.budget.spend == first.1
         )),
         "existing task keeps its grant"
     );
@@ -4309,7 +4478,7 @@ fn a_policy_change_beyond_the_deployments_rules_is_refused() {
         delivery,
         Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Authority)), .. }
     )));
-    assert!(!driver.store.rows.contains_key(&Key::People(people::Key::Policy(1))));
+    assert!(!driver.store.rows.contains_key(&Key::Core(jig_core::Key::People(people::Key::Policy(1)))));
 }
 
 #[test]
@@ -4326,8 +4495,8 @@ fn a_policy_change_survives_a_restart() {
         ask: people::Ask::ChangePolicy { project: 1, change: people::PolicyChange::ProjectSpend { period_spend: 800 } },
     });
     driver.settle();
-    assert!(matches!(driver.store.rows.get(&Key::People(people::Key::Policy(1))),
-        Some(Record::People(people::Stored::Policy { value, .. })) if value.period_spend == 800));
+    assert!(matches!(driver.store.rows.get(&Key::Core(jig_core::Key::People(people::Key::Policy(1)))),
+        Some(Record::Core(jig_core::Record::People(people::Stored::Policy { value, .. }))) if value.period_spend == 800));
     let mut restarted = Driver::configured(driver.store, administration_config(9413), &limits());
     restarted.settle();
     restarted.send(engine::Event::Ask {
@@ -4360,8 +4529,8 @@ fn an_owner_changes_a_pool_once_with_a_key() {
     });
     driver.settle();
     let pool = tasks::Funder::Pool { project: 1, person, period: 1 };
-    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Ledger(pool))),
-        Some(Record::Tasks(tasks::Stored::Ledger(row))) if row.numbers.budget == 300));
+    assert!(matches!(driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Ledger(pool)))),
+        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Ledger(row)))) if row.numbers.budget == 300));
     let before = driver.transactions.len();
     driver.send(engine::Event::Ask { reply_to: ReplyTo::new(Token::new(9413)), sign_in: session, key: [44; 16], ask });
     driver.settle();
@@ -4374,10 +4543,10 @@ fn an_owner_changes_a_pool_once_with_a_key() {
     });
     driver.settle();
     let period = tasks::Funder::Period { project: 1, period: 1 };
-    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Ledger(pool))),
-        Some(Record::Tasks(tasks::Stored::Ledger(row))) if row.numbers.budget == 250));
-    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Ledger(period))),
-        Some(Record::Tasks(tasks::Stored::Ledger(row))) if row.numbers.reserved == 250));
+    assert!(matches!(driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Ledger(pool)))),
+        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Ledger(row)))) if row.numbers.budget == 250));
+    assert!(matches!(driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Ledger(period)))),
+        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Ledger(row)))) if row.numbers.reserved == 250));
 }
 
 #[test]
@@ -4426,28 +4595,32 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
         .rows
         .values()
         .filter_map(|row| match row {
-            Record::Tasks(tasks::Stored::Live(record)) => Some(record.clone()),
-            Record::Projection(_)
-            | Record::Deployment(_)
-            | Record::People(_)
-            | Record::Tasks(
-                tasks::Stored::Ended(_)
-                | tasks::Stored::Stub(_)
-                | tasks::Stored::Ledger(_)
-                | tasks::Stored::Writer(_)
-                | tasks::Stored::Pool(_)
-                | tasks::Stored::Milestone(_)
-                | tasks::Stored::History(_)
-                | tasks::Stored::PersonProposal(_),
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(record))) => Some(record.clone()),
+            Record::Core(
+                jig_core::Record::Core(
+                    jig_core::CoreRecord::Projection(_)
+                    | jig_core::CoreRecord::Deployment(_)
+                    | jig_core::CoreRecord::Turn(_)
+                    | jig_core::CoreRecord::RunProof(_)
+                    | jig_core::CoreRecord::Terminal(_)
+                    | jig_core::CoreRecord::EscalationDecision(_)
+                    | jig_core::CoreRecord::ProposalDecision(_)
+                    | jig_core::CoreRecord::Call(_),
+                )
+                | jig_core::Record::People(_)
+                | jig_core::Record::Tasks(
+                    tasks::Stored::Ended(_)
+                    | tasks::Stored::Stub(_)
+                    | tasks::Stored::Ledger(_)
+                    | tasks::Stored::Writer(_)
+                    | tasks::Stored::Pool(_)
+                    | tasks::Stored::Milestone(_)
+                    | tasks::Stored::History(_)
+                    | tasks::Stored::PersonProposal(_),
+                )
+                | jig_core::Record::Notes(_),
             )
-            | Record::Turn(_)
-            | Record::RunProof(_)
-            | Record::Terminal(_)
-            | Record::EscalationDecision(_)
-            | Record::Forge { .. }
-            | Record::ProposalDecision(_)
-            | Record::Call(_)
-            | Record::Notes(_) => None,
+            | Record::Forge { .. } => None,
         })
         .collect();
     assert_eq!(original.len(), 2, "two genuine task admissions and priced failures");
@@ -4479,10 +4652,10 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
         Some(Delivery::WebReply { reply: people::Reply::Refused(people::Refusal::Busy), .. })
     ));
     driver.settle();
-    let answer_key = temper_engine_domain::Key::People(people::Key::Answer(people::RequestKey {
+    let answer_key = temper_engine_domain::Key::Core(jig_core::Key::People(people::Key::Answer(people::RequestKey {
         person: people[1],
         key: [121; 16],
-    }));
+    })));
     assert!(!driver.store.rows.contains_key(&answer_key), "pressure remains retryable");
     driver.delivered.clear();
     driver.send(engine::Event::Ask {
@@ -4493,8 +4666,8 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
     });
     assert!(driver.delivered.is_empty(), "no role success before durability");
     let (_, writes) = driver.store.pending.front().expect("one serialized role decision");
-    assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::People(people::Stored::Roles { holdings, .. })) if holdings.as_ref() == [people::Holding { person: people[1], role: people::Role::Owner }])));
-    assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::People(people::Stored::Answer { key, outcome: people::Outcome::RolesSet { project: 1 }, .. })) if key.person == people[1] && key.key == [121;16])));
+    assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::People(people::Stored::Roles { holdings, .. }))) if holdings.as_ref() == [people::Holding { person: people[1], role: people::Role::Owner }])));
+    assert!(writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::People(people::Stored::Answer { key, outcome: people::Outcome::RolesSet { project: 1 }, .. }))) if key.person == people[1] && key.key == [121;16])));
     for record in &original {
         let mut expected = record.clone();
         let tasks::Escalation::Waiting { entry: old_entry, .. } = record.escalation else {
@@ -4502,7 +4675,9 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
         };
         assert!(
             writes.iter().any(|write| match write {
-                Write::Save(Record::Tasks(tasks::Stored::Live(actual))) if actual.number == record.number => {
+                Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(actual))))
+                    if actual.number == record.number =>
+                {
                     match actual.escalation {
                         tasks::Escalation::Waiting {
                             revision: 2,
@@ -4528,13 +4703,16 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
         !writes.iter().any(|write| matches!(
             write,
             Write::Save(
-                Record::Tasks(tasks::Stored::Ledger(_))
-                    | Record::RunProof(_)
-                    | Record::Terminal(_)
-                    | Record::Turn(_)
-                    | Record::EscalationDecision(_)
-                    | Record::Forge { .. }
-                    | Record::ProposalDecision(_)
+                Record::Core(
+                    jig_core::Record::Tasks(tasks::Stored::Ledger(_))
+                        | jig_core::Record::Core(
+                            jig_core::CoreRecord::RunProof(_)
+                                | jig_core::CoreRecord::Terminal(_)
+                                | jig_core::CoreRecord::Turn(_)
+                                | jig_core::CoreRecord::EscalationDecision(_)
+                                | jig_core::CoreRecord::ProposalDecision(_)
+                        )
+                ) | Record::Forge { .. }
             )
         )),
         "role change never rewrites economic or accepted-work evidence"
@@ -4544,8 +4722,9 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
     let mut overflow_store = Store::new();
     overflow_store.rows = before;
     overflow_store.applied = overflow_store.header().commits;
-    let Some(Record::Tasks(tasks::Stored::Live(last))) =
-        overflow_store.rows.get_mut(&temper_engine_domain::Key::Tasks(tasks::Key::Live(assignment.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(last)))) = overflow_store
+        .rows
+        .get_mut(&temper_engine_domain::Key::Core(jig_core::Key::Tasks(tasks::Key::Live(assignment.task))))
     else {
         panic!("genuine second held task");
     };
@@ -4582,8 +4761,11 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
     assert_eq!(overflow.store.rows.len(), unchanged.len() + 1, "one new keyed refusal record");
     let refused_key = people::RequestKey { person: people[1], key: [122; 16] };
     assert_eq!(
-        overflow.store.rows.get(&temper_engine_domain::Key::People(people::Key::Answer(refused_key))),
-        Some(&Record::People(people::Stored::Answer {
+        overflow
+            .store
+            .rows
+            .get(&temper_engine_domain::Key::Core(jig_core::Key::People(people::Key::Answer(refused_key)))),
+        Some(&Record::Core(jig_core::Record::People(people::Stored::Answer {
             key: refused_key,
             ask: Box::new(people::Ask::SetRoles {
                 project: 1,
@@ -4591,10 +4773,13 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
             }),
             outcome: people::Outcome::Refused(people::Refusal::Limit),
             at: overflow.env.wall,
-        })),
+        }))),
         "the only added row is the exact durable keyed refusal"
     );
-    for (key, row) in unchanged.into_iter().filter(|(key, _)| *key != temper_engine_domain::Key::Deployment) {
+    for (key, row) in unchanged
+        .into_iter()
+        .filter(|(key, _)| *key != temper_engine_domain::Key::Core(jig_core::Key::Core(jig_core::CoreKey::Deployment)))
+    {
         assert_eq!(
             overflow.store.rows.get(&key),
             Some(&row),
@@ -4836,8 +5021,9 @@ fn words_typed_while_a_run_works_reach_it_once_committed() {
         Delivery::Inbound { channel, task, attempt, word }
         if *channel == Token::new(7) && *task == assignment.task && *attempt == assignment.attempt
             && word.number == number && word.words.as_ref() == [41])));
-    let row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(assignment.task))).expect("live chat");
-    let Record::Tasks(tasks::Stored::Live(task)) = row else { panic!("task row") };
+    let row =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(assignment.task)))).expect("live chat");
+    let Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) = row else { panic!("task row") };
     assert_eq!(task.inbox.len(), 1);
     assert_eq!(task.inbox[0].number, number);
 }
@@ -4854,11 +5040,16 @@ fn a_read_fence_takes_only_what_the_run_read() {
         turn: engine::Turn { number: 1, cumulative: 1, read: Some(first), transcript: b"read one".as_slice().into() },
     });
     driver.settle();
-    let row = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(assignment.task))).expect("live chat");
-    let Record::Tasks(tasks::Stored::Live(task)) = row else { panic!("task row") };
+    let row =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(assignment.task)))).expect("live chat");
+    let Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) = row else { panic!("task row") };
     assert_eq!(task.inbox.len(), 1);
     assert_eq!(task.inbox[0].number, second);
-    assert!(driver.store.rows.contains_key(&Key::Turn { task: assignment.task, attempt: assignment.attempt, turn: 1 }));
+    assert!(driver.store.rows.contains_key(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Turn {
+        task: assignment.task,
+        attempt: assignment.attempt,
+        turn: 1
+    }))));
 }
 
 #[test]
@@ -4983,8 +5174,8 @@ fn a_run_failing_transiently_is_retried_then_held_past_its_tries() {
         saved: None,
     });
     driver.settle();
-    let Some(Record::Tasks(tasks::Stored::Live(task))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(first.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(first.task))))
     else {
         panic!("retryable task")
     };
@@ -5008,8 +5199,8 @@ fn a_run_failing_transiently_is_retried_then_held_past_its_tries() {
         saved: None,
     });
     driver.settle();
-    let Some(Record::Tasks(tasks::Stored::Live(task))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(first.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(first.task))))
     else {
         panic!("held task")
     };
@@ -5062,9 +5253,9 @@ fn a_delegate_held_past_its_tries_is_escalated_two_levels_to_a_person_released_a
         saved: None,
     });
     driver.settle();
-    let held = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(leaf))).expect("held delegate");
+    let held = driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(leaf)))).expect("held delegate");
     let revision = match held {
-        Record::Tasks(tasks::Stored::Live(row)) => match row.escalation {
+        Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) => match row.escalation {
             tasks::Escalation::Waiting { revision, holder: tasks::EscalationHolder::Task(task), .. }
                 if task == middle =>
             {
@@ -5086,9 +5277,9 @@ fn a_delegate_held_past_its_tries_is_escalated_two_levels_to_a_person_released_a
     assert!(driver.delivered.iter().any(|item| matches!(item,
         Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::EscalationDecided { outcome: tasks::EscalationOutcome::Passed { .. }, .. }, .. }
             if *call == Token::new(603))));
-    let held = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(leaf))).expect("held delegate");
+    let held = driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(leaf)))).expect("held delegate");
     let second_revision = match held {
-        Record::Tasks(tasks::Stored::Live(row)) => match row.escalation {
+        Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) => match row.escalation {
             tasks::Escalation::Waiting { revision, holder: tasks::EscalationHolder::Task(task), .. }
                 if task == root.task =>
             {
@@ -5109,9 +5300,9 @@ fn a_delegate_held_past_its_tries_is_escalated_two_levels_to_a_person_released_a
             decision: engine::EscalationChoice::Pass,
         },
     );
-    let held = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(leaf))).expect("held delegate");
+    let held = driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(leaf)))).expect("held delegate");
     let person_revision = match held {
-        Record::Tasks(tasks::Stored::Live(row)) => match row.escalation {
+        Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) => match row.escalation {
             tasks::Escalation::Waiting { revision, holder: tasks::EscalationHolder::Person(_), .. } => revision,
             ref other => panic!("third recipient must be person: {other:?}"),
         },
@@ -5150,8 +5341,8 @@ fn a_delegate_held_past_its_tries_is_escalated_two_levels_to_a_person_released_a
     });
     driver.settle();
     assert!(matches!(
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Ended(leaf))),
-        Some(Record::Tasks(tasks::Stored::Ended(_)))
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Ended(leaf)))),
+        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(_))))
     ));
 }
 
@@ -5183,7 +5374,8 @@ fn a_moved_task_is_funded_anew_by_its_new_requester() {
     driver.settle();
     assert!(driver.delivered.iter().any(|item| matches!(item,
         Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Moved { task }), .. } if *task == child)));
-    let Some(Record::Tasks(tasks::Stored::Live(moved))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(moved)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child))))
     else {
         panic!("moved task remains live")
     };
@@ -5192,13 +5384,14 @@ fn a_moved_task_is_funded_anew_by_its_new_requester() {
     assert_eq!(moved.numbers, tasks::Numbers { budget: 45, spent: 0, spent_below: 0, reserved: 10 });
     assert_eq!(moved.root, child);
     assert_eq!(moved.depth, 0);
-    let Some(Record::Tasks(tasks::Stored::Live(beneath))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(grandchild)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(beneath)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(grandchild))))
     else {
         panic!("grandchild remains live")
     };
     assert_eq!((beneath.root, beneath.depth), (child, 1));
-    let Some(Record::Tasks(tasks::Stored::Live(old))) = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(root.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(old)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(root.task))))
     else {
         panic!("old requester remains live")
     };
@@ -5218,18 +5411,18 @@ fn a_moved_task_is_funded_anew_by_its_new_requester() {
         saved: None,
     });
     driver.settle();
-    assert!(driver.store.rows.contains_key(&Key::Tasks(tasks::Key::Live(child))));
-    assert!(driver.store.rows.contains_key(&Key::Tasks(tasks::Key::Live(grandchild))));
+    assert!(driver.store.rows.contains_key(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child)))));
+    assert!(driver.store.rows.contains_key(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(grandchild)))));
 }
 
 #[test]
 fn a_move_the_new_funder_cannot_cover_is_refused_whole() {
     let (mut driver, root) = batch_fixture_with_pool(2, 1, 100);
     let child = call_batch(&mut driver, &root, 630, Box::new([report_delegate(b"child", Box::new([]))]))[0];
-    let before_parent = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(root.task))).cloned();
-    let before_child = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).cloned();
+    let before_parent = driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(root.task)))).cloned();
+    let before_child = driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child)))).cloned();
     let pool = tasks::Funder::Pool { project: 1, person: driver.store.header().people, period: 1 };
-    let before_pool = driver.store.rows.get(&Key::Tasks(tasks::Key::Ledger(pool))).cloned();
+    let before_pool = driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Ledger(pool)))).cloned();
     driver.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(631)),
         sign_in: driver.session(),
@@ -5241,9 +5434,12 @@ fn a_move_the_new_funder_cannot_cover_is_refused_whole() {
         item,
         Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Refused(people::Refusal::Authority)), .. }
     )));
-    assert_eq!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(root.task))), before_parent.as_ref());
-    assert_eq!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))), before_child.as_ref());
-    assert_eq!(driver.store.rows.get(&Key::Tasks(tasks::Key::Ledger(pool))), before_pool.as_ref());
+    assert_eq!(
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(root.task)))),
+        before_parent.as_ref()
+    );
+    assert_eq!(driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child)))), before_child.as_ref());
+    assert_eq!(driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Ledger(pool)))), before_pool.as_ref());
 }
 
 #[test]
@@ -5262,7 +5458,7 @@ fn a_move_carves_the_new_persons_pool_in_the_same_commit() {
     let session = driver.store.header().sign_ins;
     let person = driver.store.header().people;
     let pool = tasks::Funder::Pool { project: 1, person, period: 1 };
-    assert!(!driver.store.rows.contains_key(&Key::Tasks(tasks::Key::Ledger(pool))));
+    assert!(!driver.store.rows.contains_key(&Key::Core(jig_core::Key::Tasks(tasks::Key::Ledger(pool)))));
     driver.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(642)),
         sign_in: session,
@@ -5274,11 +5470,11 @@ fn a_move_carves_the_new_persons_pool_in_the_same_commit() {
         Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Moved { task }), .. } if *task == child)));
     assert!(driver.transactions.iter().any(|writes| {
         writes.iter().any(|write| matches!(write,
-            Write::Save(Record::Tasks(tasks::Stored::Live(row))) if row.number == child && row.requester == tasks::Party::Person(person)))
+            Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) if row.number == child && row.requester == tasks::Party::Person(person)))
         && writes.iter().any(|write| matches!(write,
-            Write::Save(Record::Tasks(tasks::Stored::Ledger(row))) if row.funder == pool && row.numbers.reserved == 10))
+            Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Ledger(row)))) if row.funder == pool && row.numbers.reserved == 10))
         && writes.iter().any(|write| matches!(write,
-            Write::Save(Record::People(people::Stored::Answer { outcome: people::Outcome::Moved { task }, .. })) if *task == child))
+            Write::Save(Record::Core(jig_core::Record::People(people::Stored::Answer { outcome: people::Outcome::Moved { task }, .. }))) if *task == child))
     }));
 }
 
@@ -5314,9 +5510,11 @@ fn moving_a_held_delegate_rechecks_its_escalation_recipient() {
         saved: None,
     });
     driver.settle();
-    let before = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("held child");
-    assert!(matches!(before, Record::Tasks(tasks::Stored::Live(row)) if matches!(row.escalation,
-        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Task(parent), .. } if parent == root.task)));
+    let before = driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child)))).expect("held child");
+    assert!(
+        matches!(before, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) if matches!(row.escalation,
+        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Task(parent), .. } if parent == root.task))
+    );
     driver.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(651)),
         sign_in: driver.session(),
@@ -5325,9 +5523,12 @@ fn moving_a_held_delegate_rechecks_its_escalation_recipient() {
     });
     driver.settle();
     let person = driver.store.header().people;
-    let after = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("moved held child");
-    assert!(matches!(after, Record::Tasks(tasks::Stored::Live(row)) if matches!(row.escalation,
-        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Person(found), .. } if found == person)));
+    let after =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child)))).expect("moved held child");
+    assert!(
+        matches!(after, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) if matches!(row.escalation,
+        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Person(found), .. } if found == person))
+    );
 }
 
 #[test]
@@ -5345,10 +5546,13 @@ fn moving_a_proposer_rechecks_its_decision_holder() {
             as_holder: false,
         },
     );
-    let before = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("proposer live");
-    assert!(matches!(before, Record::Tasks(tasks::Stored::Live(row)) if matches!(&row.proposal,
+    let before =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child)))).expect("proposer live");
+    assert!(
+        matches!(before, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) if matches!(&row.proposal,
         Some(proposal) if matches!(proposal.state,
-            tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Task(holder), .. } if holder == root.task))));
+            tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Task(holder), .. } if holder == root.task)))
+    );
     driver.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(662)),
         sign_in: driver.session(),
@@ -5357,8 +5561,9 @@ fn moving_a_proposer_rechecks_its_decision_holder() {
     });
     driver.settle();
     let person = driver.store.header().people;
-    let after = driver.store.rows.get(&Key::Tasks(tasks::Key::Live(child))).expect("moved proposer");
-    assert!(matches!(after, Record::Tasks(tasks::Stored::Live(row)) if matches!(&row.proposal,
+    let after =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(child)))).expect("moved proposer");
+    assert!(matches!(after, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) if matches!(&row.proposal,
         Some(proposal) if matches!(proposal.state,
             tasks::ProposalState::Pending { holder: tasks::ProposalHolder::Person(holder), .. } if holder == person))));
 }
@@ -5376,8 +5581,8 @@ fn saved_work_reaches_the_next_attempt() {
         saved: Some(Box::new([3])),
     });
     driver.settle();
-    let Some(Record::Tasks(tasks::Stored::Live(task))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(first.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(first.task))))
     else {
         panic!("parked task")
     };
@@ -5396,7 +5601,11 @@ fn a_worker_lost_mid_run_resumes_at_the_last_committed_turn() {
     let (mut driver, first) = chat_driver();
     turn(&mut driver, &first, 1, 1);
     driver.settle();
-    assert!(driver.store.rows.contains_key(&Key::Turn { task: first.task, attempt: first.attempt, turn: 1 }));
+    assert!(driver.store.rows.contains_key(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Turn {
+        task: first.task,
+        attempt: first.attempt,
+        turn: 1
+    }))));
     driver.send(engine::Event::Lost { channel: Token::new(7) });
     driver.env.now = Time::from_nanos(Duration::from_secs(6).as_nanos());
     driver.env.wall = Wall::from_nanos(Duration::from_secs(6).as_nanos());
@@ -5404,8 +5613,8 @@ fn a_worker_lost_mid_run_resumes_at_the_last_committed_turn() {
     engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     driver.settle();
-    let Some(Record::Tasks(tasks::Stored::Live(task))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(first.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(first.task))))
     else {
         panic!("lost task waits for retry")
     };
@@ -5457,8 +5666,8 @@ fn a_worker_frozen_past_its_grace_gets_no_next_attempt_until_its_sum_has_passed(
     for _ in 0..10 {
         driver.advance(true);
     }
-    let Some(Record::Tasks(tasks::Stored::Live(task))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(first.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(first.task))))
     else {
         panic!("held claim")
     };
@@ -5470,8 +5679,8 @@ fn a_worker_frozen_past_its_grace_gets_no_next_attempt_until_its_sum_has_passed(
     engine::release(&mut driver.root, &driver.env, &mut driver.out);
     driver.collect();
     driver.settle();
-    let Some(Record::Tasks(tasks::Stored::Live(task))) =
-        driver.store.rows.get(&Key::Tasks(tasks::Key::Live(first.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) =
+        driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(first.task))))
     else {
         panic!("retryable lost task")
     };
@@ -5523,7 +5732,10 @@ fn typed_unavailable(driver: &mut Driver, assignment: &engine::Assignment, name:
     assert_eq!(raw_name.as_ref(), name);
     assert_eq!(tool.as_ref(), b"unknown-tool");
     assert_eq!(answer, temper_engine_domain::CallAnswer::Unavailable);
-    assert!(driver.store.rows.contains_key(&Key::Call(key)), "render follows its durable decision");
+    assert!(
+        driver.store.rows.contains_key(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Call(key)))),
+        "render follows its durable decision"
+    );
     driver.send(engine::Event::RenderedHostCall {
         to,
         answer: jig_core::SettledAnswer::Delivery {
@@ -5565,7 +5777,7 @@ fn typed_calls_keep_their_opaque_answers_for_resumed_assignments() {
     assert_ne!(settled.serial, 0);
     let key = temper_engine_domain::CallKey { task: first.task, attempt: first.attempt, completion: 2, position: 0 };
     assert!(
-        matches!(driver.store.rows.get(&Key::Call(key)), Some(Record::Call(record)) if record.settled.as_ref()==Some(&settled))
+        matches!(driver.store.rows.get(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Call(key)))), Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Call(record)))) if record.settled.as_ref()==Some(&settled))
     );
     driver.send(engine::Event::Answer {
         pushed: Box::new([]),
@@ -5612,7 +5824,7 @@ fn typed_messages_keep_their_label_and_whole_words() {
     });
     driver.settle();
     assert!(
-        matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(assignment.task))), Some(Record::Tasks(tasks::Stored::Live(task))) if task.inbox.is_empty())
+        matches!(driver.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(assignment.task)))), Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) if task.inbox.is_empty())
     );
 }
 
@@ -5667,8 +5879,24 @@ fn restart_refuses_live_tasks_or_claims_past_lowered_limits_without_dropping_the
     for _ in 0..100 {
         driver.advance(true);
     }
-    assert_eq!(driver.store.rows.keys().filter(|key| matches!(key, Key::Tasks(tasks::Key::Live(_)))).count(), 2);
-    assert_eq!(driver.store.rows.values().filter(|row| matches!(row, Record::RunProof(_))).count(), 2);
+    assert_eq!(
+        driver
+            .store
+            .rows
+            .keys()
+            .filter(|key| matches!(key, Key::Core(jig_core::Key::Tasks(tasks::Key::Live(_)))))
+            .count(),
+        2
+    );
+    assert_eq!(
+        driver
+            .store
+            .rows
+            .values()
+            .filter(|row| matches!(row, Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(_)))))
+            .count(),
+        2
+    );
     let before = driver.store.rows.clone();
     let mut task_bounds = limits();
     task_bounds.tasks.tasks = 1;

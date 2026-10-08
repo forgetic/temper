@@ -1,5 +1,5 @@
 use crate::decision::{
-    Counters, Decision, Delivery, Journal as SkeinJournal, Limits, Output, accept as accept_decision,
+    Counters, Decision, Delivery, Journal as SkeinJournal, JournalOutput as Output, Limits, accept as accept_decision,
     committed as mark_committed, fresh as fresh_number, journal_limits, resume as release_ready,
     takes as takes_decision, uncommitted as mark_uncommitted,
 };
@@ -84,7 +84,7 @@ fn bytes(len: u32) -> Box<[u8]> {
 }
 
 fn turn(number: u32, len: u32) -> Write {
-    Write::Save(Record::Turn(TurnRecord {
+    Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(TurnRecord {
         task: 1,
         attempt: 1,
         turn: number,
@@ -92,7 +92,7 @@ fn turn(number: u32, len: u32) -> Write {
         read: Some(u64::from(number)),
         at: Wall::from_nanos(17),
         transcript: bytes(len),
-    }))
+    }))))
 }
 
 fn ack(number: u32) -> Delivery {
@@ -131,7 +131,11 @@ fn a_first_start_commits_its_deployment_before_releasing_a_delivery() {
     assert_eq!(number, 1);
     assert_eq!(
         writes.as_ref(),
-        &[Write::Save(Record::Deployment(Deployment { id: [37; 16], commits: 1, ..DEPLOYMENT }))]
+        &[Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(Deployment {
+            id: [37; 16],
+            commits: 1,
+            ..DEPLOYMENT
+        }))))]
     );
     resume(&mut j, &mut out);
     assert!(out.is_empty());
@@ -148,7 +152,13 @@ fn a_store_answer_makes_outputs_ready_without_draining_them() {
     let (number, writes) = commit(&mut out);
     assert_eq!(number, 1);
     assert_eq!(writes.len(), 2);
-    assert_eq!(writes[0], Write::Save(Record::Deployment(Deployment { commits: 1, ..DEPLOYMENT })));
+    assert_eq!(
+        writes[0],
+        Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(Deployment {
+            commits: 1,
+            ..DEPLOYMENT
+        }))))
+    );
     resume(&mut j, &mut out);
     assert!(out.is_empty());
     committed(&mut j, number);
@@ -255,7 +265,7 @@ fn fresh_numbers_and_unused_gaps_are_durable_in_the_decisions_header() {
     accept(&mut j, &LIMITS, Decision::new(&LIMITS), &mut out).unwrap();
     let (number, writes) = commit(&mut out);
     assert_eq!(number, 1);
-    let Write::Save(Record::Deployment(header)) = writes[0] else {
+    let Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(header)))) = writes[0] else {
         panic!("header");
     };
     assert_eq!(header.tasks, 2);
@@ -271,7 +281,11 @@ fn same_key_saves_and_erases_collapse_to_the_last_write_before_commit() {
     let mut d = Decision::new(&LIMITS);
     d.write(&LIMITS, turn(1, 2)).unwrap();
     d.write(&LIMITS, turn(2, 3)).unwrap();
-    d.write(&LIMITS, Write::Erase(Key::Turn { task: 1, attempt: 1, turn: 1 })).unwrap();
+    d.write(
+        &LIMITS,
+        Write::Erase(Key::Core(jig_core::Key::Core(jig_core::CoreKey::Turn { task: 1, attempt: 1, turn: 1 }))),
+    )
+    .unwrap();
     d.write(&LIMITS, turn(1, 4)).unwrap();
     accept(&mut j, &LIMITS, d, &mut out).unwrap();
     let (_, writes) = commit(&mut out);
@@ -291,7 +305,7 @@ fn rejected_payloads_are_returned_without_replacing_admitted_ownership() {
         panic!("result");
     };
     assert_eq!(words.len(), 33);
-    assert!(d.write(&LIMITS, Write::Erase(Key::Deployment)).is_err());
+    assert!(d.write(&LIMITS, Write::Erase(Key::Core(jig_core::Key::Core(jig_core::CoreKey::Deployment)))).is_err());
     let mut j = Journal::new(DEPLOYMENT, &LIMITS);
     let mut out = Queue::with_capacity(1);
     accept(&mut j, &LIMITS, d, &mut out).unwrap();
@@ -340,17 +354,17 @@ fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention(
         run_bytes: 1,
     };
     let mut decision = Decision::new(&limits);
-    let row = Record::People(people::Stored::Person {
+    let row = Record::Core(jig_core::Record::People(people::Stored::Person {
         number: 1,
         identity: people::Identity {
             key: people::IdentityKey { provider: 0, subject: 1_u64.to_be_bytes().into() },
             login: b"abc".as_slice().into(),
             name: b"de".as_slice().into(),
         },
-    });
+    }));
     assert_eq!(crate::record_bytes(&row), Some(13));
     assert!(decision.write(&limits, Write::Save(row)).is_err());
-    let roster_answer = Record::People(people::Stored::Answer {
+    let roster_answer = Record::Core(jig_core::Record::People(people::Stored::Answer {
         key: people::RequestKey { person: 1, key: [1; 16] },
         ask: Box::new(people::Ask::SetRoles {
             project: 1,
@@ -358,7 +372,7 @@ fn deep_child_rows_and_arbitrary_internal_payloads_are_refused_before_retention(
         }),
         outcome: people::Outcome::RolesSet { project: 1 },
         at: Wall::EPOCH,
-    });
+    }));
     assert_eq!(
         crate::record_bytes(&roster_answer),
         Some(u64::try_from(size_of::<people::Holding>()).expect("holding slot"))

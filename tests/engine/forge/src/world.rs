@@ -36,6 +36,7 @@ pub const LIMITS: top::Limits = top::Limits {
     holds: 8,
     subscriptions: 8,
     entries: 8,
+    named_calls: 16,
     changes: 8,
     issues: 8,
     resources_per_task: 4,
@@ -409,13 +410,13 @@ impl World {
                     let mut kept = Queue::with_capacity(top::max_out(&self.env.limits));
                     top::step(&mut self.top, &self.env, top::Event::KeepProjection { row, entry }, &mut kept);
                     for _ in 0..kept.len() {
-                        let top::Request::Save { record } = kept.pop().expect("projection keep count") else {
+                        let top::Request::Save { record, .. } = kept.pop().expect("projection keep count") else {
                             panic!("admitted projection saves only")
                         };
                         self.stored.insert(key(&record), record).expect("world store capacity");
                     }
                 }
-                top::Request::Save { record } => {
+                top::Request::Save { record, .. } => {
                     let key = key(&record);
                     self.stored.insert(key, record).expect("world store capacity");
                 }
@@ -443,6 +444,7 @@ impl World {
                 | top::Request::Released { .. }
                 | top::Request::Retained { .. }
                 | top::Request::ReleaseFailed { .. }
+                | top::Request::WakeProcedure { .. }
                 | top::Request::ProjectAfter { .. }
                 | top::Request::ProjectionSettled { .. }
                 | top::Request::GoalTopic { .. }
@@ -511,6 +513,7 @@ impl World {
 
 fn key(row: &top::Stored) -> top::Key {
     match row {
+        top::Stored::Call { key, .. } => top::Key::Call(*key),
         top::Stored::Repository(row) => top::Key::Repository(row.provider),
         top::Stored::Hold(row) => top::Key::Hold(row.name.clone()),
         top::Stored::Names { task, .. } => top::Key::Names(*task),

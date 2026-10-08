@@ -15,8 +15,15 @@ fn run(seed: u64) -> (String, &'static str) {
         Limits { loads: 1, rows: 4, bytes: keep * (slot + 4), reply_bytes: 4 * (slot + 4), transcript_bytes: 4 };
     let mut domain = Loads::new(&limits);
     let mut out = Queue::with_capacity(1);
-    let owner = loads::begin(&mut domain, Token::new(17), Range::Turns { task: 1, attempt: 1 }, None, 4, &mut out)
-        .expect("slot");
+    let owner = loads::begin(
+        &mut domain,
+        Token::new(17),
+        Range::Core(temper_engine_domain::CoreRange::Turns { task: 1, attempt: 1 }),
+        None,
+        4,
+        &mut out,
+    )
+    .expect("slot");
     let mut trace = format!("{:?}", out.pop().expect("IO"));
     let ending;
     match seed % 4 {
@@ -34,7 +41,7 @@ fn run(seed: u64) -> (String, &'static str) {
         2 | 3 => {
             let rows: Box<[Record]> = (1..=4)
                 .map(|turn| {
-                    Record::Turn(TurnRecord {
+                    Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(TurnRecord {
                         task: 1,
                         attempt: 1,
                         turn,
@@ -42,7 +49,7 @@ fn run(seed: u64) -> (String, &'static str) {
                         read: None,
                         at: Wall::EPOCH,
                         transcript: vec![b'x'; 4].into_boxed_slice(),
-                    })
+                    })))
                 })
                 .collect();
             loads::loaded(&mut domain, owner, rows, None, &mut out);
@@ -54,7 +61,7 @@ fn run(seed: u64) -> (String, &'static str) {
             assert_eq!(waiter, Token::new(17));
             assert_eq!(rows.len(), usize::try_from(keep).expect("small count"));
             for (at, row) in rows.iter().enumerate() {
-                let Record::Turn(row) = row else {
+                let Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(row))) = row else {
                     panic!("turn");
                 };
                 assert_eq!(row.turn, u32::try_from(at + 1).expect("small turn"));
@@ -65,7 +72,10 @@ fn run(seed: u64) -> (String, &'static str) {
                 assert_eq!(cut, None);
                 ending = "whole";
             } else {
-                assert_eq!(next, Some(Key::Turn { task: 1, attempt: 1, turn: keep }));
+                assert_eq!(
+                    next,
+                    Some(Key::Core(jig_core::Key::Core(jig_core::CoreKey::Turn { task: 1, attempt: 1, turn: keep })))
+                );
                 assert_eq!(cut, Some(loads::Cut { rows: 4 - keep, bytes: u64::from((4 - keep) * (slot + 4)) }));
                 ending = "cut";
             }
@@ -75,7 +85,15 @@ fn run(seed: u64) -> (String, &'static str) {
     loads::unloaded(&mut domain, owner, &mut out);
     assert!(out.is_empty(), "duplicate terminal ignored");
     loads::reclaim(&mut domain);
-    let new = loads::begin(&mut domain, Token::new(18), Range::Deployment, None, 1, &mut out).expect("next generation");
+    let new = loads::begin(
+        &mut domain,
+        Token::new(18),
+        Range::Core(temper_engine_domain::CoreRange::Deployment),
+        None,
+        1,
+        &mut out,
+    )
+    .expect("next generation");
     assert_ne!(new, owner);
     drop(out.pop());
     loads::loaded(&mut domain, owner, Box::new([]), None, &mut out);

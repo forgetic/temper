@@ -17,6 +17,7 @@ pub mod boundary;
 mod brief;
 mod capabilities;
 mod domain;
+mod gates;
 mod held;
 pub mod items;
 mod judge;
@@ -27,6 +28,7 @@ mod tests;
 mod topics;
 pub use boundary::*;
 pub use domain::{Domain, fire, max_out, resume, step};
+pub use gates::{GateCandidate, GateLast, GatePattern, GatePolicy, GateTemplate};
 pub use judge::{Criterion, Freshness as JudgeFreshness, Judges, Reviewer, Verdict as JudgeVerdict};
 pub use limits::{Limits, worst_case};
 /// Connector-owned access to one exact effect on an adopted resource.
@@ -175,6 +177,7 @@ pub fn effect_access(repository: &Repository, what: &What, kind: u16) -> Access 
 pub fn stored_key(row: &Stored) -> Key {
     use temper_engine_domain_forge_client as client;
     match row {
+        Stored::Call { key, .. } => Key::Call(*key),
         Stored::Repository(row) => Key::Repository(row.provider),
         Stored::Hold(row) => Key::Hold(row.name.clone()),
         Stored::Names { task, .. } => Key::Names(*task),
@@ -257,6 +260,13 @@ pub fn stored_bytes(record: &Stored) -> Option<u64> {
         }
     }
     match record {
+        Stored::Call { answer, .. } => match answer {
+            CallPayload::Effect { .. } | CallPayload::Refused(_) => Some(0),
+            CallPayload::Read(answer) => match answer.as_ref() {
+                Ok(answer) => client::answer_bytes_unbounded(answer),
+                Err(_) => Some(0),
+            },
+        },
         Stored::Repository(row) => {
             let mut held = bytes(&row.host)?
                 .checked_add(bytes(&row.owner)?)?

@@ -11,6 +11,7 @@
 //! admission returns ownership, successful admission may emit one commit, and
 //! failed storage emits one stop notice. No helper waits for its own effect.
 use crate::{Key, Record, Write};
+use JournalOutput as Output;
 use alloc::boxed::Box;
 use core::mem::size_of;
 pub use jig_core::{Counters, fresh};
@@ -266,9 +267,9 @@ impl InboxViewEntry {
 /// Journal to its root caller: at most one value per entry point; the caller
 /// translates it to store IO or an outward/internal delivery (domain/engine.md, 5).
 #[derive(PartialEq, Eq, Debug)]
-pub enum Output {
+pub enum JournalOutput {
     /// Output that decides nothing, admitted through the journal's door.
-    Now(crate::engine::Request),
+    Now(crate::boundary::Request),
     /// Ordered atomic store transaction, ended by `committed` or `uncommitted` using the issued
     /// number.
     Commit {
@@ -294,11 +295,11 @@ pub struct Decision {
     writes: List<Write>,
     deliveries: Queue<Delivery>,
     overrun: bool,
-    batch: Option<SkeinDecision<Write, Output>>,
+    batch: Option<SkeinDecision<Write, crate::Output>>,
 }
 
 /// skein-lib's bounded commit barrier, over the root's wrapped writes and outputs.
-pub type Journal = SkeinJournal<Write, Output>;
+pub type Journal = SkeinJournal<Write, crate::Output>;
 
 impl Decision {
     /// Test the unused slots while exercising journal admission bounds.
@@ -330,7 +331,7 @@ impl Decision {
 
     /// Reserve a route's checked write and held-output counts before any child changes.
     pub(crate) fn reserve_room(journal: &mut Journal, limits: &Limits, reserved: JournalRoom) -> Option<Decision> {
-        if reserved.writes == 0 || reserved.writes > limits.writes || reserved.held > limits.deliveries {
+        if reserved.writes > limits.writes || reserved.held > limits.deliveries {
             return None;
         }
         let batch = journal.decision(&reserved)?;
@@ -348,26 +349,36 @@ impl Decision {
     pub fn write(&mut self, limits: &Limits, write: Write) -> Result<(), Write> {
         assert!(*limits == self.limits, "decision uses its configured limits");
         let within = match &write {
-            Write::Save(Record::Deployment(_))
-            | Write::Erase(Key::Deployment | Key::EscalationDecision { .. } | Key::ProposalDecision(_)) => false,
-            Write::Save(Record::Turn(row)) => {
+            Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(_))))
+            | Write::Erase(Key::Core(jig_core::Key::Core(
+                jig_core::CoreKey::Deployment
+                | jig_core::CoreKey::EscalationDecision { .. }
+                | jig_core::CoreKey::ProposalDecision(_),
+            ))) => false,
+            Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(row)))) => {
                 row.task != 0
                     && row.attempt != 0
                     && row.turn != 0
                     && row.transcript.len() <= usize::try_from(limits.transcript_bytes).expect("u32 fits usize")
             }
-            Write::Save(Record::Call(row)) => row.key.task != 0 && row.key.attempt != 0 && row.key.completion != 0,
+            Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Call(row)))) => {
+                row.key.task != 0 && row.key.attempt != 0 && row.key.completion != 0
+            }
             Write::Erase(
-                Key::Call(_)
-                | Key::Turn { .. }
-                | Key::RunProof { .. }
-                | Key::Terminal { .. }
-                | Key::Tasks(_)
-                | Key::People(_)
-                | Key::Forge(_)
-                | Key::Projection(_),
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::Turn { .. }
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::Projection(_),
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::People(_),
+                )
+                | Key::Forge(_),
             ) => true,
-            Write::Save(Record::EscalationDecision(row)) => {
+            Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(row)))) => {
                 row.task != 0
                     && row.revision != 0
                     && row.by != 0
@@ -383,16 +394,22 @@ impl Decision {
                         }
                     }
             }
-            Write::Save(Record::ProposalDecision(row)) => row.project != 0 && row.proposal != 0 && row.by != 0,
-            Write::Erase(Key::Notes(_))
+            Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::ProposalDecision(row)))) => {
+                row.project != 0 && row.proposal != 0 && row.by != 0
+            }
+            Write::Erase(Key::Core(jig_core::Key::Notes(_)))
             | Write::Save(
-                Record::Tasks(_)
-                | Record::Projection(_)
-                | Record::People(_)
-                | Record::Notes(_)
-                | Record::Forge { .. }
-                | Record::RunProof(_)
-                | Record::Terminal(_),
+                Record::Core(
+                    jig_core::Record::Tasks(_)
+                    | jig_core::Record::Core(
+                        jig_core::CoreRecord::Projection(_)
+                        | jig_core::CoreRecord::RunProof(_)
+                        | jig_core::CoreRecord::Terminal(_),
+                    )
+                    | jig_core::Record::People(_)
+                    | jig_core::Record::Notes(_),
+                )
+                | Record::Forge { .. },
             ) => match crate::store::owned_bytes(&write) {
                 Some(bytes) => bytes <= u64::from(limits.transcript_bytes),
                 None => false,
@@ -401,6 +418,13 @@ impl Decision {
         if !within {
             return Err(write);
         }
+        self.carry_write(limits, write)
+    }
+
+    /// Carry the owner's wrapped write without inspecting its value.
+    #[expect(clippy::result_large_err, reason = "a refused write returns ownership")]
+    pub(crate) fn carry_write(&mut self, limits: &Limits, write: Write) -> Result<(), Write> {
+        assert!(*limits == self.limits, "decision uses configured limits");
         let key = write.key();
         for at in 0..self.writes.len() {
             let previous = self.writes.get_mut(at).expect("bounded write index");
@@ -542,6 +566,13 @@ impl Decision {
         if !within {
             return Err(delivery);
         }
+        self.carry_delivery(limits, delivery)
+    }
+
+    /// Carry the owner's assembled output without inspecting its value.
+    #[expect(clippy::result_large_err, reason = "a refused assembled output returns ownership")]
+    pub(crate) fn carry_delivery(&mut self, limits: &Limits, delivery: Delivery) -> Result<(), Delivery> {
+        assert!(*limits == self.limits, "decision uses configured limits");
         if self.deliveries.len() >= self.reserved.held {
             self.overrun = true;
             return Err(delivery);
@@ -589,7 +620,19 @@ pub fn accept_pending(
     journal: &mut Journal,
     counters: &mut Counters,
     limits: &Limits,
+    decision: Decision,
+) -> Result<(), Decision> {
+    accept_routed(journal, counters, limits, decision, true)
+}
+
+/// The cold load reads the durable header before numbering another commit.
+#[expect(clippy::result_large_err, reason = "refused root decisions return all owned writes and outputs")]
+pub(crate) fn accept_routed(
+    journal: &mut Journal,
+    counters: &mut Counters,
+    limits: &Limits,
     mut decision: Decision,
+    persist_header: bool,
 ) -> Result<(), Decision> {
     if decision.overrun {
         let mut batch = match decision.batch.take() {
@@ -599,7 +642,7 @@ pub fn accept_pending(
                 .expect("overrun follows an admitted root decision"),
         };
         for _ in 0..=limits.writes {
-            if batch.write(Write::Erase(Key::Deployment)).is_err() {
+            if batch.write(Write::Erase(Key::Core(jig_core::Key::Core(jig_core::CoreKey::Deployment)))).is_err() {
                 break;
             }
         }
@@ -613,13 +656,17 @@ pub fn accept_pending(
     {
         return Err(decision);
     }
-    let writing = counters.dirty() || !decision.writes.is_empty();
+    let writing = (persist_header && counters.dirty()) || !decision.writes.is_empty();
     let mut batch = match decision.batch.take() {
         Some(batch) => batch,
         None => journal.decision(&room(limits)).expect("preflight reserved the whole decision"),
     };
     if writing {
-        batch.write(Write::Save(Record::Deployment(counters.next_commit()))).expect("header slot reserved");
+        batch
+            .write(Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(
+                counters.next_commit(),
+            )))))
+            .expect("header slot reserved");
         for at in 0..decision.writes.len() {
             let source = decision.writes.get_mut(at).expect("admitted write index");
             let key = source.key();
@@ -631,7 +678,7 @@ pub fn accept_pending(
     }
     for _ in 0..decision.deliveries.len() {
         let delivery = decision.deliveries.pop().expect("admitted delivery count");
-        batch.hold(Output::Deliver(delivery)).expect("admitted held output");
+        batch.hold(crate::boundary::delivery_output(delivery)).expect("admitted held output");
     }
     journal.accept(batch);
     Ok(())
@@ -677,7 +724,30 @@ pub fn committed(journal: &mut Journal, number: u64) {
 /// to this seam.
 pub fn resume(journal: &mut Journal, out: &mut Queue<Output>) {
     assert!(out.room() >= 1, "one root ready output reserved");
-    let _released: skein_lib::Released = journal.release(out);
+    let mut released = Queue::with_capacity(1);
+    let _released: skein_lib::Released = journal.release(&mut released);
+    if let Some(request) = released.pop() {
+        match request {
+            crate::Output::Worker(crate::WorkerRequest::Deliver(delivery))
+            | crate::Output::Party(crate::PartyRequest::Deliver(delivery))
+            | crate::Output::ToChild(crate::Released(delivery)) => out.push(Output::Deliver(delivery)),
+            crate::Output::Forge { call, repository, op } => {
+                out.push(Output::Deliver(Delivery::ForgeCall { call, repository, op }));
+            }
+            request @ (crate::Output::Worker(
+                crate::WorkerRequest::Host(_)
+                | crate::WorkerRequest::CallBusy { .. }
+                | crate::WorkerRequest::TurnBusy { .. }
+                | crate::WorkerRequest::AnswerBusy { .. },
+            )
+            | crate::Output::Party(
+                crate::PartyRequest::View(_) | crate::PartyRequest::WatchRefused { .. },
+            )
+            | crate::Output::Store(_)
+            | crate::Output::Account(_)
+            | crate::Output::Stop) => out.push(Output::Now(request)),
+        }
+    }
 }
 
 /// Store to journal: an issued commit failed. Reserve one output; the first failure beyond durable
@@ -747,7 +817,7 @@ fn fleet_delivery_within(event: &jig_core_fleet::Event) -> bool {
 }
 
 fn assignment_within(assignment: &crate::engine::Assignment, limits: &Limits) -> bool {
-    let charter_within = match crate::engine::run_charter_bytes(&assignment.run) {
+    let charter_within = match crate::limits::run_charter_bytes(&assignment.run) {
         Some(bytes) => bytes <= u64::from(limits.run_bytes),
         None => false,
     };

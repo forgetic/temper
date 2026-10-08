@@ -104,6 +104,7 @@ pub struct Domain {
     pulls: Map<Name, PullState>,
     ci: Map<(client::api::Repository, client::api::Commit), CiState>,
     entries: Map<u64, client::Entry>,
+    named_calls: Map<crate::NamedCall, crate::CallPayload>,
     proposed_effects: Map<u64, crate::ProposedEffect>,
     pub(crate) landed: Map<client::api::Commit, u64>,
     landings: Map<Token, PendingLanding>,
@@ -126,10 +127,130 @@ pub struct Domain {
     pub(crate) brief_pending: Map<Token, held::Pending>,
     pub(crate) brief_held: Map<Token, held::Held>,
     judges: crate::Judges,
+    gate_policy: crate::GatePolicy,
     judge_criteria: u32,
+    projection_due: Map<u64, skein_lib::Wall>,
+    change_due: Map<u64, skein_lib::Wall>,
+    procedure_wakes: Map<u64, bool>,
 }
 
 impl Domain {
+    pub fn gate_policy(&mut self, policy: crate::GatePolicy, limits: &Limits) -> bool {
+        if !crate::gates::within(&policy, limits) {
+            return false;
+        }
+        self.gate_policy = policy;
+        true
+    }
+    #[must_use]
+    pub fn gate_candidates(
+        &self,
+        limits: &Limits,
+        project: u32,
+        name: &[Box<[u8]>],
+    ) -> Option<Box<[crate::GateCandidate]>> {
+        crate::gates::candidates(&self.gate_policy, limits, project, name)
+    }
+    #[must_use]
+    pub fn configured_gates(
+        &self,
+        limits: &Limits,
+        repository: &Repository,
+        candidates: &[crate::GateCandidate],
+        required: &[bool],
+    ) -> Option<Box<[change::Gate]>> {
+        crate::gates::selected(limits, repository, candidates, required)
+    }
+
+    /// Read the connector's retained part for the exact supplied call identity.
+    #[must_use]
+    pub fn named_answer(&self, key: crate::NamedCall) -> Option<crate::CallPayload> {
+        self.named_calls.get(&key).cloned()
+    }
+
+    /// Retain a bounded payload after the caller admits the named decision.
+    pub fn keep_named_answer(
+        &mut self,
+        limits: &Limits,
+        key: crate::NamedCall,
+        answer: crate::CallPayload,
+    ) -> Result<Option<crate::CallPayload>, crate::CallPayload> {
+        if key.task == 0 || key.attempt == 0 {
+            return Err(answer);
+        }
+        let within = match &answer {
+            crate::CallPayload::Read(result) => match &**result {
+                Ok(value) => match client::answer_bytes(value, &limits.client) {
+                    Some(bytes) => bytes <= u64::from(limits.client.answer_bytes),
+                    None => false,
+                },
+                Err(_) => true,
+            },
+            crate::CallPayload::Effect { .. } | crate::CallPayload::Refused(_) => true,
+        };
+        if !within {
+            return Err(answer);
+        }
+        match self.named_calls.insert(key, answer) {
+            Ok(previous) => Ok(previous),
+            Err((_, answer)) => Err(answer),
+        }
+    }
+
+    /// Drop the payload when its owner retires the named call.
+    pub fn forget_named_answer(&mut self, key: crate::NamedCall) -> Option<crate::CallPayload> {
+        self.named_calls.remove(&key)
+    }
+
+    /// Identify the named effect whose connector outcome changed.
+    #[must_use]
+    pub fn named_effect(&self, entry: u64) -> Option<crate::NamedCall> {
+        for (key, answer) in &self.named_calls {
+            match answer {
+                crate::CallPayload::Effect { entry: number, .. } if *number == entry => return Some(*key),
+                crate::CallPayload::Effect { .. } | crate::CallPayload::Read(_) | crate::CallPayload::Refused(_) => {}
+            }
+        }
+        None
+    }
+
+    /// Update the connector's own part when its client reports an effect outcome.
+    pub fn named_outcome(&mut self, entry: u64, outcome: client::Outcome) {
+        if outcome == client::Outcome::Uncertain {
+            return;
+        }
+        let Some(key) = self.named_effect(entry) else { return };
+        let Some(answer) = self.named_calls.get_mut(&key) else { unreachable!("named effect owner") };
+        match answer {
+            crate::CallPayload::Effect { outcome: kept, .. } => *kept = Some(outcome),
+            crate::CallPayload::Read(_) | crate::CallPayload::Refused(_) => unreachable!("effect payload"),
+        }
+    }
+
+    /// Keep the connector's retry deadline; the root carries no timer policy.
+    pub fn wait_change(&mut self, env: &Env<Limits>, task: u64, until: Option<skein_lib::Wall>) {
+        let until = match until {
+            Some(until) => until,
+            None => skein_lib::Wall::from_nanos(env.wall.as_nanos().saturating_add(env.limits.queue_window.as_nanos())),
+        };
+        self.change_due.insert(task, until).expect("one bounded change deadline");
+    }
+
+    /// A new offered procedure step replaces its previous waiting deadline.
+    pub fn offered_change(&mut self, task: u64) {
+        self.change_due.remove(&task);
+    }
+
+    /// The issue procedure owns the interval reported by its policy child.
+    pub fn projection_after(&mut self, goal: u64, when: skein_lib::Wall) {
+        self.projection_due.insert(goal, when).expect("one bounded projection deadline");
+    }
+
+    /// The core has finished the closing projection handshake.
+    pub fn projection_settled(&mut self, goal: u64) {
+        self.projection_due.remove(&goal);
+    }
+
     /// Available outbox room including the root's staged descriptions.
     #[must_use]
     pub fn effect_room(&self, limits: &Limits, staged: u32) -> bool {
@@ -174,6 +295,7 @@ impl Domain {
             pulls: Map::with_capacity(l.client.resources),
             ci: Map::with_capacity(l.subscriptions),
             entries: Map::with_capacity(l.entries),
+            named_calls: Map::with_capacity(l.named_calls),
             proposed_effects: Map::with_capacity(l.tasks),
             landed: Map::with_capacity(l.landings),
             landings: Map::with_capacity(l.landings),
@@ -196,7 +318,11 @@ impl Domain {
             brief_pending: Map::with_capacity(l.brief_sections),
             brief_held: Map::with_capacity(l.brief_sections),
             judges: crate::Judges::empty(l.judge_projects),
+            gate_policy: crate::GatePolicy::empty(l.judge_projects),
             judge_criteria: l.judge_criteria,
+            projection_due: Map::with_capacity(l.issues),
+            change_due: Map::with_capacity(l.changes),
+            procedure_wakes: Map::with_capacity(l.changes),
         })
     }
 
@@ -273,7 +399,7 @@ impl Domain {
     /// Whether a child call or a newly committed entry may be sent.
     #[must_use]
     pub fn is_ready(&self) -> bool {
-        self.client.is_ready()
+        !self.procedure_wakes.is_empty() || self.client.is_ready()
     }
 
     /// Whether no brief section is being gathered by the connector.
@@ -533,7 +659,7 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         Event::ForgetAdoption { repository, restore } => match restore {
             Some(previous) => {
                 d.repositories.insert(repository, previous.clone()).expect("restores an admitted repository");
-                emit(out, Request::Save { record: Stored::Repository(previous) });
+                emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Repository(previous) });
             }
             None => {
                 if d.repositories.remove(&repository).is_some() {
@@ -552,7 +678,7 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
                 d.proposed_effects.insert(row.number, row.clone()).is_ok(),
                 "one bounded effect proposal per live task"
             );
-            emit(out, Request::Save { record: Stored::ProposedEffect(row) });
+            emit(out, Request::Save { read_afresh: None, release: None, record: Stored::ProposedEffect(row) });
         }
         Event::DropProposedEffect { number } => {
             if d.proposed_effects.remove(&number).is_some() {
@@ -562,9 +688,9 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         Event::Enqueue { entry } => enqueue(d, env, entry, out),
         Event::KeepProjection { row, entry } => {
             d.issues.insert(row.goal, row.clone()).expect("projection capacity admitted");
-            emit(out, Request::Save { record: Stored::Issue(row) });
+            emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Issue(row) });
             d.entries.insert(entry.number, entry.clone()).expect("outbox capacity admitted");
-            emit(out, Request::Save { record: Stored::Entry(entry) });
+            emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Entry(entry) });
         }
         Event::Project { entry, repository, view } => project(d, env, entry, repository, view, out),
         Event::ProjectDesired { entry, goal } => {
@@ -581,7 +707,7 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
             {
                 row.queue_repair = Some(repair);
                 row.queue_repairs = row.queue_repairs.saturating_add(1);
-                emit(out, Request::Save { record: Stored::Change(row.clone()) });
+                emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Change(row.clone()) });
             }
         }
         Event::Delegated { task, child, kind } => delegated(d, task, child, kind, out),
@@ -603,6 +729,10 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         Event::Subscribe { subscription } => subscribe(d, env, subscription, out),
         Event::Unsubscribe { task, topic } => unsubscribe(d, task, topic, out),
         Event::Hint { hint } => {
+            let changes = d.changes_for(hint.repository, env.limits.changes);
+            for task in changes {
+                d.procedure_wakes.insert(task, true).expect("one pending wake per change");
+            }
             ci_hint(d, env, &hint, out);
             child(d, env, client::Event::Hint { hint }, out);
         }
@@ -619,10 +749,41 @@ pub fn resume(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     let child_env = child_env(env);
     client::resume(&mut d.client, &child_env, &mut d.client_out);
     drain(d, env, out);
+    if out.room() > 0
+        && let Some((task, _)) = d.procedure_wakes.iter().next()
+    {
+        let task = *task;
+        d.procedure_wakes.remove(&task);
+        emit(out, Request::WakeProcedure { task });
+    }
 }
 
 /// Expire one client timer.
 pub fn fire(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
+    // Keep the client child's whole cohort available. Excess ready timers stay
+    // in their owner's bounded tables for the next iteration.
+    let room = out.room().saturating_sub(client::max_out(&env.limits.client));
+    let mut goals = List::with_capacity(env.limits.issues.min(room));
+    for (goal, when) in &d.projection_due {
+        if *when <= env.wall && goals.room() > 0 {
+            goals.push(*goal).expect("bounded ready projection");
+        }
+    }
+    for goal in &goals {
+        d.projection_due.remove(goal);
+        emit(out, Request::ProjectAfter { goal: *goal, when: None });
+    }
+    let room = out.room().saturating_sub(client::max_out(&env.limits.client));
+    let mut changes = List::with_capacity(env.limits.changes.min(room));
+    for (task, when) in &d.change_due {
+        if *when <= env.wall && changes.room() > 0 {
+            changes.push(*task).expect("bounded ready change");
+        }
+    }
+    for task in &changes {
+        d.change_due.remove(task);
+        emit(out, Request::WakeProcedure { task: *task });
+    }
     let child_env = child_env(env);
     client::fire(&mut d.client, &child_env, &mut d.client_out);
     drain(d, env, out);
@@ -641,13 +802,16 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     for _ in 0..d.client_out.len() {
         let request = d.client_out.pop().expect("counted child output");
         match request {
-            client::Request::Save { record } => emit(out, Request::Save { record: Stored::Client(record) }),
+            client::Request::Save { record } => {
+                emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Client(record) });
+            }
             client::Request::Erase { key } => emit(out, Request::Erase { key: Key::Client(key) }),
             client::Request::Progress { entry } => {
                 d.entries.insert(entry.number, entry.clone()).expect("progress replaces a known entry");
-                emit(out, Request::Save { record: Stored::Entry(entry) });
+                emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Entry(entry) });
             }
             client::Request::Outcome { entry, task, outcome } => {
+                d.named_outcome(entry, outcome);
                 outcome_facts(d, env, entry, task, outcome, out);
                 match outcome {
                     client::Outcome::Uncertain => {}
@@ -755,7 +919,10 @@ fn outcome_facts(
                     if let Some(name) = from_client(&resource, &env.limits) {
                         let head = BranchHead { name: name.clone(), commit, owned: true };
                         if d.heads.insert(name, head.clone()).is_ok() {
-                            emit(out, Request::Save { record: Stored::BranchHead(head) });
+                            emit(
+                                out,
+                                Request::Save { read_afresh: None, release: None, record: Stored::BranchHead(head) },
+                            );
                         }
                     }
                 }
@@ -764,7 +931,7 @@ fn outcome_facts(
         client::Outcome::Made { made: client::Made::Merged(commit), .. } => {
             if d.landed.len() < env.limits.landings || d.landed.contains_key(&commit) {
                 d.landed.insert(commit, task).expect("preflighted landed capacity");
-                emit(out, Request::Save { record: Stored::Landed { commit, task } });
+                emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Landed { commit, task } });
             }
         }
         client::Outcome::Made {
@@ -786,6 +953,11 @@ fn outcome_facts(
 
 pub(crate) fn emit(out: &mut Queue<Request>, request: Request) {
     out.push(request);
+}
+
+fn save_hold(out: &mut Queue<Request>, hold: Hold) {
+    let read_afresh = if hold.writer.is_none() { Some(hold.name.clone()) } else { None };
+    emit(out, Request::Save { record: Stored::Hold(hold), release: None, read_afresh });
 }
 
 fn valid_name(d: &Domain, l: &Limits, name: &Name) -> bool {
@@ -1069,7 +1241,7 @@ fn finish_adoption(d: &mut Domain, owner: Token, pending: PendingAdoption, out: 
         settings,
     };
     d.repositories.insert(row.provider, row.clone()).expect("adoption capacity checked");
-    emit(out, Request::Save { record: Stored::Repository(row.clone()) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Repository(row.clone()) });
     emit(
         out,
         Request::Adopted {
@@ -1179,7 +1351,7 @@ fn names(d: &mut Domain, env: &Env<Limits>, task: u64, resources: Box<[Name]>, o
                 );
             }
         }
-        emit(out, Request::Save { record: Stored::Names { task, resources } });
+        emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Names { task, resources } });
     }
     drain(d, env, out);
 }
@@ -1267,7 +1439,7 @@ fn hold(d: &mut Domain, env: &Env<Limits>, task: u64, resource: Name, from: Opti
     };
     let row = Hold { name: resource.clone(), task, writer, drift };
     d.holds.insert(resource, row.clone()).expect("preflighted hold capacity");
-    emit(out, Request::Save { record: Stored::Hold(row) });
+    save_hold(out, row);
 }
 
 fn claim(
@@ -1309,7 +1481,7 @@ fn claim(
         let Some(row) = d.holds.get_mut(name) else { unreachable!("preflighted hold") };
         row.writer = Some(Writer::Run { task, attempt });
         let saved = row.clone();
-        emit(out, Request::Save { record: Stored::Hold(saved) });
+        save_hold(out, saved);
         if let Some(resource) = to_client(name, &env.limits) {
             child(d, env, client::Event::Writer { resource, taken: true }, out);
         }
@@ -1340,14 +1512,14 @@ fn answered(
         let Some(row) = d.holds.get_mut(name) else { unreachable!("collected hold") };
         row.writer = None;
         let saved = row.clone();
-        emit(out, Request::Save { record: Stored::Hold(saved) });
+        save_hold(out, saved);
         let undrifted = row.drift.is_none();
         if let Some(resource) = to_client(name, &env.limits) {
             for (pushed_name, commit) in pushed {
                 if pushed_name == name && undrifted {
                     let head = BranchHead { name: name.clone(), commit: *commit, owned: true };
                     d.heads.insert(name.clone(), head.clone()).expect("reported head was a live resource");
-                    emit(out, Request::Save { record: Stored::BranchHead(head) });
+                    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::BranchHead(head) });
                     child(d, env, client::Event::Pushed { resource: resource.clone(), commit: *commit }, out);
                 }
             }
@@ -1451,14 +1623,14 @@ fn lost_read(
     }
     row.writer = None;
     let undrifted = row.drift.is_none();
-    emit(out, Request::Save { record: Stored::Hold(row.clone()) });
+    save_hold(out, row.clone());
     if undrifted && let Some(commit) = observed {
         let head = BranchHead { name: pending.name.clone(), commit, owned: true };
         if d.heads.insert(pending.name.clone(), head.clone()).is_err() {
             emit(out, Request::Refused { task: pending.task });
             return;
         }
-        emit(out, Request::Save { record: Stored::BranchHead(head) });
+        emit(out, Request::Save { read_afresh: None, release: None, record: Stored::BranchHead(head) });
         child(d, env, client::Event::Pushed { resource: resource.clone(), commit }, out);
     }
     child(d, env, client::Event::Writer { resource, taken: false }, out);
@@ -1481,8 +1653,9 @@ fn enqueue(d: &mut Domain, env: &Env<Limits>, entry: client::Entry, out: &mut Qu
         emit(out, Request::Refused { task });
         return;
     }
+    let release = Some(entry.number);
     d.entries.insert(entry.number, entry.clone()).expect("preflighted entry capacity");
-    emit(out, Request::Save { record: Stored::Entry(entry) });
+    emit(out, Request::Save { read_afresh: None, release, record: Stored::Entry(entry) });
 }
 
 fn effect_permitted(kinds: Kinds, write: &client::api::Write) -> bool {
@@ -1519,7 +1692,7 @@ fn register_change(d: &mut Domain, env: &Env<Limits>, row: ChangeRow, out: &mut 
         return;
     }
     d.changes.insert(task, row.clone()).expect("change capacity checked");
-    emit(out, Request::Save { record: Stored::Change(row) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Change(row) });
 }
 
 fn delegated(d: &mut Domain, task: u64, child: u64, kind: change::Delegate, out: &mut Queue<Request>) {
@@ -1529,7 +1702,7 @@ fn delegated(d: &mut Domain, task: u64, child: u64, kind: change::Delegate, out:
     };
     row.delegate = Some((child, kind));
     row.delegate_status = change::Status::Unknown;
-    emit(out, Request::Save { record: Stored::Change(row.clone()) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Change(row.clone()) });
 }
 
 fn delegate_refused(d: &mut Domain, task: u64, child: u64, out: &mut Queue<Request>) {
@@ -1562,7 +1735,7 @@ fn delegate_refused(d: &mut Domain, task: u64, child: u64, out: &mut Queue<Reque
         _ => row.change.state.clone(),
     };
     row.change.state = change::State::Held { was: Box::new(state), why: change::Hold::Failed };
-    emit(out, Request::Save { record: Stored::Change(row.clone()) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Change(row.clone()) });
 }
 
 fn delegate_result(
@@ -1613,7 +1786,7 @@ fn delegate_result(
         }
         change::Delegate::Produce | change::Delegate::Repair(_) | change::Delegate::Resolve { .. } => {}
     }
-    emit(out, Request::Save { record: Stored::Change(row.clone()) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Change(row.clone()) });
 }
 
 fn step_change(d: &mut Domain, env: &Env<Limits>, input: StepInput, out: &mut Queue<Request>) {
@@ -1915,7 +2088,7 @@ fn finish_step(d: &mut Domain, env: &Env<Limits>, pending: PendingStep, out: &mu
                 && let Some(hold) = d.holds.get_mut(&name)
             {
                 hold.drift = Some(crate::Drift { at: env.wall, change });
-                emit(out, Request::Save { record: Stored::Hold(hold.clone()) });
+                save_hold(out, hold.clone());
             }
         }
     }
@@ -1943,7 +2116,7 @@ fn finish_step(d: &mut Domain, env: &Env<Limits>, pending: PendingStep, out: &mu
             | change::Decision::Cancel
             | change::Decision::Hold(_)) => {
                 d.changes.insert(row.task, row.clone()).expect("replaces change");
-                emit(out, Request::Save { record: Stored::Change(row.clone()) });
+                emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Change(row.clone()) });
                 topics::head_changed(d, row.task, out);
                 topics::refresh(d, env, row.task, out);
                 emit(out, Request::ChangeDecision { task: row.task, decision, entry: None, evidence: None });
@@ -2060,9 +2233,9 @@ fn emit_change_effect(
     row.pending = Some(pending.entry);
     row.effect = change::EffectResult::Pending;
     d.changes.insert(row.task, row.clone()).expect("replaces change");
-    emit(out, Request::Save { record: Stored::Change(row.clone()) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Change(row.clone()) });
     d.entries.insert(entry.number, entry.clone()).expect("entry capacity checked");
-    emit(out, Request::Save { record: Stored::Entry(entry) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Entry(entry) });
     emit(
         out,
         Request::ChangeDecision {
@@ -2140,7 +2313,7 @@ fn change_outcome(d: &mut Domain, env: &Env<Limits>, entry: u64, outcome: client
         row.drift = Some(change::Hold::PullClosed);
     }
     let saved = row.clone();
-    emit(out, Request::Save { record: Stored::Change(saved.clone()) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Change(saved.clone()) });
     if pull_closed {
         let branch =
             client::Resource { repository: saved.repository, what: client::What::Branch(saved.branch.clone()) };
@@ -2195,7 +2368,7 @@ fn release_change(d: &mut Domain, task: u64, out: &mut Queue<Request>) {
     };
     row.drift = None;
     let saved = row.clone();
-    emit(out, Request::Save { record: Stored::Change(saved) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Change(saved) });
     let mut affected = List::with_capacity(d.holds.len());
     for (name, hold) in &d.holds {
         if hold.task == task && hold.drift.is_some() {
@@ -2205,7 +2378,7 @@ fn release_change(d: &mut Domain, task: u64, out: &mut Queue<Request>) {
     for name in &affected {
         let hold = d.holds.get_mut(name).expect("collected held resource");
         hold.drift = None;
-        emit(out, Request::Save { record: Stored::Hold(hold.clone()) });
+        save_hold(out, hold.clone());
     }
 }
 
@@ -2228,7 +2401,7 @@ fn settle_effects(
                 Some(change) => change.pull,
                 None => None,
             };
-            emit(out, Request::Save { record: Stored::Release(row.clone()) });
+            emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Release(row.clone()) });
         }
         if row.effects_settled {
             emit(out, Request::EffectsSettled { task });
@@ -2257,7 +2430,7 @@ fn settle_effects(
             releasing: false,
         };
         d.releases.insert(task, row.clone()).expect("release capacity checked");
-        emit(out, Request::Save { record: Stored::Release(row) });
+        emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Release(row) });
     }
     if ending == ReleaseEnding::Cancelled {
         let mut unsent = List::with_capacity(env.limits.entries);
@@ -2273,6 +2446,7 @@ fn settle_effects(
             {
                 d.entries.remove(&number);
                 emit(out, Request::Erase { key: Key::Entry(number) });
+                d.named_outcome(number, client::Outcome::Withdrawn);
                 emit(out, Request::Outcome { entry: number, task, outcome: client::Outcome::Withdrawn });
             }
         }
@@ -2296,7 +2470,7 @@ fn settle_prior_effects(d: &mut Domain, task: u64, out: &mut Queue<Request>) {
     let row = d.releases.get_mut(&task).expect("effect settlement row");
     if !row.effects_settled {
         row.effects_settled = true;
-        emit(out, Request::Save { record: Stored::Release(row.clone()) });
+        emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Release(row.clone()) });
     }
     emit(out, Request::EffectsSettled { task });
 }
@@ -2326,7 +2500,7 @@ fn release(
             row.failed = false;
         }
         row.releasing = true;
-        emit(out, Request::Save { record: Stored::Release(row.clone()) });
+        emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Release(row.clone()) });
     } else {
         if d.releases.len() == env.limits.tasks {
             emit(out, Request::ReleaseFailed { task });
@@ -2350,7 +2524,7 @@ fn release(
             releasing: true,
         };
         d.releases.insert(task, row.clone()).expect("release capacity checked");
-        emit(out, Request::Save { record: Stored::Release(row) });
+        emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Release(row) });
     }
     continue_release(d, env, task, entry, out);
 }
@@ -2398,7 +2572,7 @@ fn continue_release(d: &mut Domain, env: &Env<Limits>, task: u64, entry: u64, ou
             if row.ending == ReleaseEnding::Failed && row.root != task {
                 let hold = d.holds.get_mut(&name).expect("selected hold");
                 hold.task = row.root;
-                emit(out, Request::Save { record: Stored::Hold(hold.clone()) });
+                save_hold(out, hold.clone());
                 emit(out, Request::Retained { task, root: row.root, resource: name });
                 continue;
             }
@@ -2468,9 +2642,9 @@ fn enqueue_release(
     };
     row.pending = Some((number, resource));
     d.releases.insert(row.task, row.clone()).expect("replaces release");
-    emit(out, Request::Save { record: Stored::Release(row.clone()) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Release(row.clone()) });
     d.entries.insert(number, entry.clone()).expect("entry capacity checked");
-    emit(out, Request::Save { record: Stored::Entry(entry) });
+    emit(out, Request::Save { read_afresh: None, release: Some(number), record: Stored::Entry(entry) });
 }
 
 fn release_outcome(d: &mut Domain, entry: u64, outcome: client::Outcome, out: &mut Queue<Request>) {
@@ -2508,7 +2682,7 @@ fn release_outcome(d: &mut Domain, entry: u64, outcome: client::Outcome, out: &m
         client::Outcome::Uncertain => unreachable!("uncertain returned above"),
     }
     d.releases.insert(task, row.clone()).expect("replaces release");
-    emit(out, Request::Save { record: Stored::Release(row) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Release(row) });
 }
 
 fn project(
@@ -2556,7 +2730,7 @@ fn project(
     if prior.desired.as_ref() != Some(&view) {
         prior.desired = Some(view.clone());
         d.issues.insert(goal, prior.clone()).expect("projection room checked");
-        emit(out, Request::Save { record: Stored::Issue(prior.clone()) });
+        emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Issue(prior.clone()) });
     }
     if prior.failed {
         emit(out, Request::ProjectionFailed { goal });
@@ -2698,7 +2872,7 @@ fn projection_outcome(d: &mut Domain, entry: u64, outcome: client::Outcome, out:
     row.pending = None;
     row.before = None;
     let saved = row.clone();
-    emit(out, Request::Save { record: Stored::Issue(saved) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Issue(saved) });
     if row.failed {
         emit(out, Request::ProjectionFailed { goal });
     } else {
@@ -2713,7 +2887,7 @@ fn release_projection(d: &mut Domain, goal: u64, out: &mut Queue<Request>) {
     }
     row.failed = false;
     let saved = row.clone();
-    emit(out, Request::Save { record: Stored::Issue(saved) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Issue(saved) });
     emit(out, Request::ProjectAfter { goal, when: None });
 }
 
@@ -2737,7 +2911,7 @@ fn veto_change(d: &mut Domain, task: u64, entry: u64, prior: change::Change, out
     row.change = prior;
     row.pending = None;
     row.effect = change::EffectResult::None;
-    emit(out, Request::Save { record: Stored::Change(row.clone()) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Change(row.clone()) });
     d.entries.remove(&entry);
     emit(out, Request::Erase { key: Key::Entry(entry) });
 }
@@ -2756,7 +2930,7 @@ fn subscribe(d: &mut Domain, env: &Env<Limits>, subscription: Subscriber, out: &
     d.subscriptions.insert(key, subscription.clone()).expect("preflighted subscription capacity");
     topics::subscribe(d, &subscription, out);
     let tasks = subscription.goal_tasks.clone();
-    emit(out, Request::Save { record: Stored::Subscription(subscription) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Subscription(subscription) });
     if let Some(tasks) = tasks {
         for task in tasks {
             topics::refresh(d, env, task, out);
@@ -2874,7 +3048,7 @@ fn ci_observed(
     }
     let row = CiState { repository, head, status };
     d.ci.insert((repository, head), row.clone()).expect("CI subscription capacity");
-    emit(out, Request::Save { record: Stored::Ci(row) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Ci(row) });
     publish(d, topic, News::Ci { head, status }, out);
 }
 
@@ -2988,7 +3162,7 @@ fn branch_changed(
     if d.heads.insert(name, row.clone()).is_err() {
         return;
     }
-    emit(out, Request::Save { record: Stored::BranchHead(row) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::BranchHead(row) });
     let Some(before) = previous else { return };
     if before == commit {
         return;
@@ -3080,7 +3254,7 @@ fn pull_changed(
     if d.pulls.insert(name, state.clone()).is_err() {
         return;
     }
-    emit(out, Request::Save { record: Stored::PullState(state) });
+    emit(out, Request::Save { read_afresh: None, release: None, record: Stored::PullState(state) });
     let topic = Topic::Pull { repository: resource.repository, number: pull.number };
     let changed_pull = match &prior {
         Some(row) => row.head != pull.commit || row.state != pull.state,
@@ -3189,7 +3363,7 @@ fn drift(
     for (task, name) in &affected {
         if let Some(hold) = d.holds.get_mut(name) {
             hold.drift = Some(crate::Drift { at: env.wall, change: change.clone() });
-            emit(out, Request::Save { record: Stored::Hold(hold.clone()) });
+            save_hold(out, hold.clone());
         }
         if let Some(row) = d.changes.get_mut(task) {
             row.drift = Some(match change {
@@ -3197,13 +3371,16 @@ fn drift(
                 crate::DriftChange::PullClosed { .. } => change::Hold::PullClosed,
                 crate::DriftChange::Retargeted { .. } => change::Hold::Retargeted,
             });
-            emit(out, Request::Save { record: Stored::Change(row.clone()) });
+            emit(out, Request::Save { read_afresh: None, release: None, record: Stored::Change(row.clone()) });
         }
     }
 }
 
 fn restore(d: &mut Domain, env: &Env<Limits>, record: Stored) {
     match record {
+        Stored::Call { key, answer } => {
+            d.keep_named_answer(&env.limits, key, answer).expect("restored named-call payload within limits");
+        }
         Stored::Repository(row) => {
             d.repositories.insert(row.provider, row).expect("restored repository within limits");
         }

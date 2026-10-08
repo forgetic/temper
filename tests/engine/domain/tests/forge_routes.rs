@@ -376,6 +376,7 @@ impl World {
     fn collect(&mut self) {
         for _ in 0..self.out.len() {
             match self.out.pop().expect("counted root output") {
+                engine::Request::ToChild(released) => self.events.push_back(engine::Event::Released(released)),
                 engine::Request::Commit { number, writes } => self.store.pending.push_back((number, writes)),
                 engine::Request::Load { owner, range, after, most, .. } => {
                     let (rows, next) = self.store.page(&range, after.as_ref(), most);
@@ -499,8 +500,8 @@ impl World {
                     .any(|answer| matches!(answer, temper_engine_domain::CallAnswer::Subscribed { .. })),
                 Until::News => {
                     let task = self.assigned.first().expect("assigned subscriber").task;
-                    match self.store.rows.get(&Key::Tasks(tasks::Key::Live(task))) {
-                        Some(Record::Tasks(tasks::Stored::Live(row))) => {
+                    match self.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(task)))) {
+                        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) => {
                             row.inbox.iter().any(|word| matches!(word.kind, tasks::MessageKind::News { .. }))
                         }
                         _ => false,
@@ -526,8 +527,8 @@ impl World {
             "forge root did not reach {target:?}; answers={:?}, assignments={:?}, task2={:?}, task3={:?}, forge={:?}",
             self.answers,
             self.assigned,
-            self.store.rows.get(&Key::Tasks(tasks::Key::Live(2))),
-            self.store.rows.get(&Key::Tasks(tasks::Key::Live(3))),
+            self.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(2)))),
+            self.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(3)))),
             self.store.rows.values().filter(|row| matches!(row, Record::Forge { .. })).collect::<Vec<_>>()
         );
     }
@@ -659,7 +660,10 @@ fn change_world_with_policy(
             },
         });
         world.until(Until::Ready);
-        assert!(world.store.rows.contains_key(&Key::People(people::Key::Policy(1))), "owner policy committed");
+        assert!(
+            world.store.rows.contains_key(&Key::Core(jig_core::Key::People(people::Key::Policy(1)))),
+            "owner policy committed"
+        );
         world.restart(true, true);
         world.until(Until::Ready);
     }
@@ -762,7 +766,7 @@ fn change_world_with_policy(
         .expect("change task number");
     assert!(
         world.store.rows.values().any(|stored| matches!(stored,
-            Record::Tasks(tasks::Stored::Live(task))
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))
                 if task.number == producer.task && task.authority.grants.iter().any(|grant|
                     grant.connector == 0 && grant.kind == 2
                         && grant.pattern.segments.last().map(AsRef::as_ref)
@@ -904,7 +908,7 @@ fn a_small_fix_made_in_a_chat_lands() {
     }
     assert!(
         world.store.rows.values().any(|stored| matches!(stored,
-            Record::Tasks(tasks::Stored::Ended(row)) if row.requester == tasks::Party::Task(chat.task)
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(row))) if row.requester == tasks::Party::Task(chat.task)
                 && matches!(row.phase, tasks::Phase::Ended(tasks::Ending::Done(tasks::TaskResult::Change { .. })))
         )),
         "change task did not report its landing"
@@ -971,7 +975,7 @@ fn a_pushed_change_is_recovered_before_its_worker_reports_the_head() {
     assert_eq!(found, pushed, "the recovered procedure used the pushed head");
     assert!(
         world.store.rows.values().any(|stored| matches!(stored,
-            Record::Tasks(tasks::Stored::Live(task)) if task.number == chat.task
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) if task.number == chat.task
         )),
         "the chat still owns the change result"
     );
@@ -1017,7 +1021,7 @@ fn a_change_whose_ci_never_reports_is_stalled_and_held() {
     );
     assert!(
         !world.store.rows.values().any(|stored| matches!(stored,
-            Record::Tasks(tasks::Stored::Ended(row)) if row.requester == tasks::Party::Task(chat.task)
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(row))) if row.requester == tasks::Party::Task(chat.task)
         )),
         "stalled change must not report a landing"
     );
@@ -1291,9 +1295,9 @@ fn a_change_failing_ci_is_repaired_reviewed_at_its_head_and_lands() {
     assert!(
         world.assigned.len() >= 3,
         "failed CI did not assign repair: task2={:?}; task3={:?}; task4={:?}; forge={:?}",
-        world.store.rows.get(&Key::Tasks(tasks::Key::Live(2))),
-        world.store.rows.get(&Key::Tasks(tasks::Key::Live(3))),
-        world.store.rows.get(&Key::Tasks(tasks::Key::Live(4))),
+        world.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(2)))),
+        world.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(3)))),
+        world.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(4)))),
         world.store.rows.values().filter(|row| matches!(row, Record::Forge { .. })).collect::<Vec<_>>()
     );
     let repair = world.assigned[2].clone();
@@ -1330,7 +1334,7 @@ fn a_change_failing_ci_is_repaired_reviewed_at_its_head_and_lands() {
                 forge_top::Stored::Change(change) => change.pull,
                 _ => None,
             },
-            _ => None,
+            Record::Core(_) => None,
         })
         .expect("opened pull request");
     assert!(matches!(
@@ -1379,7 +1383,7 @@ fn a_change_failing_ci_is_repaired_reviewed_at_its_head_and_lands() {
                     && change.change.repairs == 1)
         )),
         "repaired change did not land: task2={:?}; pending={:?}; forge={:?}",
-        world.store.rows.get(&Key::Tasks(tasks::Key::Live(2))),
+        world.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(2)))),
         world.pending,
         world.store.rows.values().collect::<Vec<_>>()
     );
@@ -1482,7 +1486,7 @@ fn a_required_section_missing_sends_the_task_back_to_due_without_spending_a_try(
     for _ in 0..150 {
         world.tick();
         for stored in world.store.rows.values() {
-            let Record::Tasks(tasks::Stored::Live(row)) = stored else { continue };
+            let Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) = stored else { continue };
             if row.number != chat
                 && row.number != producer
                 && matches!(row.executor, tasks::Executor::Agent { .. })
@@ -1503,7 +1507,7 @@ fn a_required_section_missing_sends_the_task_back_to_due_without_spending_a_try(
                 .store
                 .rows
                 .values()
-                .filter(|row| matches!(row, Record::Tasks(tasks::Stored::Live(_))))
+                .filter(|row| matches!(row, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(_)))))
                 .collect::<Vec<_>>(),
             world.pending,
             world.assigned,
@@ -1521,7 +1525,7 @@ fn an_amendment_while_gathering_discards_the_old_brief_without_claiming() {
     for _ in 0..150 {
         world.tick();
         for stored in world.store.rows.values() {
-            let Record::Tasks(tasks::Stored::Live(row)) = stored else { continue };
+            let Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) = stored else { continue };
             if row.number != chat
                 && row.number != producer
                 && matches!(row.executor, tasks::Executor::Agent { .. })
@@ -1544,7 +1548,8 @@ fn an_amendment_while_gathering_discards_the_old_brief_without_claiming() {
                 .rows
                 .values()
                 .filter_map(|stored| match stored {
-                    Record::Tasks(tasks::Stored::Live(row)) => Some((row.number, row.phase.clone())),
+                    Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row))) =>
+                        Some((row.number, row.phase.clone())),
                     _ => None,
                 })
                 .collect::<Vec<_>>(),
@@ -1573,7 +1578,8 @@ fn an_amendment_while_gathering_discards_the_old_brief_without_claiming() {
     });
     for _ in 0..40 {
         world.tick();
-        let Some(Record::Tasks(tasks::Stored::Live(row))) = world.store.rows.get(&Key::Tasks(tasks::Key::Live(repair)))
+        let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) =
+            world.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(repair))))
         else {
             continue;
         };
@@ -1591,7 +1597,7 @@ fn an_amendment_while_gathering_discards_the_old_brief_without_claiming() {
     }
     panic!(
         "amended repair did not abandon its pending brief: {:?}",
-        world.store.rows.get(&Key::Tasks(tasks::Key::Live(repair)))
+        world.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(repair))))
     );
 }
 
@@ -1632,7 +1638,7 @@ fn a_conflicting_update_is_resolved_from_a_merge_in_progress() {
     assert!(
         world.assigned.len() >= 3,
         "conflict did not assign a resolver: task2={:?}; forge={:?}",
-        world.store.rows.get(&Key::Tasks(tasks::Key::Live(2))),
+        world.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(2)))),
         world.store.rows.values().filter(|row| matches!(row, Record::Forge { .. })).collect::<Vec<_>>()
     );
     let resolver = world.assigned[2].clone();
@@ -1741,7 +1747,7 @@ fn an_approval_carries_over_a_clean_update_and_is_asked_again_after_a_repair() {
                 forge_top::Stored::Change(change) => change.pull,
                 _ => None,
             },
-            _ => None,
+            Record::Core(_) => None,
         })
         .expect("opened pull before review");
     assert!(
@@ -1844,7 +1850,7 @@ fn an_approval_carries_over_a_clean_update_and_is_asked_again_after_a_repair() {
                 forge_top::Stored::Change(change) => change.pull,
                 _ => None,
             },
-            _ => None,
+            Record::Core(_) => None,
         })
         .expect("opened pull for repair");
     assert!(matches!(
@@ -2007,7 +2013,7 @@ fn a_worker_frozen_past_its_grace_resumes_with_a_push_in_hand_and_lands_nothing_
             .rows
             .values()
             .filter(|stored| matches!(stored,
-                Record::Tasks(tasks::Stored::Ended(row)) if row.requester == tasks::Party::Task(chat.task)
+                Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(row))) if row.requester == tasks::Party::Task(chat.task)
                     && matches!(row.phase, tasks::Phase::Ended(tasks::Ending::Done(tasks::TaskResult::Change { .. })))
             ))
             .count(),
@@ -2066,8 +2072,8 @@ fn a_broken_landing_branch_gets_one_deployment_repair_before_waiting_changes_lan
         .unwrap_or_else(|| {
             panic!(
                 "base failure assigned deployment repair producer; task4={:?}; task5={:?}; assignments={:?}",
-                world.store.rows.get(&Key::Tasks(tasks::Key::Live(4))),
-                world.store.rows.get(&Key::Tasks(tasks::Key::Live(5))),
+                world.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(4)))),
+                world.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(5)))),
                 world.assigned
             )
         })
@@ -2144,12 +2150,12 @@ fn a_repository_adopted_seeds_its_collaborators_into_roles() {
     let mut people = BTreeMap::new();
     for row in world.store.rows.values() {
         match row {
-            Record::People(jig_core_people::Stored::Person { number, identity }) => {
+            Record::Core(jig_core::Record::People(jig_core_people::Stored::Person { number, identity })) => {
                 let subject: [u8; 8] =
                     identity.key.subject.as_ref().try_into().expect("forge subject is a user number");
                 people.insert(u64::from_be_bytes(subject), *number);
             }
-            Record::People(jig_core_people::Stored::Roles { project: 1, holdings }) => {
+            Record::Core(jig_core::Record::People(jig_core_people::Stored::Roles { project: 1, holdings })) => {
                 roles = Some(holdings.clone());
             }
             _ => {}
@@ -2190,7 +2196,10 @@ fn policy_maps_connector_permissions_to_seeded_roles_after_restart() {
         },
     });
     world.until(Until::Ready);
-    assert!(world.store.rows.contains_key(&Key::People(people::Key::Policy(1))), "permission policy committed");
+    assert!(
+        world.store.rows.contains_key(&Key::Core(jig_core::Key::People(people::Key::Policy(1)))),
+        "permission policy committed"
+    );
     world.restart(false, false);
     world.signed_in = None;
     world.adopt();
@@ -2198,12 +2207,14 @@ fn policy_maps_connector_permissions_to_seeded_roles_after_restart() {
     let mut people = BTreeMap::new();
     for row in world.store.rows.values() {
         match row {
-            Record::People(people::Stored::Person { number, identity }) => {
+            Record::Core(jig_core::Record::People(people::Stored::Person { number, identity })) => {
                 let subject: [u8; 8] =
                     identity.key.subject.as_ref().try_into().expect("forge subject is a user number");
                 people.insert(u64::from_be_bytes(subject), *number);
             }
-            Record::People(people::Stored::Roles { project: 1, holdings }) => roles = Some(holdings.clone()),
+            Record::Core(jig_core::Record::People(people::Stored::Roles { project: 1, holdings })) => {
+                roles = Some(holdings.clone());
+            }
             _ => {}
         }
     }
@@ -2397,7 +2408,7 @@ fn a_tracked_goal_opens_its_owned_issue_without_reading_participant_comments() {
                 forge_top::Stored::Issue(issue) if issue.pending.is_none() => Some(issue.clone()),
                 _ => None,
             },
-            _ => None,
+            Record::Core(_) => None,
         })
         .expect("tracked goal's issue was opened and acknowledged");
     let number = issue.number.expect("provider issued an issue number");
@@ -2433,8 +2444,8 @@ fn a_tracked_goal_opens_its_owned_issue_without_reading_participant_comments() {
         world.tick();
     }
     assert!(
-        matches!(world.store.rows.get(&Key::Tasks(tasks::Key::Live(issue.goal))),
-        Some(Record::Tasks(tasks::Stored::Live(row))) if !row.inbox.iter().any(|word|
+        matches!(world.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(issue.goal)))),
+        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) if !row.inbox.iter().any(|word|
             matches!(word.kind, tasks::MessageKind::News { class: tasks::NewsClass::Wakes, .. }))),
         "comments on the owned projection do not wake its goal"
     );
@@ -2543,8 +2554,8 @@ fn a_goal_subscription_receives_the_connectors_landing_news() {
         },
     });
     world.until(Until::News);
-    let Some(Record::Tasks(tasks::Stored::Live(row))) =
-        world.store.rows.get(&Key::Tasks(tasks::Key::Live(assignment.task)))
+    let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) =
+        world.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(assignment.task))))
     else {
         panic!("subscriber task remains live")
     };
@@ -2589,8 +2600,8 @@ fn subscribe_chat(world: &mut World, topic: forge_top::Topic, key: u8) -> u64 {
 }
 
 fn news_count(world: &World, task: u64) -> usize {
-    match world.store.rows.get(&Key::Tasks(tasks::Key::Live(task))) {
-        Some(Record::Tasks(tasks::Stored::Live(row))) => {
+    match world.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(task)))) {
+        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(row)))) => {
             let mut hits = 0;
             for word in &row.inbox {
                 if matches!(word.kind, tasks::MessageKind::News { .. }) {
@@ -2817,7 +2828,10 @@ fn an_authorized_forge_read_returns_a_bounded_typed_answer() {
             completion,
             position: 1,
         };
-        assert!(!world.store.rows.contains_key(&Key::Call(key)), "read answers are never durable call records");
+        assert!(
+            !world.store.rows.contains_key(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Call(key)))),
+            "read answers are never durable call records"
+        );
     }
 }
 
@@ -2879,7 +2893,7 @@ fn a_named_forge_effect_is_committed_before_its_write_and_made_once() {
         position: 1,
     };
     assert!(
-        matches!(world.store.rows.get(&Key::Call(key)), Some(Record::Call(row)) if matches!(row.answer, temper_engine_domain::CallAnswer::ForgeEffect { entry: observed, outcome: Some(client::Outcome::Made { .. }), .. } if observed == entry))
+        matches!(world.store.rows.get(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Call(key)))), Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Call(row)))) if matches!(row.part, jig_core::CallPart::Effect { entry: observed, outcome: Some(jig_core::connector::OutboxOutcome::Made), .. } if observed == entry))
     );
     world.send(engine::Event::Call {
         channel: Token::new(7),
@@ -3124,10 +3138,10 @@ fn effect_survives_each_commit_and_outbox_cut_without_a_second_issue() {
         };
         assert!(
             matches!(
-                world.store.rows.get(&Key::Call(key)),
-                Some(Record::Call(row))
-                    if matches!(row.answer, temper_engine_domain::CallAnswer::ForgeEffect {
-                        outcome: Some(client::Outcome::Made { .. }), ..
+                world.store.rows.get(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Call(key)))),
+                Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Call(row))))
+                    if matches!(row.part, jig_core::CallPart::Effect {
+                        outcome: Some(jig_core::connector::OutboxOutcome::Made), ..
                     })
             ),
             "cut {cut} committed the settled named answer"
@@ -3150,7 +3164,7 @@ fn a_tracked_goals_changes_install_landing_and_current_head_ci_topics_without_ag
                     }
                     _ => None,
                 },
-                _ => None,
+                Record::Core(_) => None,
             })
             .collect()
     };
@@ -3197,8 +3211,8 @@ fn a_tracked_goals_changes_install_landing_and_current_head_ci_topics_without_ag
             subscriber.topic == forge_top::Topic::Ci { repository: forge_world::REPO, head: translate::commit(pushed) }
         })
         .expect("goal's own CI topic");
-    assert!(matches!(world.store.rows.get(&Key::Tasks(tasks::Key::Live(goal.task))),
-        Some(Record::Tasks(tasks::Stored::Live(task))) if task.subscriptions.iter().any(|sub| sub.number == ci.number)));
+    assert!(matches!(world.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(goal.task)))),
+        Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) if task.subscriptions.iter().any(|sub| sub.number == ci.number)));
     world.restart(true, true);
     for _ in 0..100 {
         world.tick();

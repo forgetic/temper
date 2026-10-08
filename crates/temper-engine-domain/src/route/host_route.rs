@@ -32,7 +32,7 @@ pub struct HostMessage {
 }
 
 #[derive(Debug)]
-pub(super) struct Flight {
+pub(crate) struct Flight {
     pub task: u64,
     pub attempt: u64,
     pub key: Option<CallKey>,
@@ -40,15 +40,18 @@ pub(super) struct Flight {
     pub tool: Box<[u8]>,
 }
 
-pub(super) fn decode(domain: &mut Domain, to: ReplyTo, task: u64, attempt: u64, call: fleet::Call) {
+pub(crate) fn decode(domain: &mut Domain, to: ReplyTo, task: u64, attempt: u64, call: fleet::Call) {
     let right = to.into_token();
     let to = ReplyTo::new(right);
     let flight = Flight { task, attempt, key: None, name: call.name.clone(), tool: call.tool.clone() };
     assert!(domain.host_calls.insert(right, flight).is_ok(), "typed flights fit fleet calls");
-    super::now(domain, Request::Host(Box::new(HostRequest::Decode { to, task, attempt, call })));
+    super::now(
+        domain,
+        Request::Worker(crate::WorkerRequest::Host(Box::new(HostRequest::Decode { to, task, attempt, call }))),
+    );
 }
 
-pub(super) fn decoded(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, to: ReplyTo, body: Call) {
+pub(crate) fn decoded(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, to: ReplyTo, body: Call) {
     let right = to.into_token();
     let to = ReplyTo::new(right);
     let Some(flight) = domain.host_calls.get_mut(&right) else { return };
@@ -83,7 +86,7 @@ pub(super) fn decoded(domain: &mut Domain, env: &Env<Limits>, decision: &mut Dec
     relay_payload(domain, env, decision, to, Token::new(key.task), Token::new(key.attempt), id.token());
 }
 
-pub(super) fn render(
+pub(crate) fn render(
     domain: &mut Domain,
     limits: &Limits,
     decision: &mut Decision,
@@ -113,7 +116,7 @@ pub(super) fn render(
     None
 }
 
-pub(super) fn rendered(domain: &mut Domain, to: ReplyTo, answer: SettledAnswer) {
+pub(crate) fn rendered(domain: &mut Domain, to: ReplyTo, answer: SettledAnswer) {
     let right = to.into_token();
     let to = ReplyTo::new(right);
     let Some(flight) = domain.host_calls.remove(&right) else { return };
@@ -146,13 +149,13 @@ pub(super) fn rendered(domain: &mut Domain, to: ReplyTo, answer: SettledAnswer) 
     }
 }
 
-pub(super) fn settled(domain: &mut Domain, limits: &Limits, decision: &mut Decision, to: ReplyTo, call: SettledCall) {
+pub(crate) fn settled(domain: &mut Domain, limits: &Limits, decision: &mut Decision, to: ReplyTo, call: SettledCall) {
     let id = domain.payloads.insert(Some(Payload::SettledCall(call))).expect("fleet call reserved answer room");
     emit(decision, limits, Delivery::Fleet(fleet::Event::Relayed { to, answer: id.token() }));
 }
 
 /// Assemble the answer its owner kept; the core chooses its durability route.
-pub(super) fn relayed(
+pub(crate) fn relayed(
     domain: &mut Domain,
     channel: Token,
     run: Token,
@@ -181,12 +184,12 @@ pub(super) fn relayed(
 }
 
 /// A read's owned value crosses the journal door before any durable decision.
-pub(super) fn read(domain: &mut Domain, to: ReplyTo, answer: CallAnswer) {
+pub(crate) fn read(domain: &mut Domain, to: ReplyTo, answer: CallAnswer) {
     let right = to.into_token();
     let to = ReplyTo::new(right);
     match domain.host_calls.get(&right) {
         Some(flight) => {
-            let request = Request::Deliver(Delivery::Host(Box::new(HostDelivery::Render {
+            let request = crate::boundary::delivery_output(Delivery::Host(Box::new(HostDelivery::Render {
                 to,
                 key: flight.key.expect("decoded read"),
                 name: flight.name.clone(),

@@ -2,22 +2,22 @@
 //! domain/people.md, 6). Historical ended tasks remain the only result records.
 
 use super::{Domain, Read as RootRead, Request, admits, close, emit, ending_words, request_load, save, take_read};
-use crate::{Decision, Delivery, Key, Range, Record, ResultEntry, Write};
+use crate::{Delivery, Key, Range, Record, ResultEntry, Write};
 use alloc::boxed::Box;
 use jig_core_people as people;
 use jig_core_tasks as tasks;
 use skein_lib::{Env, Id, List, Queue, ReplyTo, Token};
 
 #[derive(Debug)]
-pub(super) enum Query {
+pub(crate) enum Query {
     Named { task: u64 },
     Inbox { most: u32 },
 }
 
 #[derive(Debug)]
-pub(super) struct Read {
-    pub(super) to: ReplyTo,
-    pub(super) person: u64,
+pub(crate) struct Read {
+    pub(crate) to: ReplyTo,
+    pub(crate) person: u64,
     position: u64,
     earliest: u64,
     query: Query,
@@ -26,10 +26,14 @@ pub(super) struct Read {
 }
 
 fn refuse(to: ReplyTo, why: people::Refusal, out: &mut Queue<Request>) {
-    out.push(Request::Deliver(Delivery::WebReply { to, sign_in: None, reply: people::Reply::Refused(why) }));
+    out.push(crate::boundary::delivery_output(Delivery::WebReply {
+        to,
+        sign_in: None,
+        reply: people::Reply::Refused(why),
+    }));
 }
 
-pub(super) fn begin(
+pub(crate) fn begin(
     domain: &mut Domain,
     env: &Env<super::Limits>,
     to: ReplyTo,
@@ -73,13 +77,13 @@ pub(super) fn begin(
             | None,
         ) => unreachable!("inserted result read"),
     };
+    let mut decision = super::route_decision(domain, &env.limits).expect("result read route admitted");
     assert!(domain.core.reserve_result_read(person, id.token()), "one result read per authenticated person");
-    let mut decision = Decision::new(&env.limits.journal);
     emit(&mut decision, &env.limits, Delivery::ReadResult { waiter: id.token() });
     close(domain, env, decision, out);
 }
 
-pub(super) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, out: &mut Queue<Request>) {
+pub(crate) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, out: &mut Queue<Request>) {
     let Some(read) = take_read(domain, waiter) else { return };
     let read = match read {
         RootRead::Result(read) => read,
@@ -97,38 +101,43 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, o
 }
 
 #[expect(clippy::too_many_lines, reason = "one bounded archive page scan and its terminal read decision")]
-pub(super) fn page(
+pub(crate) fn page(
     domain: &mut Domain,
     env: &Env<super::Limits>,
     waiter: Token,
     rows: Box<[Record]>,
     next: Option<Key>,
+    decision: &mut crate::Decision,
     out: &mut Queue<Request>,
 ) {
     let Some(Some(RootRead::Result(read))) = domain.result_reads.get_mut(Id::from_token(waiter)) else { return };
     for row in rows {
         let task = match row {
-            Record::Tasks(tasks::Stored::Ended(task)) => task,
-            Record::Tasks(
-                tasks::Stored::PersonProposal(_)
-                | tasks::Stored::History(_)
-                | tasks::Stored::Milestone(_)
-                | tasks::Stored::Live(_)
-                | tasks::Stored::Ledger(_)
-                | tasks::Stored::Stub(_)
-                | tasks::Stored::Writer(_)
-                | tasks::Stored::Pool(_),
+            Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(task))) => task,
+            Record::Core(
+                jig_core::Record::Tasks(
+                    tasks::Stored::PersonProposal(_)
+                    | tasks::Stored::History(_)
+                    | tasks::Stored::Milestone(_)
+                    | tasks::Stored::Live(_)
+                    | tasks::Stored::Ledger(_)
+                    | tasks::Stored::Stub(_)
+                    | tasks::Stored::Writer(_)
+                    | tasks::Stored::Pool(_),
+                )
+                | jig_core::Record::Core(
+                    jig_core::CoreRecord::ProposalDecision(_)
+                    | jig_core::CoreRecord::Call(_)
+                    | jig_core::CoreRecord::EscalationDecision(_)
+                    | jig_core::CoreRecord::Deployment(_)
+                    | jig_core::CoreRecord::Turn(_)
+                    | jig_core::CoreRecord::RunProof(_)
+                    | jig_core::CoreRecord::Terminal(_)
+                    | jig_core::CoreRecord::Projection(_),
+                )
+                | jig_core::Record::People(_)
+                | jig_core::Record::Notes(_),
             )
-            | Record::ProposalDecision(_)
-            | Record::Call(_)
-            | Record::EscalationDecision(_)
-            | Record::Deployment(_)
-            | Record::Turn(_)
-            | Record::RunProof(_)
-            | Record::Terminal(_)
-            | Record::People(_)
-            | Record::Notes(_)
-            | Record::Projection(_)
             | Record::Forge { .. } => unreachable!("ended-result range contains only ended tasks"),
         };
         if task.requester != tasks::Party::Person(read.person) {
@@ -194,13 +203,12 @@ pub(super) fn page(
         }
     }
     if let Some(after) = next {
-        request_load(domain, waiter, Range::EndedResults, Some(after), out);
+        request_load(domain, waiter, Range::Core(crate::CoreRange::EndedResults), Some(after), out);
         return;
     }
     let Some(RootRead::Result(read)) = take_read(domain, waiter) else { unreachable!("complete result read") };
     assert!(domain.core.release_result_read(read.person, waiter), "result reader index names its waiter");
     domain.result_reads.retire(Id::from_token(waiter));
-    let mut decision = Decision::new(&env.limits.journal);
     match read.query {
         Query::Named { .. } => {
             let Some(entry) = read.target else {
@@ -211,9 +219,9 @@ pub(super) fn page(
             }
             let row =
                 domain.core.people.advance_read_position(read.person, entry.position).expect("new earliest result");
-            save(&mut decision, &env.limits, Write::Save(Record::People(row)));
+            save(decision, &env.limits, Write::Save(Record::Core(jig_core::Record::People(row))));
             emit(
-                &mut decision,
+                decision,
                 &env.limits,
                 Delivery::ResultReply {
                     to: read.to,
@@ -230,10 +238,9 @@ pub(super) fn page(
             if let Some(last) = entries.last() {
                 let row =
                     domain.core.people.advance_read_position(read.person, last.position).expect("new page position");
-                save(&mut decision, &env.limits, Write::Save(Record::People(row)));
+                save(decision, &env.limits, Write::Save(Record::Core(jig_core::Record::People(row))));
             }
-            emit(&mut decision, &env.limits, Delivery::InboxPage { to: read.to, person: read.person, entries });
+            emit(decision, &env.limits, Delivery::InboxPage { to: read.to, person: read.person, entries });
         }
     }
-    close(domain, env, decision, out);
 }

@@ -21,7 +21,7 @@ pub(crate) struct Pending {
 pub(crate) fn refresh(d: &mut Domain, env: &Env<Limits>, repository: api::Repository, out: &mut Queue<Request>) {
     let Some(row) = d.repositories.get_mut(&repository) else { return };
     row.kinds = kinds(api::Permission::None, row.role, &row.settings);
-    out.push(Request::Save { record: Stored::Repository(row.clone()) });
+    out.push(Request::Save { read_afresh: None, release: None, record: Stored::Repository(row.clone()) });
     for (_, pending) in &d.capabilities {
         if pending.repository == repository {
             return;
@@ -84,7 +84,7 @@ pub(crate) fn answered(
             row.kinds = kinds(permission, row.role, &settings);
             row.settings = settings;
             row.protection = protection;
-            out.push(Request::Save { record: Stored::Repository(row.clone()) });
+            out.push(Request::Save { read_afresh: None, release: None, record: Stored::Repository(row.clone()) });
             return;
         }
     };

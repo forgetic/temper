@@ -796,6 +796,7 @@ fn a_change_produced_opened_checked_queued_and_landed() {
                 | top::Request::Retained { .. }
                 | top::Request::ReleaseFailed { .. }
                 | top::Request::ProjectionEffect { .. }
+                | top::Request::WakeProcedure { .. }
                 | top::Request::ProjectAfter { .. }
                 | top::Request::ProjectionSettled { .. }
                 | top::Request::GoalTopic { .. }
@@ -1622,6 +1623,7 @@ fn goals_classify_landings_from_their_subtree_heads_and_planned_paths_after_rest
                 | top::Request::Retained { .. }
                 | top::Request::ReleaseFailed { .. }
                 | top::Request::ProjectionEffect { .. }
+                | top::Request::WakeProcedure { .. }
                 | top::Request::ProjectAfter { .. }
                 | top::Request::ProjectionSettled { .. }
                 | top::Request::ProjectionFailed { .. }

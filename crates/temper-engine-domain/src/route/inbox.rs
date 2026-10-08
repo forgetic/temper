@@ -3,15 +3,15 @@
 //! root rebuilds the cache from restored rows (domain/people.md, section 6).
 
 use super::{
-    Decision, Delivery, Domain, Env, Id, Key, Range, Read as RootRead, Record, ReplyTo, Request, Token, admits, close,
-    emit, ending_words, people, request_load, save, take_read, tasks,
+    Delivery, Domain, Env, Id, Key, Range, Read as RootRead, Record, ReplyTo, Request, Token, admits, close, emit,
+    ending_words, people, request_load, save, take_read, tasks,
 };
 use crate::Write;
 use alloc::boxed::Box;
 use skein_lib::{List, Queue};
 
 /// Project one durable person-origin goal proposal into policy or proposer inboxes.
-pub(super) fn person_proposal_entries(domain: &Domain, row: &tasks::PersonProposal) -> Box<[people::Entry]> {
+pub(crate) fn person_proposal_entries(domain: &Domain, row: &tasks::PersonProposal) -> Box<[people::Entry]> {
     domain.core.person_proposal_entries(row)
 }
 
@@ -23,7 +23,7 @@ enum Stage {
 
 /// One bounded store scan for a person's newest-first whole inbox page.
 #[derive(Debug)]
-pub(super) struct Read {
+pub(crate) struct Read {
     to: ReplyTo,
     person: u64,
     before: Option<crate::InboxCursor>,
@@ -36,10 +36,14 @@ pub(super) struct Read {
 }
 
 fn refused(to: ReplyTo, why: people::Refusal, out: &mut Queue<Request>) {
-    out.push(Request::Deliver(Delivery::WebReply { to, sign_in: None, reply: people::Reply::Refused(why) }));
+    out.push(crate::boundary::delivery_output(Delivery::WebReply {
+        to,
+        sign_in: None,
+        reply: people::Reply::Refused(why),
+    }));
 }
 
-pub(super) fn begin(
+pub(crate) fn begin(
     domain: &mut Domain,
     env: &Env<super::Limits>,
     to: ReplyTo,
@@ -82,13 +86,13 @@ pub(super) fn begin(
         Err(Some(RootRead::Inbox(read))) => return refused(read.to, people::Refusal::Busy, out),
         Err(_) => unreachable!("inserted inbox read"),
     };
+    let mut decision = super::route_decision(domain, &env.limits).expect("inbox read route admitted");
     assert!(domain.core.reserve_result_read(person, id.token()), "one inbox read per person");
-    let mut decision = Decision::new(&env.limits.journal);
     emit(&mut decision, &env.limits, Delivery::BeginInboxView { waiter: id.token() });
     close(domain, env, decision, out);
 }
 
-pub(super) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, out: &mut Queue<Request>) {
+pub(crate) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, out: &mut Queue<Request>) {
     let read = match take_read(domain, waiter) {
         Some(RootRead::Inbox(read)) => read,
         Some(
@@ -162,12 +166,13 @@ fn keep(read: &mut Read, entry: crate::InboxViewEntry) {
 
 /// Consume one validated store page; request the next range or deliver one page.
 #[expect(clippy::too_many_lines, reason = "one bounded two-stage store scan preserves its read slot")]
-pub(super) fn page(
+pub(crate) fn page(
     domain: &mut Domain,
     env: &Env<super::Limits>,
     waiter: Token,
     rows: Box<[Record]>,
     next: Option<Key>,
+    decision: &mut crate::Decision,
     out: &mut Queue<Request>,
 ) {
     let mut read = match take_read(domain, waiter) {
@@ -188,7 +193,7 @@ pub(super) fn page(
     for row in rows {
         match read.stage {
             Stage::Live => match row {
-                Record::Tasks(tasks::Stored::PersonProposal(row)) => {
+                Record::Core(jig_core::Record::Tasks(tasks::Stored::PersonProposal(row))) => {
                     for entry in person_proposal_entries(domain, &row) {
                         if !visible(domain, read.person, entry) {
                             continue;
@@ -214,7 +219,7 @@ pub(super) fn page(
                         }
                     }
                 }
-                Record::Tasks(tasks::Stored::Live(task)) => {
+                Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task))) => {
                     for entry in entries(domain, &task) {
                         if visible(domain, read.person, entry) {
                             match entry.kind {
@@ -239,30 +244,38 @@ pub(super) fn page(
                         }
                     }
                 }
-                Record::Tasks(
+                Record::Core(jig_core::Record::Tasks(
                     tasks::Stored::Ledger(_)
                     | tasks::Stored::Writer(_)
                     | tasks::Stored::Pool(_)
                     | tasks::Stored::Stub(_),
-                ) => {}
-                Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::History(_) | tasks::Stored::Milestone(_))
-                | Record::People(_)
-                | Record::Notes(_)
-                | Record::Projection(_)
-                | Record::Forge { .. }
-                | Record::Deployment(_)
-                | Record::Call(_)
-                | Record::Turn(_)
-                | Record::RunProof(_)
-                | Record::Terminal(_)
-                | Record::EscalationDecision(_)
-                | Record::ProposalDecision(_) => {
+                )) => {}
+                Record::Core(
+                    jig_core::Record::Tasks(
+                        tasks::Stored::Ended(_) | tasks::Stored::History(_) | tasks::Stored::Milestone(_),
+                    )
+                    | jig_core::Record::People(_)
+                    | jig_core::Record::Notes(_)
+                    | jig_core::Record::Core(
+                        jig_core::CoreRecord::Projection(_)
+                        | jig_core::CoreRecord::Deployment(_)
+                        | jig_core::CoreRecord::Call(_)
+                        | jig_core::CoreRecord::Turn(_)
+                        | jig_core::CoreRecord::RunProof(_)
+                        | jig_core::CoreRecord::Terminal(_)
+                        | jig_core::CoreRecord::EscalationDecision(_)
+                        | jig_core::CoreRecord::ProposalDecision(_),
+                    ),
+                )
+                | Record::Forge { .. } => {
                     unreachable!("live task range validates record family")
                 }
             },
             Stage::Ended => match row {
-                Record::Tasks(tasks::Stored::PersonProposal(_)) => unreachable!("ended result range has no proposal"),
-                Record::Tasks(tasks::Stored::Ended(task)) => {
+                Record::Core(jig_core::Record::Tasks(tasks::Stored::PersonProposal(_))) => {
+                    unreachable!("ended result range has no proposal")
+                }
+                Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(task))) => {
                     if task.requester == tasks::Party::Person(read.person)
                         && task.result_position > read.position
                         && (!read.frozen_high || task.result_position <= read.high)
@@ -293,26 +306,30 @@ pub(super) fn page(
                         );
                     }
                 }
-                Record::Tasks(
-                    tasks::Stored::Live(_)
-                    | tasks::Stored::Ledger(_)
-                    | tasks::Stored::History(_)
-                    | tasks::Stored::Milestone(_)
-                    | tasks::Stored::Stub(_)
-                    | tasks::Stored::Writer(_)
-                    | tasks::Stored::Pool(_),
+                Record::Core(
+                    jig_core::Record::Tasks(
+                        tasks::Stored::Live(_)
+                        | tasks::Stored::Ledger(_)
+                        | tasks::Stored::History(_)
+                        | tasks::Stored::Milestone(_)
+                        | tasks::Stored::Stub(_)
+                        | tasks::Stored::Writer(_)
+                        | tasks::Stored::Pool(_),
+                    )
+                    | jig_core::Record::People(_)
+                    | jig_core::Record::Notes(_)
+                    | jig_core::Record::Core(
+                        jig_core::CoreRecord::Projection(_)
+                        | jig_core::CoreRecord::Deployment(_)
+                        | jig_core::CoreRecord::Call(_)
+                        | jig_core::CoreRecord::Turn(_)
+                        | jig_core::CoreRecord::RunProof(_)
+                        | jig_core::CoreRecord::Terminal(_)
+                        | jig_core::CoreRecord::EscalationDecision(_)
+                        | jig_core::CoreRecord::ProposalDecision(_),
+                    ),
                 )
-                | Record::People(_)
-                | Record::Notes(_)
-                | Record::Projection(_)
-                | Record::Forge { .. }
-                | Record::Deployment(_)
-                | Record::Call(_)
-                | Record::Turn(_)
-                | Record::RunProof(_)
-                | Record::Terminal(_)
-                | Record::EscalationDecision(_)
-                | Record::ProposalDecision(_) => {
+                | Record::Forge { .. } => {
                     unreachable!("ended result range validates record family")
                 }
             },
@@ -320,8 +337,8 @@ pub(super) fn page(
     }
     if let Some(after) = next {
         let range = match read.stage {
-            Stage::Live => Range::Tasks,
-            Stage::Ended => Range::EndedResults,
+            Stage::Live => Range::Core(crate::CoreRange::Tasks),
+            Stage::Ended => Range::Core(crate::CoreRange::EndedResults),
         };
         *domain.result_reads.get_mut(Id::from_token(waiter)).expect("inbox slot") = Some(RootRead::Inbox(read));
         request_load(domain, waiter, range, Some(after), out);
@@ -331,11 +348,10 @@ pub(super) fn page(
         Stage::Live => {
             read.stage = Stage::Ended;
             *domain.result_reads.get_mut(Id::from_token(waiter)).expect("inbox slot") = Some(RootRead::Inbox(read));
-            request_load(domain, waiter, Range::EndedResults, None, out);
+            request_load(domain, waiter, Range::Core(crate::CoreRange::EndedResults), None, out);
         }
         Stage::Ended => {
-            let removed = domain.core.reading_results.remove(&read.person);
-            assert!(removed == Some(waiter), "inbox reader index names its waiter");
+            assert!(domain.core.release_result_read(read.person, waiter), "inbox reader index names its waiter");
             domain.result_reads.retire(Id::from_token(waiter));
             let next = if read.more {
                 match read.entries.last() {
@@ -349,20 +365,18 @@ pub(super) fn page(
             } else {
                 None
             };
-            let mut decision = Decision::new(&env.limits.journal);
             if next.is_none() && read.high > read.position {
                 let row = domain
                     .core
                     .advance_inbox_read(read.person, read.high)
                     .expect("newest read position advances after the last page");
-                save(&mut decision, &env.limits, Write::Save(Record::People(row)));
+                save(decision, &env.limits, Write::Save(Record::Core(jig_core::Record::People(row))));
             }
             emit(
-                &mut decision,
+                decision,
                 &env.limits,
                 Delivery::InboxView { to: read.to, person: read.person, entries: read.entries.into_boxed(), next },
             );
-            close(domain, env, decision, out);
         }
     }
 }
@@ -373,6 +387,6 @@ fn failed_owned(domain: &mut Domain, waiter: Token, read: Read, why: people::Ref
     refused(read.to, why, out);
 }
 
-pub(super) fn entries(domain: &Domain, row: &tasks::TaskRecord) -> Box<[people::Entry]> {
+pub(crate) fn entries(domain: &Domain, row: &tasks::TaskRecord) -> Box<[people::Entry]> {
     domain.core.waiting_entries(&super::core_limits(&domain.limits), row)
 }

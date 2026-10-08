@@ -211,6 +211,7 @@ impl World {
                 config.chat_authority.delegation.depth = 2;
             }
         }
+        limits.notes.scopes = 3 + limits.authority.grants;
         let mut fake_config = forge_world::fake_config();
         fake_config.limits.repositories = 2;
         let mut fake = fake::Domain::new(&fake_config, 71);
@@ -296,6 +297,7 @@ impl World {
     fn collect(&mut self) {
         for _ in 0..self.out.len() {
             match self.out.pop().expect("counted root output") {
+                engine::Request::ToChild(released) => self.events.push_back(engine::Event::Released(released)),
                 engine::Request::Commit { number, writes } => self.store.pending.push_back((number, writes)),
                 engine::Request::Load { owner, range, after, most, .. } => {
                     let (rows, next) = self.store.page(&range, after.as_ref(), most);
@@ -409,8 +411,8 @@ impl World {
             "forge root did not reach {target:?}; answers={:?}, assignments={:?}, task2={:?}, task3={:?}, forge={:?}",
             self.answers,
             self.assigned,
-            self.store.rows.get(&Key::Tasks(tasks::Key::Live(2))),
-            self.store.rows.get(&Key::Tasks(tasks::Key::Live(3))),
+            self.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(2)))),
+            self.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(3)))),
             self.store.rows.values().filter(|row| matches!(row, Record::Forge { .. })).collect::<Vec<_>>()
         );
     }
@@ -762,7 +764,7 @@ mod system_stories {
                     forge_top::Stored::Change(change) => change.pull,
                     _ => None,
                 },
-                _ => None,
+                Record::Core(_) => None,
             })
             .expect("opened pull request");
         assert!(matches!(

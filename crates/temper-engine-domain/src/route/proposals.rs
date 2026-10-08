@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 
 /// One bounded named historical lookup after a proposal left live memory.
 #[derive(Debug)]
-pub(super) struct Query {
+pub(crate) struct Query {
     request: Token,
     person: u64,
     project: u32,
@@ -14,7 +14,7 @@ pub(super) struct Query {
 }
 
 #[expect(clippy::too_many_arguments, reason = "one keyed proposal decision has one named archive identity")]
-pub(super) fn historical_begin(
+pub(crate) fn historical_begin(
     domain: &mut Domain,
     env: &Env<Limits>,
     barrier: &mut Decision,
@@ -40,29 +40,37 @@ pub(super) fn historical_begin(
     super::emit(
         barrier,
         &env.limits,
-        super::Delivery::Load { waiter: id.token(), range: super::Range::ProposalDecision { proposal }, after: None },
+        super::Delivery::Load {
+            waiter: id.token(),
+            range: super::Range::Core(crate::CoreRange::ProposalDecision { proposal }),
+            after: None,
+        },
     );
 }
 
-pub(super) fn historical_loaded(domain: &mut Domain, waiter: Token, rows: Box<[super::Record]>) {
+pub(crate) fn historical_loaded(domain: &mut Domain, waiter: Token, rows: Box<[super::Record]>) {
     let Some(super::Read::Proposal(query)) = super::take_read(domain, waiter) else {
         unreachable!("proposal archive owns its read")
     };
     domain.result_reads.retire(super::Id::from_token(waiter));
     let row = if rows.len() == 1 {
         match rows.into_iter().next().expect("one loaded row") {
-            super::Record::ProposalDecision(row) => Some(row),
-            super::Record::Call(_)
-            | super::Record::Deployment(_)
-            | super::Record::Turn(_)
-            | super::Record::RunProof(_)
-            | super::Record::Terminal(_)
-            | super::Record::Tasks(_)
-            | super::Record::People(_)
-            | super::Record::Notes(_)
-            | super::Record::Forge { .. }
-            | super::Record::Projection(_)
-            | super::Record::EscalationDecision(_) => None,
+            super::Record::Core(jig_core::Record::Core(jig_core::CoreRecord::ProposalDecision(row))) => Some(row),
+            super::Record::Core(
+                jig_core::Record::Core(
+                    jig_core::CoreRecord::Call(_)
+                    | jig_core::CoreRecord::Deployment(_)
+                    | jig_core::CoreRecord::Turn(_)
+                    | jig_core::CoreRecord::RunProof(_)
+                    | jig_core::CoreRecord::Terminal(_)
+                    | jig_core::CoreRecord::Projection(_)
+                    | jig_core::CoreRecord::EscalationDecision(_),
+                )
+                | jig_core::Record::Tasks(_)
+                | jig_core::Record::People(_)
+                | jig_core::Record::Notes(_),
+            )
+            | super::Record::Forge { .. } => None,
         }
     } else {
         None
@@ -78,7 +86,7 @@ pub(super) fn historical_loaded(domain: &mut Domain, waiter: Token, rows: Box<[s
     }));
 }
 
-pub(super) fn historical_failed(domain: &mut Domain, waiter: Token) {
+pub(crate) fn historical_failed(domain: &mut Domain, waiter: Token) {
     let Some(super::Read::Proposal(query)) = super::take_read(domain, waiter) else {
         unreachable!("proposal archive owns its read")
     };
@@ -94,7 +102,7 @@ pub(super) fn historical_failed(domain: &mut Domain, waiter: Token) {
     }));
 }
 
-pub(super) fn propose_call(
+pub(crate) fn propose_call(
     domain: &mut Domain,
     to: ReplyTo,
     key: CallKey,

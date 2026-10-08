@@ -18,7 +18,13 @@ fn archives(world: &World) -> Vec<&EscalationDecisionRecord> {
         .store
         .rows
         .values()
-        .filter_map(|row| if let Record::EscalationDecision(archive) = row { Some(archive) } else { None })
+        .filter_map(|row| {
+            if let Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(archive))) = row {
+                Some(archive)
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
@@ -47,7 +53,10 @@ fn requester_passes_to_final_role_second_owner_releases_and_final_pass_refuses()
     assert_ne!(decisions[1].by, decisions[1].requester, "second authenticated owner releases");
     assert!(world.store.rows.values().any(|row| matches!(
         row,
-        Record::People(people::Stored::Answer { outcome: people::Outcome::Refused(people::Refusal::NoFurther), .. })
+        Record::Core(jig_core::Record::People(people::Stored::Answer {
+            outcome: people::Outcome::Refused(people::Refusal::NoFurther),
+            ..
+        }))
     )));
     assert!(world.referee.done());
 }
@@ -60,13 +69,25 @@ fn rejection_retains_a_bounded_reason_and_never_assigns_a_retry() {
         .store
         .rows
         .values()
-        .find_map(|row| if let Record::Tasks(tasks::Stored::Live(record)) = row { Some(record.as_ref()) } else { None })
+        .find_map(|row| {
+            if let Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(record))) = row {
+                Some(record.as_ref())
+            } else {
+                None
+            }
+        })
         .expect("rejected task stays live and held");
     assert_eq!(rejected.numbers.spent, 3);
     assert!(
         matches!(&rejected.escalation, tasks::Escalation::Rejected { revision: 1, reason, .. } if reason.as_ref() == REASON)
     );
-    assert!(!world.store.rows.values().any(|row| matches!(row, Record::Tasks(tasks::Stored::Ended(_)))));
+    assert!(
+        !world
+            .store
+            .rows
+            .values()
+            .any(|row| matches!(row, Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(_)))))
+    );
     assert!(world.referee.done(), "same-key replay, key conflict and stale-key outcome all settled");
 }
 
@@ -82,10 +103,10 @@ fn both_owner_races_return_the_same_first_committed_winner() {
             .rows
             .values()
             .filter_map(|row| {
-                if let Record::People(people::Stored::Answer {
+                if let Record::Core(jig_core::Record::People(people::Stored::Answer {
                     outcome: people::Outcome::EscalationDecided { task, revision: 2, by, choice },
                     ..
-                }) = row
+                })) = row
                 {
                     Some((*task, *by, *choice))
                 } else {
@@ -126,7 +147,7 @@ fn held_and_decision_commit_cuts_restore_paged_real_children_and_exact_scripts()
         .iter()
         .find(|writes| {
             writes.iter().any(
-                |write| matches!(write, Write::Save(Record::Terminal(terminal)) if terminal.end == tasks::End::Refused),
+                |write| matches!(write, Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Terminal(terminal)))) if terminal.end == tasks::End::Refused),
             )
         })
         .expect("actual unassigned-claim refusal transaction");
@@ -139,17 +160,21 @@ fn held_and_decision_commit_cuts_restore_paged_real_children_and_exact_scripts()
     ] {
         let mut altered = writes.clone();
         match corruption {
-            0 => altered.retain(|write| !matches!(write, Write::Save(Record::RunProof(_)))),
+            0 => altered.retain(|write| {
+                !matches!(write, Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(_)))))
+            }),
             1 => {
                 for write in &mut altered {
-                    if let Write::Save(Record::Tasks(tasks::Stored::Live(task))) = write {
+                    if let Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(task)))) = write {
                         task.tries.lost = 1;
                     }
                 }
             }
             2 => {
                 for write in &mut altered {
-                    if let Write::Save(Record::Terminal(terminal)) = write {
+                    if let Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Terminal(terminal)))) =
+                        write
+                    {
                         terminal.end = tasks::End::Failed(tasks::Class::Lost);
                     }
                 }
@@ -180,7 +205,7 @@ fn before_decision(world: &World, archive: &EscalationDecisionRecord) -> Referee
             .rows
             .values()
             .find_map(|row| {
-                if let Record::People(people::Stored::Person { number, identity }) = row
+                if let Record::Core(jig_core::Record::People(people::Stored::Person { number, identity })) = row
                     && identity.key == (people::IdentityKey { provider: 0, subject: (user).to_be_bytes().into() })
                 {
                     Some(*number)
@@ -195,8 +220,8 @@ fn before_decision(world: &World, archive: &EscalationDecisionRecord) -> Referee
             .iter()
             .find_map(|(key, row)| {
                 if let (
-                    Key::People(people::Key::SignIn(sign_in)),
-                    Record::People(people::Stored::SignIn { person: owner, .. }),
+                    Key::Core(jig_core::Key::People(people::Key::SignIn(sign_in))),
+                    Record::Core(jig_core::Record::People(people::Stored::SignIn { person: owner, .. })),
                 ) = (key, row)
                     && *owner == person
                 {
@@ -220,15 +245,27 @@ fn referee_rejects_split_or_missing_decision_cohorts_and_duplicate_revision_effe
     let writes = world
         .transactions
         .iter()
-        .find(|writes| writes.iter().any(|write| matches!(write, Write::Save(Record::EscalationDecision(_)))))
+        .find(|writes| {
+            writes.iter().any(|write| {
+                matches!(
+                    write,
+                    Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(_))))
+                )
+            })
+        })
         .expect("actual atomic decision cohort");
     for omission in 0..3 {
         let split: Vec<_> = writes
             .iter()
             .filter(|write| match omission {
-                0 => !matches!(write, Write::Save(Record::EscalationDecision(_))),
-                1 => !matches!(write, Write::Save(Record::Tasks(tasks::Stored::Live(_)))),
-                2 => !matches!(write, Write::Save(Record::People(people::Stored::Answer { .. }))),
+                0 => !matches!(
+                    write,
+                    Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(_))))
+                ),
+                1 => !matches!(write, Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(_))))),
+                2 => {
+                    !matches!(write, Write::Save(Record::Core(jig_core::Record::People(people::Stored::Answer { .. }))))
+                }
                 _ => unreachable!("three cohort families"),
             })
             .cloned()
@@ -243,7 +280,9 @@ fn referee_rejects_split_or_missing_decision_cohorts_and_duplicate_revision_effe
     assert_eq!(referee.commit(writes), Err("semantic revision archived twice"));
     let mut altered = writes.clone();
     for write in &mut altered {
-        if let Write::Save(Record::EscalationDecision(archive)) = write {
+        if let Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(archive)))) =
+            write
+        {
             archive.by += 1;
         }
     }
@@ -258,10 +297,19 @@ fn referee_rejects_missing_terminal_evidence_duplicate_outputs_and_double_fundin
         .store
         .rows
         .values()
-        .find_map(|row| if let Record::Terminal(terminal) = row { Some(terminal) } else { None })
+        .find_map(|row| {
+            if let Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Terminal(terminal))) = row {
+                Some(terminal)
+            } else {
+                None
+            }
+        })
         .expect("real first priced terminal");
     let mut rows = world.store.rows.clone();
-    rows.remove(&Key::Terminal { task: terminal.task, attempt: terminal.attempt });
+    rows.remove(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Terminal {
+        task: terminal.task,
+        attempt: terminal.attempt,
+    })));
     assert_eq!(
         world.referee.clone().acknowledged(&rows, terminal.task, terminal.attempt),
         Err("worker ACK before exact durable terminal")
@@ -275,7 +323,7 @@ fn referee_rejects_missing_terminal_evidence_duplicate_outputs_and_double_fundin
         Err("unscripted or duplicate final report")
     );
     for row in rows.values_mut() {
-        if let Record::Tasks(tasks::Stored::Ledger(pool)) = row
+        if let Record::Core(jig_core::Record::Tasks(tasks::Stored::Ledger(pool))) = row
             && pool.numbers.spent_below == 5
         {
             pool.numbers.spent_below *= 2;
@@ -308,8 +356,8 @@ fn key_conflict_requires_immediate_refusal_and_preserves_the_saved_winner() {
     );
     for changed_ask in [false, true] {
         let mut rows = world.store.rows.clone();
-        let Some(Record::People(people::Stored::Answer { ask, outcome, .. })) =
-            rows.get_mut(&Key::People(people::Key::Answer(key)))
+        let Some(Record::Core(jig_core::Record::People(people::Stored::Answer { ask, outcome, .. }))) =
+            rows.get_mut(&Key::Core(jig_core::Key::People(people::Key::Answer(key))))
         else {
             panic!("original saved winner");
         };

@@ -179,7 +179,7 @@ fn snapshot(settings: Settings) -> Store {
     for _ in 0..300 {
         previous.iterate();
         let waiting = previous.store.rows.values().any(|row| {
-            matches!(row, Record::Tasks(tasks::Stored::Live(record)) if matches!(record.escalation,
+            matches!(row, Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(record))) if matches!(record.escalation,
                 tasks::Escalation::Waiting { revision: 1, holder: tasks::EscalationHolder::Person(_), .. }
                     if settings.base == Base::Requester)
                 || matches!(record.escalation,
@@ -205,45 +205,49 @@ impl World {
         let mut task = 0;
         for row in store.rows.values() {
             match row {
-                Record::People(people::Stored::Person { number, identity }) => {
+                Record::Core(jig_core::Record::People(people::Stored::Person { number, identity })) => {
                     if identity.key.provider == 0 && identity.key.subject.as_ref() == 7_u64.to_be_bytes() {
                         people[0] = *number;
                     } else if identity.key.provider == 0 && identity.key.subject.as_ref() == 8_u64.to_be_bytes() {
                         people[1] = *number;
                     }
                 }
-                Record::Tasks(tasks::Stored::Live(record)) => task = record.number,
-                Record::People(
-                    people::Stored::SignIn { .. }
-                    | people::Stored::ReadPosition { .. }
-                    | people::Stored::Roles { .. }
-                    | people::Stored::Policy { .. }
-                    | people::Stored::Answer { .. },
+                Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(record))) => task = record.number,
+                Record::Core(
+                    jig_core::Record::People(
+                        people::Stored::SignIn { .. }
+                        | people::Stored::ReadPosition { .. }
+                        | people::Stored::Roles { .. }
+                        | people::Stored::Policy { .. }
+                        | people::Stored::Answer { .. },
+                    )
+                    | jig_core::Record::Tasks(
+                        tasks::Stored::Ended(_)
+                        | tasks::Stored::Stub(_)
+                        | tasks::Stored::Ledger(_)
+                        | tasks::Stored::Writer(_)
+                        | tasks::Stored::Pool(_)
+                        | tasks::Stored::Milestone(_)
+                        | tasks::Stored::History(_)
+                        | tasks::Stored::PersonProposal(_),
+                    )
+                    | jig_core::Record::Core(
+                        jig_core::CoreRecord::Projection(_)
+                        | jig_core::CoreRecord::Call(_)
+                        | jig_core::CoreRecord::Deployment(_)
+                        | jig_core::CoreRecord::Turn(_)
+                        | jig_core::CoreRecord::RunProof(_)
+                        | jig_core::CoreRecord::Terminal(_)
+                        | jig_core::CoreRecord::EscalationDecision(_)
+                        | jig_core::CoreRecord::ProposalDecision(_),
+                    )
+                    | jig_core::Record::Notes(_),
                 )
-                | Record::Tasks(
-                    tasks::Stored::Ended(_)
-                    | tasks::Stored::Stub(_)
-                    | tasks::Stored::Ledger(_)
-                    | tasks::Stored::Writer(_)
-                    | tasks::Stored::Pool(_)
-                    | tasks::Stored::Milestone(_)
-                    | tasks::Stored::History(_)
-                    | tasks::Stored::PersonProposal(_),
-                )
-                | Record::Projection(_)
-                | Record::Call(_)
-                | Record::Deployment(_)
-                | Record::Turn(_)
-                | Record::RunProof(_)
-                | Record::Terminal(_)
-                | Record::EscalationDecision(_)
-                | Record::ProposalDecision(_)
-                | Record::Notes(_)
                 | Record::Forge { .. } => {}
             }
         }
         for row in store.rows.values() {
-            if let Record::People(people::Stored::SignIn { number, person, .. }) = row {
+            if let Record::Core(jig_core::Record::People(people::Stored::SignIn { number, person, .. })) = row {
                 for index in 0..2 {
                     if *person == people[index] {
                         sessions[index] = *number;
@@ -253,8 +257,8 @@ impl World {
         }
         assert!(task != 0 && people.iter().all(|person| *person != 0) && sessions.iter().all(|session| *session != 0));
         if settings.exhausted {
-            let Some(Record::Tasks(tasks::Stored::Live(record))) =
-                store.rows.get_mut(&Key::Tasks(tasks::Key::Live(task)))
+            let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(record)))) =
+                store.rows.get_mut(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(task))))
             else {
                 panic!("actual durable held task");
             };
@@ -360,8 +364,8 @@ impl World {
     /// child's private state.
     #[must_use]
     pub fn task_record(&self) -> &tasks::TaskRecord {
-        let Some(Record::Tasks(tasks::Stored::Live(record))) =
-            self.store.rows.get(&Key::Tasks(tasks::Key::Live(self.task)))
+        let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(record)))) =
+            self.store.rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(self.task))))
         else {
             panic!("role story retains one actual held task");
         };
@@ -428,7 +432,10 @@ impl World {
         let roles = self.store.pending.front().expect("actual pending commit").1.iter().any(|write| {
             matches!(
                 write,
-                Write::Save(Record::People(people::Stored::Answer { outcome: people::Outcome::RolesSet { .. }, .. }))
+                Write::Save(Record::Core(jig_core::Record::People(people::Stored::Answer {
+                    outcome: people::Outcome::RolesSet { .. },
+                    ..
+                })))
             )
         });
         let number = self.store.apply();
@@ -454,16 +461,17 @@ impl World {
         while let Some(request) = self.out.pop() {
             self.trace.push(format!("output {request:?}"));
             match request {
+                engine::Request::ToChild(released) => self.queue(engine::Event::Released(released), 0),
                 engine::Request::Commit { number, writes } => {
                     self.cohorts.push((self.referee.clone(), writes.to_vec()));
                     self.referee.commit(&writes).expect("independent role transaction observer");
                     let roles = writes.iter().any(|write| {
                         matches!(
                             write,
-                            Write::Save(Record::People(people::Stored::Answer {
+                            Write::Save(Record::Core(jig_core::Record::People(people::Stored::Answer {
                                 outcome: people::Outcome::RolesSet { .. },
                                 ..
-                            }))
+                            })))
                         )
                     });
                     if self.store.pending.is_empty() {

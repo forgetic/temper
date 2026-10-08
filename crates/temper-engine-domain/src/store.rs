@@ -1,10 +1,10 @@
 //! The root's typed durable store vocabulary (domain/engine.md, 5.3–5.6).
-//! It carries deployment counters, accepted transcript turns and owned child
-//! records/keys. The root gathers writes into atomic decisions; the store
+//! It wraps core and forge records and keys. The root gathers owner-produced
+//! writes into atomic decisions; the store
 //! protocol encodes versions and supplies ordered, bounded pages.
 //!
 //! These values keep no IO state and know no store format, transport or secret
-//! bytes. [`Range::contains`], [`Record::key`], [`Write::key`] and [`record_bytes`]
+//! bytes. [`CoreRange::contains`], [`Record::key`], [`Write::key`] and [`record_bytes`]
 //! are pure value helpers: they neither issue IO nor create terminal events.
 //! Range membership and deep-byte accounting are only parts of admission;
 //! [`crate::loads`] also checks whole-page row bounds, order and continuation.
@@ -207,58 +207,8 @@ pub struct CallRecord {
 /// (jig's domain/engine.md, 5.3–5.6).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
-    /// One core-owned bounded projection feed row.
-    Projection(jig_core::ProjectionKey),
-    /// Immutable outcome of a person-decided proposal, loaded by its root-issued number.
-    ProposalDecision(u64),
-    /// Root's immutable decided held-chat revision; read only by named race
-    /// replay, never restored into live state.
-    EscalationDecision {
-        /// Positive root-issued task.
-        task: u64,
-        /// Positive semantic revision, unique within task.
-        revision: u64,
-    },
-    /// A run's durable named host-tool decision, retained until its answer is in a turn.
-    Call(/** Task, attempt, completion and block position. */ CallKey),
-    /// Singleton deployment header key.
-    Deployment,
-    /// Root-accepted transcript turn under one task and attempt.
-    Turn {
-        /// Positive durable task number, validated for turn writes.
-        task: u64,
-        /// Positive root-issued activation number.
-        attempt: u64,
-        /// Positive turn sequence number, represented by `u32`.
-        turn: u32,
-    },
-    /// Root-issued live claim replay key; at most one per live task, erased on end.
-    RunProof {
-        /// Positive task number issued by root; current claim replaces this row.
-        task: u64,
-    },
-    /// Root's historical typed terminal evidence; never restored into the live proof table.
-    Terminal {
-        /// Positive root-issued task number.
-        task: u64,
-        /// Positive root-issued claim number; immutable archive identity.
-        attempt: u64,
-    },
-    /// Child semantic task/financial record key; transport proofs have root keys and no child
-    /// receipt family exists.
-    Tasks(
-        /// Tasks-issued key, preserved under the root wrapper without reinterpretation.
-        jig_core_tasks::Key,
-    ),
-    /// Store key for people identities, sign-ins, roles and keyed replies.
-    People(
-        /// People-issued key for its durable secret-free records.
-        jig_core_people::Key,
-    ),
-    /// A scoped note entry or one line of its scope index.
-    Notes(jig_core_notes::Key),
-    /// Stable root store address for a connector row.
-    Forge(u64),
+    Core(jig_core::Key),
+    Forge(temper_engine_domain_forge::Key),
 }
 
 /// Root-owned page ranges (domain/engine.md, section 5.3).
@@ -266,7 +216,7 @@ pub enum Key {
 /// records already have concrete task/people wrappers. These values issue no
 /// request on their own and promise no cross-page snapshot (domain/engine.md, 5.3).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum Range {
+pub enum CoreRange {
     /// One immutable decision for a later authenticated proposal caller.
     ProposalDecision { proposal: u64 },
     /// Exactly one root-owned decision archive for a stale authenticated
@@ -292,8 +242,6 @@ pub enum Range {
     RunProofs,
     /// Root startup reads every people child row before accepting people.
     People,
-    /// Root startup pages the forge connector's durable working set.
-    Forge,
     /// Root reads one historical ended task for an authenticated result page.
     TaskResult {
         /// Positive root-issued ended task key; terminal page has at most one row.
@@ -312,6 +260,13 @@ pub enum Range {
     Notes(jig_core_notes::Range),
 }
 
+/// Child-contiguous live or historical store range.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum Range {
+    Core(CoreRange),
+    Forge,
+}
+
 impl Range {
     /// Check membership before accepting a store row. Pure value predicate, with no allocation,
     /// effect or terminal. Turn zero is invalid; continuation ordering is checked by the load
@@ -321,80 +276,105 @@ impl Range {
     pub fn contains(&self, key: &Key) -> bool {
         match self.clone() {
             Range::Forge => match key.clone() {
-                Key::Forge(id) => id != 0,
-                Key::Call(_)
-                | Key::EscalationDecision { .. }
-                | Key::ProposalDecision(_)
-                | Key::Deployment
-                | Key::Turn { .. }
-                | Key::RunProof { .. }
-                | Key::Terminal { .. }
-                | Key::Tasks(_)
-                | Key::People(_)
-                | Key::Notes(_)
-                | Key::Projection(_) => false,
+                Key::Forge(_) => true,
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::EscalationDecision { .. }
+                        | jig_core::CoreKey::ProposalDecision(_)
+                        | jig_core::CoreKey::Deployment
+                        | jig_core::CoreKey::Turn { .. }
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::Projection(_),
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::People(_)
+                    | jig_core::Key::Notes(_),
+                ) => false,
             },
-            Range::ProposalDecision { proposal } => match key.clone() {
-                Key::ProposalDecision(number) => proposal != 0 && number == proposal,
-                Key::Call(_)
-                | Key::EscalationDecision { .. }
-                | Key::Deployment
-                | Key::Turn { .. }
-                | Key::RunProof { .. }
-                | Key::Terminal { .. }
-                | Key::Tasks(_)
-                | Key::People(_)
-                | Key::Notes(_)
-                | Key::Forge(_)
-                | Key::Projection(_) => false,
-            },
-            Range::Calls => match key.clone() {
-                Key::Call(call) => call.task != 0 && call.attempt != 0 && call.completion != 0,
-                Key::EscalationDecision { .. }
-                | Key::ProposalDecision(_)
-                | Key::Deployment
-                | Key::Turn { .. }
-                | Key::RunProof { .. }
-                | Key::Terminal { .. }
-                | Key::Tasks(_)
-                | Key::People(_)
-                | Key::Notes(_)
-                | Key::Forge(_)
-                | Key::Projection(_) => false,
-            },
-            Range::EscalationDecision { task, revision } => match key.clone() {
-                Key::EscalationDecision { task: found, revision: current } => {
-                    task != 0 && revision != 0 && task == found && revision == current
+            Range::Core(CoreRange::ProposalDecision { proposal }) => match key.clone() {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::ProposalDecision(number))) => {
+                    proposal != 0 && number == proposal
                 }
-                Key::Call(_)
-                | Key::ProposalDecision(_)
-                | Key::Deployment
-                | Key::Turn { .. }
-                | Key::RunProof { .. }
-                | Key::Terminal { .. }
-                | Key::Tasks(_)
-                | Key::People(_)
-                | Key::Notes(_)
-                | Key::Forge(_)
-                | Key::Projection(_) => false,
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::EscalationDecision { .. }
+                        | jig_core::CoreKey::Deployment
+                        | jig_core::CoreKey::Turn { .. }
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::Projection(_),
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::People(_)
+                    | jig_core::Key::Notes(_),
+                )
+                | Key::Forge(_) => false,
             },
-            Range::Deployment => match key.clone() {
-                Key::Deployment => true,
-                Key::Call(_)
-                | Key::EscalationDecision { .. }
-                | Key::ProposalDecision(_)
-                | Key::Turn { .. }
-                | Key::RunProof { .. }
-                | Key::Terminal { .. }
-                | Key::Tasks(_)
-                | Key::People(_)
-                | Key::Notes(_)
-                | Key::Forge(_)
-                | Key::Projection(_) => false,
+            Range::Core(CoreRange::Calls) => match key.clone() {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::Call(call))) => {
+                    call.task != 0 && call.attempt != 0 && call.completion != 0
+                }
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::EscalationDecision { .. }
+                        | jig_core::CoreKey::ProposalDecision(_)
+                        | jig_core::CoreKey::Deployment
+                        | jig_core::CoreKey::Turn { .. }
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::Projection(_),
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::People(_)
+                    | jig_core::Key::Notes(_),
+                )
+                | Key::Forge(_) => false,
             },
-            Range::Tasks => match key.clone() {
-                Key::Projection(_) => true,
-                Key::Tasks(child) => match child {
+            Range::Core(CoreRange::EscalationDecision { task, revision }) => match key.clone() {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::EscalationDecision {
+                    task: found,
+                    revision: current,
+                })) => task != 0 && revision != 0 && task == found && revision == current,
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::ProposalDecision(_)
+                        | jig_core::CoreKey::Deployment
+                        | jig_core::CoreKey::Turn { .. }
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::Projection(_),
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::People(_)
+                    | jig_core::Key::Notes(_),
+                )
+                | Key::Forge(_) => false,
+            },
+            Range::Core(CoreRange::Deployment) => match key.clone() {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::Deployment)) => true,
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::EscalationDecision { .. }
+                        | jig_core::CoreKey::ProposalDecision(_)
+                        | jig_core::CoreKey::Turn { .. }
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::Projection(_),
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::People(_)
+                    | jig_core::Key::Notes(_),
+                )
+                | Key::Forge(_) => false,
+            },
+            Range::Core(CoreRange::Tasks) => match key.clone() {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::Projection(_))) => true,
+                Key::Core(jig_core::Key::Tasks(child)) => match child {
                     jig_core_tasks::Key::Live(_)
                     | jig_core_tasks::Key::Ledger(_)
                     | jig_core_tasks::Key::Stub(_)
@@ -405,105 +385,137 @@ impl Range {
                     | jig_core_tasks::Key::History { .. }
                     | jig_core_tasks::Key::Milestone { .. } => false,
                 },
-                Key::Call(_)
-                | Key::EscalationDecision { .. }
-                | Key::ProposalDecision(_)
-                | Key::Deployment
-                | Key::Turn { .. }
-                | Key::RunProof { .. }
-                | Key::Terminal { .. }
-                | Key::People(_)
-                | Key::Notes(_)
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::EscalationDecision { .. }
+                        | jig_core::CoreKey::ProposalDecision(_)
+                        | jig_core::CoreKey::Deployment
+                        | jig_core::CoreKey::Turn { .. }
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. },
+                    )
+                    | jig_core::Key::People(_)
+                    | jig_core::Key::Notes(_),
+                )
                 | Key::Forge(_) => false,
             },
-            Range::EndedResults => match key.clone() {
-                Key::Tasks(jig_core_tasks::Key::Ended(number)) => number != 0,
-                Key::Call(_)
-                | Key::EscalationDecision { .. }
-                | Key::ProposalDecision(_)
-                | Key::Deployment
-                | Key::Turn { .. }
-                | Key::RunProof { .. }
-                | Key::Terminal { .. }
-                | Key::Tasks(_)
-                | Key::People(_)
-                | Key::Notes(_)
-                | Key::Forge(_)
-                | Key::Projection(_) => false,
+            Range::Core(CoreRange::EndedResults) => match key.clone() {
+                Key::Core(jig_core::Key::Tasks(jig_core_tasks::Key::Ended(number))) => number != 0,
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::EscalationDecision { .. }
+                        | jig_core::CoreKey::ProposalDecision(_)
+                        | jig_core::CoreKey::Deployment
+                        | jig_core::CoreKey::Turn { .. }
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::Projection(_),
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::People(_)
+                    | jig_core::Key::Notes(_),
+                )
+                | Key::Forge(_) => false,
             },
-            Range::People => match key.clone() {
-                Key::People(_) => true,
-                Key::Call(_)
-                | Key::EscalationDecision { .. }
-                | Key::ProposalDecision(_)
-                | Key::Deployment
-                | Key::Turn { .. }
-                | Key::RunProof { .. }
-                | Key::Terminal { .. }
-                | Key::Tasks(_)
-                | Key::Notes(_)
-                | Key::Forge(_)
-                | Key::Projection(_) => false,
+            Range::Core(CoreRange::People) => match key.clone() {
+                Key::Core(jig_core::Key::People(_)) => true,
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::EscalationDecision { .. }
+                        | jig_core::CoreKey::ProposalDecision(_)
+                        | jig_core::CoreKey::Deployment
+                        | jig_core::CoreKey::Turn { .. }
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::Projection(_),
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::Notes(_),
+                )
+                | Key::Forge(_) => false,
             },
-            Range::RunProofs => match key.clone() {
-                Key::RunProof { task } => task != 0,
-                Key::Call(_)
-                | Key::EscalationDecision { .. }
-                | Key::ProposalDecision(_)
-                | Key::Deployment
-                | Key::Turn { .. }
-                | Key::Terminal { .. }
-                | Key::Tasks(_)
-                | Key::People(_)
-                | Key::Notes(_)
-                | Key::Forge(_)
-                | Key::Projection(_) => false,
+            Range::Core(CoreRange::RunProofs) => match key.clone() {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::RunProof(task))) => task != 0,
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::EscalationDecision { .. }
+                        | jig_core::CoreKey::ProposalDecision(_)
+                        | jig_core::CoreKey::Deployment
+                        | jig_core::CoreKey::Turn { .. }
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::Projection(_),
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::People(_)
+                    | jig_core::Key::Notes(_),
+                )
+                | Key::Forge(_) => false,
             },
-            Range::TaskResult { task } => match key.clone() {
-                Key::Tasks(jig_core_tasks::Key::Ended(number)) => task == number,
-                Key::Call(_)
-                | Key::EscalationDecision { .. }
-                | Key::ProposalDecision(_)
-                | Key::Tasks(_)
-                | Key::Deployment
-                | Key::Turn { .. }
-                | Key::RunProof { .. }
-                | Key::Terminal { .. }
-                | Key::People(_)
-                | Key::Notes(_)
-                | Key::Forge(_)
-                | Key::Projection(_) => false,
+            Range::Core(CoreRange::TaskResult { task }) => match key.clone() {
+                Key::Core(jig_core::Key::Tasks(jig_core_tasks::Key::Ended(number))) => task == number,
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::EscalationDecision { .. }
+                        | jig_core::CoreKey::ProposalDecision(_)
+                        | jig_core::CoreKey::Deployment
+                        | jig_core::CoreKey::Turn { .. }
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::Projection(_),
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::People(_)
+                    | jig_core::Key::Notes(_),
+                )
+                | Key::Forge(_) => false,
             },
-            Range::Turns { task, attempt } => match key.clone() {
-                Key::Turn { task: found, attempt: run, turn } => found == task && run == attempt && turn != 0,
-                Key::Call(_)
-                | Key::EscalationDecision { .. }
-                | Key::ProposalDecision(_)
-                | Key::Deployment
-                | Key::RunProof { .. }
-                | Key::Terminal { .. }
-                | Key::Tasks(_)
-                | Key::People(_)
-                | Key::Notes(_)
-                | Key::Forge(_)
-                | Key::Projection(_) => false,
+            Range::Core(CoreRange::Turns { task, attempt }) => match key.clone() {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::Turn { task: found, attempt: run, turn })) => {
+                    found == task && run == attempt && turn != 0
+                }
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::EscalationDecision { .. }
+                        | jig_core::CoreKey::ProposalDecision(_)
+                        | jig_core::CoreKey::Deployment
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::Projection(_),
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::People(_)
+                    | jig_core::Key::Notes(_),
+                )
+                | Key::Forge(_) => false,
             },
-            Range::TaskTranscript { task } => match key.clone() {
-                Key::Turn { task: found, attempt, turn } => task != 0 && found == task && attempt != 0 && turn != 0,
-                Key::Call(_)
-                | Key::EscalationDecision { .. }
-                | Key::ProposalDecision(_)
-                | Key::Deployment
-                | Key::RunProof { .. }
-                | Key::Terminal { .. }
-                | Key::Tasks(_)
-                | Key::People(_)
-                | Key::Notes(_)
-                | Key::Forge(_)
-                | Key::Projection(_) => false,
+            Range::Core(CoreRange::TaskTranscript { task }) => match key.clone() {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::Turn { task: found, attempt, turn })) => {
+                    task != 0 && found == task && attempt != 0 && turn != 0
+                }
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::EscalationDecision { .. }
+                        | jig_core::CoreKey::ProposalDecision(_)
+                        | jig_core::CoreKey::Deployment
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::Projection(_),
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::People(_)
+                    | jig_core::Key::Notes(_),
+                )
+                | Key::Forge(_) => false,
             },
-            Range::Notes(range) => match key {
-                Key::Notes(child) => match range {
+            Range::Core(CoreRange::Notes(range)) => match key {
+                Key::Core(jig_core::Key::Notes(child)) => match range {
                     jig_core_notes::Range::Entry { name } => match child {
                         jig_core_notes::Key::Entry { name: found } => name == *found,
                         jig_core_notes::Key::Line { .. } => false,
@@ -519,17 +531,21 @@ impl Range {
                         jig_core_notes::Key::Entry { .. } => false,
                     },
                 },
-                Key::Call(_)
-                | Key::EscalationDecision { .. }
-                | Key::ProposalDecision(_)
-                | Key::Deployment
-                | Key::Turn { .. }
-                | Key::RunProof { .. }
-                | Key::Terminal { .. }
-                | Key::Tasks(_)
-                | Key::People(_)
-                | Key::Forge(_)
-                | Key::Projection(_) => false,
+                Key::Core(
+                    jig_core::Key::Core(
+                        jig_core::CoreKey::Call(_)
+                        | jig_core::CoreKey::EscalationDecision { .. }
+                        | jig_core::CoreKey::ProposalDecision(_)
+                        | jig_core::CoreKey::Deployment
+                        | jig_core::CoreKey::Turn { .. }
+                        | jig_core::CoreKey::RunProof(..)
+                        | jig_core::CoreKey::Terminal { .. }
+                        | jig_core::CoreKey::Projection(_),
+                    )
+                    | jig_core::Key::Tasks(_)
+                    | jig_core::Key::People(_),
+                )
+                | Key::Forge(_) => false,
             },
         }
     }
@@ -540,48 +556,8 @@ impl Range {
 /// (domain/engine.md, 5.1, 5.3 and 5.6).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Record {
-    /// One core-owned bounded projection feed row.
-    Projection(jig_core::ProjectionRecord),
-    /// The first committed final proposal decision, read by later callers.
-    ProposalDecision(ProposalDecisionRecord),
-    /// Named host-tool decision committed with the action it caused.
-    Call(CallRecord),
-    /// Root's immutable semantic decision evidence; not task-owned transport
-    /// state.
-    EscalationDecision(
-        /// Exact bounded accepted choice.
-        EscalationDecisionRecord,
-    ),
-    /// Fixed deployment counters, saved only by the journal.
-    Deployment(Deployment),
-    /// Accepted transcript turn owned by the root.
-    Turn(/** Owned transcript and acceptance metadata, byte-bounded at admission. */ TurnRecord),
-    /// Current bounded replay evidence; proof and all financial writes share one commit.
-    RunProof(
-        /// Root-owned proof, bounded by tasks.tasks, one latest turn and journal bytes.
-        RunProof,
-    ),
-    /// Immutable typed terminal archive; startup never retains the historical family.
-    Terminal(
-        /// Root-owned exact bounded worker offer or canonical root-translated topology/Invalid
-        /// terminal at accepted expense, within result admission bounds.
-        TerminalRecord,
-    ),
-    /// Child's authentic task or funding row; root transport proofs have their own variants. All
-    /// writes share the root decision.
-    Tasks(
-        /// Owned child row, deep bytes checked before journal or load retention.
-        jig_core_tasks::Stored,
-    ),
-    /// Child's durable identity/session/keyed reply; saved atomically by the root.
-    People(
-        /// Owned secret-free child row, deep bytes checked before retention.
-        jig_core_people::Stored,
-    ),
-    /// A note entry or scope-index line owned by jig's notes child.
-    Notes(jig_core_notes::Record),
-    /// One connector row with its root allocated store identity.
-    Forge { id: u64, row: Box<temper_engine_domain_forge::Stored> },
+    Core(jig_core::Record),
+    Forge { row: Box<temper_engine_domain_forge::Stored> },
 }
 
 impl Record {
@@ -590,23 +566,46 @@ impl Record {
     #[must_use]
     pub fn key(&self) -> Key {
         match self {
-            Record::Projection(row) => Key::Projection(row.key()),
-            Record::ProposalDecision(row) => Key::ProposalDecision(row.proposal),
-            Record::Call(row) => Key::Call(row.key),
-            Record::EscalationDecision(row) => Key::EscalationDecision { task: row.task, revision: row.revision },
-            Record::Deployment(_) => Key::Deployment,
-            Record::Turn(row) => Key::Turn { task: row.task, attempt: row.attempt, turn: row.turn },
-            Record::RunProof(row) => Key::RunProof { task: row.task },
-            Record::Terminal(row) => Key::Terminal { task: row.task, attempt: row.attempt },
-            Record::Tasks(row) => Key::Tasks(row.key()),
-            Record::People(row) => Key::People(row.key()),
-            Record::Notes(jig_core_notes::Record::Entry(row)) => {
-                Key::Notes(jig_core_notes::Key::Entry { name: row.name })
+            Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Projection(row))) => {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::Projection(row.key())))
             }
-            Record::Notes(jig_core_notes::Record::Line(row)) => {
-                Key::Notes(jig_core_notes::Key::Line { scope: row.scope.clone(), name: row.name })
+            Record::Core(jig_core::Record::Core(jig_core::CoreRecord::ProposalDecision(row))) => {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::ProposalDecision(row.proposal)))
             }
-            Record::Forge { id, .. } => Key::Forge(*id),
+            Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Call(row))) => {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::Call(row.key)))
+            }
+            Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(row))) => {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::EscalationDecision {
+                    task: row.task,
+                    revision: row.revision,
+                }))
+            }
+            Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Deployment(_))) => {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::Deployment))
+            }
+            Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(row))) => {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::Turn {
+                    task: row.task,
+                    attempt: row.attempt,
+                    turn: row.turn,
+                }))
+            }
+            Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(row))) => {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::RunProof(row.task)))
+            }
+            Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Terminal(row))) => {
+                Key::Core(jig_core::Key::Core(jig_core::CoreKey::Terminal { task: row.task, attempt: row.attempt }))
+            }
+            Record::Core(jig_core::Record::Tasks(row)) => Key::Core(jig_core::Key::Tasks(row.key())),
+            Record::Core(jig_core::Record::People(row)) => Key::Core(jig_core::Key::People(row.key())),
+            Record::Core(jig_core::Record::Notes(jig_core_notes::Record::Entry(row))) => {
+                Key::Core(jig_core::Key::Notes(jig_core_notes::Key::Entry { name: row.name }))
+            }
+            Record::Core(jig_core::Record::Notes(jig_core_notes::Record::Line(row))) => {
+                Key::Core(jig_core::Key::Notes(jig_core_notes::Key::Line { scope: row.scope.clone(), name: row.name }))
+            }
+            Record::Forge { row } => Key::Forge(temper_engine_domain_forge::stored_key(row)),
         }
     }
 }
@@ -643,31 +642,42 @@ impl Write {
 #[expect(clippy::too_many_lines, reason = "the record byte projection covers each stored variant")]
 pub fn record_bytes(record: &Record) -> Option<u64> {
     match record {
-        Record::Projection(row) => jig_core::projection_record_bytes(row),
-        Record::EscalationDecision(row) => decision_bytes(&row.decision),
-        Record::Call(row) => {
-            let answer = call_answer_bytes(&row.answer);
-            answer?.checked_add(match &row.settled {
+        Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Projection(row))) => {
+            jig_core::projection_record_bytes(row)
+        }
+        Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(row))) => {
+            decision_bytes(&row.decision)
+        }
+        Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Call(row))) => {
+            let answer = match CallAnswer::from_core(&row.part) {
+                Some(answer) => call_answer_bytes(&answer)?,
+                None => 0,
+            };
+            answer.checked_add(match &row.settled {
                 Some(call) => call.owned_bytes()?,
                 None => 0,
             })
         }
-        Record::ProposalDecision(_) | Record::Deployment(_) => Some(0),
-        Record::Turn(turn) => u64::try_from(turn.transcript.len()).ok(),
-        Record::RunProof(row) => match &row.terminal {
+        Record::Core(jig_core::Record::Core(
+            jig_core::CoreRecord::ProposalDecision(_) | jig_core::CoreRecord::Deployment(_),
+        )) => Some(0),
+        Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(turn))) => {
+            u64::try_from(turn.transcript.len()).ok()
+        }
+        Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(row))) => match &row.terminal {
             Some(terminal) => terminal_bytes(terminal),
             None => Some(0),
         },
-        Record::Terminal(row) => terminal_bytes(row),
-        Record::Tasks(row) => jig_core_tasks::stored_bytes(row),
-        Record::Notes(row) => match row {
+        Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Terminal(row))) => terminal_bytes(row),
+        Record::Core(jig_core::Record::Tasks(row)) => jig_core_tasks::stored_bytes(row),
+        Record::Core(jig_core::Record::Notes(row)) => match row {
             jig_core_notes::Record::Entry(entry) => note_entry_bytes(entry),
             jig_core_notes::Record::Line(line) => {
                 note_scope_bytes(&line.scope)?.checked_add(u64::try_from(line.description.len()).ok()?)
             }
         },
         Record::Forge { row, .. } => temper_engine_domain_forge::stored_bytes(row),
-        Record::People(row) => match row {
+        Record::Core(jig_core::Record::People(row)) => match row {
             jig_core_people::Stored::Person { identity, .. } => u64::try_from(identity.key.subject.len())
                 .ok()?
                 .checked_add(u64::try_from(identity.login.len()).ok()?)?
@@ -786,20 +796,26 @@ fn note_entry_bytes(entry: &jig_core_notes::Entry) -> Option<u64> {
 pub(crate) fn owned_bytes(write: &Write) -> Option<u64> {
     match write {
         Write::Save(record) => record_bytes(record),
-        Write::Erase(Key::Notes(jig_core_notes::Key::Line { scope, .. })) => note_scope_bytes(scope),
+        Write::Erase(Key::Core(jig_core::Key::Notes(jig_core_notes::Key::Line { scope, .. }))) => {
+            note_scope_bytes(scope)
+        }
         Write::Erase(
-            Key::Notes(jig_core_notes::Key::Entry { .. })
-            | Key::Deployment
-            | Key::Call(_)
-            | Key::EscalationDecision { .. }
-            | Key::ProposalDecision(_)
-            | Key::Turn { .. }
-            | Key::RunProof { .. }
-            | Key::Terminal { .. }
-            | Key::Tasks(_)
-            | Key::People(_)
-            | Key::Forge(_)
-            | Key::Projection(_),
+            Key::Core(
+                jig_core::Key::Notes(jig_core_notes::Key::Entry { .. })
+                | jig_core::Key::Core(
+                    jig_core::CoreKey::Deployment
+                    | jig_core::CoreKey::Call(_)
+                    | jig_core::CoreKey::EscalationDecision { .. }
+                    | jig_core::CoreKey::ProposalDecision(_)
+                    | jig_core::CoreKey::Turn { .. }
+                    | jig_core::CoreKey::RunProof(..)
+                    | jig_core::CoreKey::Terminal { .. }
+                    | jig_core::CoreKey::Projection(_),
+                )
+                | jig_core::Key::Tasks(_)
+                | jig_core::Key::People(_),
+            )
+            | Key::Forge(_),
         ) => Some(0),
     }
 }

@@ -5,20 +5,20 @@ use crate::Record;
 use alloc::boxed::Box;
 
 #[derive(Debug)]
-pub(super) enum Query {
+pub(crate) enum Query {
     Read { to: ReplyTo, person: u64, task: u64 },
     Historical { request: Token, person: u64, project: u32, task: u64, revision: u64 },
 }
 
-pub(super) fn role_number(role: people::Role) -> u32 {
+pub(crate) fn role_number(role: people::Role) -> u32 {
     role.number()
 }
 
-pub(super) fn supported(domain: &Domain, task: &tasks::TaskRecord) -> bool {
+pub(crate) fn supported(domain: &Domain, task: &tasks::TaskRecord) -> bool {
     domain.core.escalation_supported(task)
 }
 
-pub(super) fn read(
+pub(crate) fn read(
     domain: &mut Domain,
     env: &Env<Limits>,
     to: ReplyTo,
@@ -63,7 +63,7 @@ pub(super) fn read(
     clippy::too_many_arguments,
     reason = "explicit bounded keyed route carries authenticated identity and its one typed choice"
 )]
-pub(super) fn historical_begin(
+pub(crate) fn historical_begin(
     domain: &mut Domain,
     env: &Env<Limits>,
     barrier: &mut Decision,
@@ -88,7 +88,7 @@ pub(super) fn historical_begin(
     }
 }
 
-pub(super) fn inspected(domain: &mut Domain, waiter: Token, context: Option<Box<tasks::EscalationContext>>) {
+pub(crate) fn inspected(domain: &mut Domain, waiter: Token, context: Option<Box<tasks::EscalationContext>>) {
     let Some(Read::Escalation(Query::Read { to, person, task })) = super::take_read(domain, waiter) else {
         unreachable!("held-chat inspection belongs to an authenticated reader")
     };
@@ -96,7 +96,7 @@ pub(super) fn inspected(domain: &mut Domain, waiter: Token, context: Option<Box<
     domain.work.push(Work::Core(jig_core::Event::EscalationRead { to, person, task, context }));
 }
 
-pub(super) fn loaded(domain: &mut Domain, _env: &Env<Limits>, waiter: Token, rows: Box<[Record]>) {
+pub(crate) fn loaded(domain: &mut Domain, _env: &Env<Limits>, waiter: Token, rows: Box<[Record]>) {
     let Some(Read::Escalation(query)) = super::take_read(domain, waiter) else {
         unreachable!("escalation archive owns its read")
     };
@@ -107,18 +107,22 @@ pub(super) fn loaded(domain: &mut Domain, _env: &Env<Limits>, waiter: Token, row
     };
     let row = if rows.len() == 1 {
         match rows.into_iter().next().expect("one loaded row") {
-            Record::EscalationDecision(row) => Some(row),
-            Record::Call(_)
-            | Record::Deployment(_)
-            | Record::Turn(_)
-            | Record::RunProof(_)
-            | Record::Terminal(_)
-            | Record::Tasks(_)
-            | Record::People(_)
-            | Record::Notes(_)
-            | Record::Projection(_)
-            | Record::Forge { .. }
-            | Record::ProposalDecision(_) => None,
+            Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(row))) => Some(row),
+            Record::Core(
+                jig_core::Record::Core(
+                    jig_core::CoreRecord::Call(_)
+                    | jig_core::CoreRecord::Deployment(_)
+                    | jig_core::CoreRecord::Turn(_)
+                    | jig_core::CoreRecord::RunProof(_)
+                    | jig_core::CoreRecord::Terminal(_)
+                    | jig_core::CoreRecord::Projection(_)
+                    | jig_core::CoreRecord::ProposalDecision(_),
+                )
+                | jig_core::Record::Tasks(_)
+                | jig_core::Record::People(_)
+                | jig_core::Record::Notes(_),
+            )
+            | Record::Forge { .. } => None,
         }
     } else {
         None
@@ -134,7 +138,7 @@ pub(super) fn loaded(domain: &mut Domain, _env: &Env<Limits>, waiter: Token, row
     }));
 }
 
-pub(super) fn failed(domain: &mut Domain, waiter: Token) {
+pub(crate) fn failed(domain: &mut Domain, waiter: Token) {
     let Some(read) = super::take_read(domain, waiter) else { return };
     domain.result_reads.retire(Id::from_token(waiter));
     match read {
@@ -167,5 +171,5 @@ fn refusal(to: ReplyTo, why: people::Refusal) -> Delivery {
 }
 
 fn refuse_direct(to: ReplyTo, why: people::Refusal, out: &mut skein_lib::Queue<Request>) {
-    out.push(Request::Deliver(refusal(to, why)));
+    out.push(crate::boundary::delivery_output(refusal(to, why)));
 }

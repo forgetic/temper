@@ -12,6 +12,8 @@ pub struct Limits {
     pub holds: u32,
     pub subscriptions: u32,
     pub entries: u32,
+    /// Connector payloads of live named calls, priced independently of outbox entries.
+    pub named_calls: u32,
     pub changes: u32,
     pub issues: u32,
     pub resources_per_task: u32,
@@ -39,6 +41,7 @@ pub struct Limits {
 /// Maximum retained heap for the top and its child, excluding owned output
 /// copies that the root takes at each decision boundary.
 #[must_use]
+#[expect(clippy::too_many_lines, reason = "one checked sum of the connector owners and retained payloads")]
 pub fn worst_case(l: &Limits) -> Option<u64> {
     if l.repositories == 0
         || l.tasks == 0
@@ -98,6 +101,8 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         .checked_add(Map::<skein_lib::Token, crate::capabilities::Pending>::worst_case(l.repositories)?)?
         .checked_add(u64::from(l.repositories).checked_mul(u64::from(l.client.answer_bytes))?)?
         .checked_add(Map::<u64, client::Entry>::worst_case(l.entries)?)?
+        .checked_add(Map::<crate::NamedCall, crate::CallPayload>::worst_case(l.named_calls)?)?
+        .checked_add(u64::from(l.named_calls).checked_mul(u64::from(l.client.answer_bytes))?)?
         .checked_add(Map::<u64, crate::ProposedEffect>::worst_case(l.tasks)?)?
         .checked_add(
             u64::from(l.tasks).checked_mul(u64::from(l.client.op_bytes).checked_add(u64::from(l.name_bytes))?)?,
@@ -121,6 +126,9 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         )?)?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingStep>::worst_case(l.changes)?)?
         .checked_add(Map::<u64, crate::IssueRow>::worst_case(l.issues)?)?
+        .checked_add(Map::<u64, skein_lib::Wall>::worst_case(l.issues)?)?
+        .checked_add(Map::<u64, skein_lib::Wall>::worst_case(l.changes)?)?
+        .checked_add(Map::<u64, bool>::worst_case(l.changes)?)?
         .checked_add(Map::<u64, crate::ReleaseRow>::worst_case(l.tasks)?)?
         .checked_add(u64::from(l.tasks).checked_mul(u64::from(l.name_bytes))?)?
         .checked_add(issue_payload(l)?)?

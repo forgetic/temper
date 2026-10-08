@@ -65,18 +65,25 @@ impl Driver {
     pub fn collect(&mut self) {
         for _ in 0..self.out.len() {
             match self.out.pop().expect("output count") {
+                engine::Request::ToChild(released) => self.events.push_back(engine::Event::Released(released)),
                 engine::Request::Commit { number, writes } => {
                     self.transactions.push(writes.to_vec());
                     self.store.pending.push_back((number, writes));
                 }
                 engine::Request::Load { owner, range, after, most, bytes } => {
                     let (rows, next) = self.store.page(&range, after.as_ref(), most);
-                    if range == temper_engine_domain::Range::EndedResults {
+                    if range == temper_engine_domain::Range::Core(temper_engine_domain::CoreRange::EndedResults) {
                         self.result_loads.push((most, rows.len()));
                     }
                     assert!(rows.len() <= usize::try_from(most).expect("small count"));
                     assert!(bytes >= self.env.limits.loads.bytes);
-                    if self.fail_archive_once && matches!(range, temper_engine_domain::Range::EscalationDecision { .. })
+                    if self.fail_archive_once
+                        && matches!(
+                            range,
+                            temper_engine_domain::Range::Core(
+                                temper_engine_domain::CoreRange::EscalationDecision { .. }
+                            )
+                        )
                     {
                         self.fail_archive_once = false;
                         self.events.push_back(engine::Event::Unloaded { owner });

@@ -492,10 +492,15 @@ impl World {
                 self.commit_wait -= 1;
             } else {
                 let first_turn = self.store.pending.front().expect("pending commit").1.iter().any(
-                    |write| matches!(write, temper_engine_domain::Write::Save(Record::Turn(turn)) if turn.turn == 1),
+                    |write| matches!(write, temper_engine_domain::Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(turn)))) if turn.turn == 1),
                 );
                 let terminal = self.store.pending.front().expect("pending commit").1.iter().any(|write| {
-                    matches!(write, temper_engine_domain::Write::Save(Record::Tasks(tasks::Stored::Ended(_))))
+                    matches!(
+                        write,
+                        temper_engine_domain::Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Ended(
+                            _
+                        ))))
+                    )
                 });
                 let number = self.store.apply();
                 self.trace.push(format!("applied {number}"));
@@ -515,8 +520,10 @@ impl World {
             for (key, row) in snapshot {
                 if !matches!(
                     key,
-                    temper_engine_domain::Key::Deployment
-                        | temper_engine_domain::Key::People(people::Key::ReadPosition(_))
+                    temper_engine_domain::Key::Core(
+                        jig_core::Key::Core(jig_core::CoreKey::Deployment)
+                            | jig_core::Key::People(people::Key::ReadPosition(_))
+                    )
                 ) {
                     assert_eq!(
                         self.store.rows.get(key),
@@ -600,12 +607,15 @@ impl World {
         while let Some(request) = self.out.pop() {
             self.trace.push(format!("output {request:?}"));
             match request {
+                engine::Request::ToChild(released) => self.queue(engine::Event::Released(released), 0),
                 engine::Request::Commit { number, writes } => {
                     if self.terminal_snapshot.is_some() {
                         assert!(
                             writes.iter().any(|write| matches!(
                                 write,
-                                temper_engine_domain::Write::Save(Record::People(people::Stored::ReadPosition { .. }))
+                                temper_engine_domain::Write::Save(Record::Core(jig_core::Record::People(
+                                    people::Stored::ReadPosition { .. }
+                                )))
                             )),
                             "terminal recovery only commits the person's read"
                         );

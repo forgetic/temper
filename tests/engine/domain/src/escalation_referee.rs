@@ -102,8 +102,8 @@ pub struct Referee {
 
 fn task(rows: &BTreeMap<Key, Record>, number: u64) -> Option<&tasks::TaskRecord> {
     for key in [tasks::Key::Live(number), tasks::Key::Ended(number)] {
-        if let Some(Record::Tasks(tasks::Stored::Live(record) | tasks::Stored::Ended(record))) =
-            rows.get(&Key::Tasks(key))
+        if let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(record) | tasks::Stored::Ended(record)))) =
+            rows.get(&Key::Core(jig_core::Key::Tasks(key)))
         {
             return Some(record.as_ref());
         }
@@ -113,7 +113,9 @@ fn task(rows: &BTreeMap<Key, Record>, number: u64) -> Option<&tasks::TaskRecord>
 
 fn saved_task(writes: &[Write], number: u64) -> Option<&tasks::TaskRecord> {
     for write in writes {
-        if let Write::Save(Record::Tasks(tasks::Stored::Live(record) | tasks::Stored::Ended(record))) = write
+        if let Write::Save(Record::Core(jig_core::Record::Tasks(
+            tasks::Stored::Live(record) | tasks::Stored::Ended(record),
+        ))) = write
             && record.number == number
         {
             return Some(record.as_ref());
@@ -182,8 +184,8 @@ impl Referee {
         key: [u8; 16],
         ask: people::Ask,
     ) {
-        let Some(Record::People(people::Stored::Answer { ask: saved_ask, outcome, .. })) =
-            rows.get(&Key::People(people::Key::Answer(people::RequestKey { person, key })))
+        let Some(Record::Core(jig_core::Record::People(people::Stored::Answer { ask: saved_ask, outcome, .. }))) =
+            rows.get(&Key::Core(jig_core::Key::People(people::Key::Answer(people::RequestKey { person, key }))))
         else {
             panic!("key-conflict probe follows its durable winning answer");
         };
@@ -223,11 +225,11 @@ impl Referee {
             provider: 0,
             subject: (7 + u64::try_from(index).expect("two identities")).to_be_bytes().into(),
         };
-        if !matches!(rows.get(&Key::People(people::Key::Person(person))), Some(Record::People(people::Stored::Person { number, identity })) if *number == person && identity.key == expected)
+        if !matches!(rows.get(&Key::Core(jig_core::Key::People(people::Key::Person(person)))), Some(Record::Core(jig_core::Record::People(people::Stored::Person { number, identity }))) if *number == person && identity.key == expected)
         {
             return Err("sign-in before exact durable identity");
         }
-        if !matches!(rows.get(&Key::People(people::Key::SignIn(sign_in))), Some(Record::People(people::Stored::SignIn { person: owner, .. })) if *owner == person)
+        if !matches!(rows.get(&Key::Core(jig_core::Key::People(people::Key::SignIn(sign_in)))), Some(Record::Core(jig_core::Record::People(people::Stored::SignIn { person: owner, .. }))) if *owner == person)
         {
             return Err("sign-in before exact durable session");
         }
@@ -249,7 +251,7 @@ impl Referee {
         if record.requester != tasks::Party::Person(person) || record.spec.words.as_ref() != QUESTION {
             return Err("start differs from requester script");
         }
-        if !matches!(rows.get(&Key::People(people::Key::Answer(people::RequestKey { person, key: [5; 16] }))), Some(Record::People(people::Stored::Answer { ask, outcome, .. })) if ask.as_ref() == &(people::Ask::StartChat { project: 1, words: QUESTION.into() }) && *outcome == (people::Outcome::Started { task: number }))
+        if !matches!(rows.get(&Key::Core(jig_core::Key::People(people::Key::Answer(people::RequestKey { person, key: [5; 16] })))), Some(Record::Core(jig_core::Record::People(people::Stored::Answer { ask, outcome, .. }))) if ask.as_ref() == &(people::Ask::StartChat { project: 1, words: QUESTION.into() }) && *outcome == (people::Outcome::Started { task: number }))
         {
             return Err("start without its atomic keyed answer");
         }
@@ -286,7 +288,7 @@ impl Referee {
         {
             return Err("fresh attempt reused expense or failure counters");
         }
-        if !matches!(rows.get(&Key::RunProof { task: assignment.task }), Some(Record::RunProof(proof)) if proof.attempt == assignment.attempt && proof.turn.is_none() && proof.terminal.is_none())
+        if !matches!(rows.get(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::RunProof(assignment.task)))), Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(proof)))) if proof.attempt == assignment.attempt && proof.turn.is_none() && proof.terminal.is_none())
         {
             return Err("assignment without fresh root proof");
         }
@@ -324,15 +326,15 @@ impl Referee {
             }
         }
         for write in writes {
-            if let Write::Save(Record::People(people::Stored::Answer { outcome: people::Outcome::EscalationDecided { task, revision, .. }, .. })) = write
+            if let Write::Save(Record::Core(jig_core::Record::People(people::Stored::Answer { outcome: people::Outcome::EscalationDecided { task, revision, .. }, .. }))) = write
                 && !self.archives.contains_key(revision)
-                && !writes.iter().any(|write| matches!(write, Write::Save(Record::EscalationDecision(archive)) if archive.task == *task && archive.revision == *revision)) {
+                && !writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(archive)))) if archive.task == *task && archive.revision == *revision)) {
                 return Err("keyed decision outcome without same-transaction archive");
             }
-            if let Write::Save(Record::Turn(_)) = write {
+            if let Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Turn(_)))) = write {
                 return Err("unscripted transcript in terminal-only worker story");
             }
-            if let Write::Save(Record::Tasks(tasks::Stored::Live(record))) = write {
+            if let Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Live(record)))) = write {
                 let decided_revision =
                     match &record.escalation {
                         tasks::Escalation::Unheld { revision } | tasks::Escalation::Rejected { revision, .. }
@@ -350,17 +352,17 @@ impl Referee {
                     };
                 if let Some(revision) = decided_revision
                     && self.offers.contains_key(&revision) && !self.archives.contains_key(&revision)
-                    && !writes.iter().any(|write| matches!(write, Write::Save(Record::EscalationDecision(archive)) if archive.task == record.number && archive.revision == revision)) {
+                    && !writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(archive)))) if archive.task == record.number && archive.revision == revision)) {
                     return Err("semantic decision without same-transaction archive");
                 }
                 if let tasks::Phase::Active(tasks::Active::Claimed { attempt }) = record.phase {
-                    if !writes.iter().any(|write| matches!(write, Write::Save(Record::RunProof(proof)) if proof.task == record.number && proof.attempt == attempt && proof.turn.is_none() && proof.terminal.is_none())) {
+                    if !writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(proof)))) if proof.task == record.number && proof.attempt == attempt && proof.turn.is_none() && proof.terminal.is_none())) {
                         return Err("claimed task without same-transaction fresh proof");
                     }
                     self.claims.insert(attempt);
                 }
             }
-            if let Write::Save(Record::Terminal(terminal)) = write {
+            if let Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Terminal(terminal)))) = write {
                 let Some(index) = self.assignments.iter().position(|attempt| *attempt == terminal.attempt) else {
                     self.unplaced_terminal(writes, terminal)?;
                     continue;
@@ -386,7 +388,7 @@ impl Referee {
                     if record.tries.run != 1 {
                         return Err("retry-zero failure history differs from script");
                     }
-                    if !writes.iter().any(|write| matches!(write, Write::Save(Record::RunProof(proof)) if proof.task == terminal.task && proof.attempt == terminal.attempt && proof.terminal.as_ref() == Some(terminal))) { return Err("held failure and root proof are not atomic"); }
+                    if !writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(proof)))) if proof.task == terminal.task && proof.attempt == terminal.attempt && proof.terminal.as_ref() == Some(terminal))) { return Err("held failure and root proof are not atomic"); }
                 } else {
                     if terminal.cumulative != 2
                         || terminal.end
@@ -403,8 +405,10 @@ impl Referee {
                     {
                         return Err("final attempt was not charged once on lifetime expense");
                     }
-                    if !writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Ledger(pool))) if pool.funder == record.funder && pool.numbers.spent_below == 5 && pool.numbers.reserved == 0)) { return Err("final expense and funding posting are not atomic"); }
-                    if !writes.contains(&Write::Erase(Key::RunProof { task: record.number })) {
+                    if !writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Ledger(pool)))) if pool.funder == record.funder && pool.numbers.spent_below == 5 && pool.numbers.reserved == 0)) { return Err("final expense and funding posting are not atomic"); }
+                    if !writes.contains(&Write::Erase(Key::Core(jig_core::Key::Core(jig_core::CoreKey::RunProof(
+                        record.number,
+                    ))))) {
                         return Err("final proof retirement is not atomic");
                     }
                 }
@@ -412,7 +416,10 @@ impl Referee {
                     return Err("worker terminal committed twice");
                 }
             }
-            if let Write::Save(Record::EscalationDecision(archive)) = write {
+            if let Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(
+                archive,
+            )))) = write
+            {
                 let (by, decision) = self.offers.get(&archive.revision).ok_or("unscripted archive decision")?;
                 if Some(archive.task) != self.task
                     || archive.project != 1
@@ -450,7 +457,7 @@ impl Referee {
                     return Err("decision semantic change differs from archived choice");
                 }
                 let atomic = writes.iter().any(|write| match write {
-                    Write::Save(Record::People(people::Stored::Answer { key, ask, outcome, .. })) => {
+                    Write::Save(Record::Core(jig_core::Record::People(people::Stored::Answer { key, ask, outcome, .. }))) => {
                         matches!(ask.as_ref(), people::Ask::DecideEscalation { project, task, revision, decision: asked }
                             if key.person == *by && *project == 1 && *task == archive.task
                                 && *revision == archive.revision && *asked == *decision
@@ -490,10 +497,13 @@ impl Referee {
         {
             return Err("unassigned refusal spent a try or changed accepted expense");
         }
-        if !writes.iter().any(|write| matches!(write, Write::Save(Record::RunProof(proof)) if proof.task == terminal.task && proof.attempt == terminal.attempt && proof.turn.is_none() && proof.terminal.as_ref() == Some(terminal))) {
+        if !writes.iter().any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::RunProof(proof)))) if proof.task == terminal.task && proof.attempt == terminal.attempt && proof.turn.is_none() && proof.terminal.as_ref() == Some(terminal))) {
             return Err("unassigned refusal and canonical proof are not atomic");
         }
-        if writes.iter().any(|write| matches!(write, Write::Save(Record::Tasks(tasks::Stored::Ledger(_))))) {
+        if writes
+            .iter()
+            .any(|write| matches!(write, Write::Save(Record::Core(jig_core::Record::Tasks(tasks::Stored::Ledger(_))))))
+        {
             return Err("unassigned refusal changed the authentic funding ledger");
         }
         if !self.unplaced_claims.insert(terminal.attempt) {
@@ -523,8 +533,11 @@ impl Referee {
         reply: people::Reply,
     ) -> Result<(), &'static str> {
         let expected = self.asks.get(&to).ok_or("unsolicited or duplicate keyed terminal")?;
-        let Some(Record::People(people::Stored::Answer { ask, outcome: saved, .. })) = rows
-            .get(&Key::People(people::Key::Answer(people::RequestKey { person: expected.person, key: expected.key })))
+        let Some(Record::Core(jig_core::Record::People(people::Stored::Answer { ask, outcome: saved, .. }))) = rows
+            .get(&Key::Core(jig_core::Key::People(people::Key::Answer(people::RequestKey {
+                person: expected.person,
+                key: expected.key,
+            }))))
         else {
             return Err("keyed terminal before durable answer");
         };
@@ -545,8 +558,11 @@ impl Referee {
                     return Err("keyed terminal and durable answer differ");
                 }
                 if let people::Outcome::EscalationDecided { task, revision, by, choice: answer } = *outcome {
-                    let Some(Record::EscalationDecision(archive)) =
-                        rows.get(&Key::EscalationDecision { task, revision })
+                    let Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(archive)))) =
+                        rows.get(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::EscalationDecision {
+                            task,
+                            revision,
+                        })))
                     else {
                         return Err("decision reply before durable archive");
                     };
@@ -658,7 +674,8 @@ impl Referee {
     ) -> Result<(), &'static str> {
         if Some(number) != self.task
             || !self.terminals.contains(&attempt)
-            || !rows.contains_key(&Key::Terminal { task: number, attempt })
+            || !rows
+                .contains_key(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Terminal { task: number, attempt })))
         {
             return Err("worker ACK before exact durable terminal");
         }
@@ -670,7 +687,7 @@ impl Referee {
             tasks::End::Finished { result: tasks::TaskResult::Report { words: REPORT.into() }, cancel_delegates: false }
         };
         let expected_cumulative = if index == 0 { 3 } else { 2 };
-        if !matches!(rows.get(&Key::Terminal { task: number, attempt }), Some(Record::Terminal(terminal)) if terminal.task == number && terminal.attempt == attempt && terminal.cumulative == expected_cumulative && terminal.end == expected_end)
+        if !matches!(rows.get(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::Terminal { task: number, attempt }))), Some(Record::Core(jig_core::Record::Core(jig_core::CoreRecord::Terminal(terminal)))) if terminal.task == number && terminal.attempt == attempt && terminal.cumulative == expected_cumulative && terminal.end == expected_end)
         {
             return Err("worker ACK has changed durable priced terminal");
         }
@@ -718,13 +735,13 @@ impl Referee {
         if record.funder != expected_funder || record.numbers.budget != 100 {
             return Err("final task changed its authentic funding source or budget");
         }
-        let Some(Record::Tasks(tasks::Stored::Ledger(pool))) =
-            rows.get(&Key::Tasks(tasks::Key::Ledger(expected_funder)))
+        let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Ledger(pool)))) =
+            rows.get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Ledger(expected_funder))))
         else {
             return Err("missing authentic requester funding pool");
         };
-        let Some(Record::Tasks(tasks::Stored::Ledger(period))) =
-            rows.get(&Key::Tasks(tasks::Key::Ledger(tasks::Funder::Period { project: 1, period: 1 })))
+        let Some(Record::Core(jig_core::Record::Tasks(tasks::Stored::Ledger(period)))) = rows
+            .get(&Key::Core(jig_core::Key::Tasks(tasks::Key::Ledger(tasks::Funder::Period { project: 1, period: 1 }))))
         else {
             return Err("missing authentic deployment period");
         };
@@ -752,8 +769,8 @@ impl Referee {
             {
                 return Err("success did not end with actual report");
             }
-            if rows.contains_key(&Key::Tasks(tasks::Key::Live(number)))
-                || rows.contains_key(&Key::RunProof { task: number })
+            if rows.contains_key(&Key::Core(jig_core::Key::Tasks(tasks::Key::Live(number))))
+                || rows.contains_key(&Key::Core(jig_core::Key::Core(jig_core::CoreKey::RunProof(number))))
             {
                 return Err("ended report retained live task or proof");
             }

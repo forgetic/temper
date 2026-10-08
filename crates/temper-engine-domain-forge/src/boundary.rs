@@ -327,9 +327,31 @@ pub struct ChangeEvidence {
     pub reviews: Box<[client::api::Review]>,
     pub reviews_complete: bool,
 }
+/// Identity supplied by the named-call owner, interpreted only for lookup.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct NamedCall {
+    pub task: u64,
+    pub attempt: u64,
+    pub completion: u32,
+    pub position: u32,
+}
+
+/// The connector's part of a named answer; core decisions remain outside it.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum CallPayload {
+    Effect { entry: u64, deadline: skein_lib::Wall, outcome: Option<client::Outcome> },
+    Refused(client::api::Error),
+    Read(Box<Result<client::api::Answer, client::api::Error>>),
+}
+
 /// The connector's durable records, wrapped by the root store.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Stored {
+    /// The connector part of a live named call.
+    Call {
+        key: NamedCall,
+        answer: CallPayload,
+    },
     /// Connector-owned payload retained under an explicit proposal's number.
     ProposedEffect(ProposedEffect),
     /// One adopted repository.
@@ -374,6 +396,7 @@ pub struct ProposedEffect {
 /// Stable store key of a connector record.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
+    Call(NamedCall),
     ProposedEffect(u64),
     Repository(client::api::Repository),
     Hold(Name),
@@ -500,6 +523,8 @@ pub enum Event {
 /// The connector's output to the root, including child API calls.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// The connector has fresh news or a retry deadline for its procedure.
+    WakeProcedure { task: u64 },
     /// Current role and hold admission for one named resource.
     Resource { project: u32, name: Name, role: crate::Access, hold: crate::resources::HoldKind },
 
@@ -517,8 +542,9 @@ pub enum Request {
     BriefTaken { section: Token, bytes: Option<Box<[u8]>> },
     /// Terminal result of a repository adoption, for the root's person route.
     Adopted { reply_to: Token, result: Result<Adopted, client::api::Error> },
-    /// Save one record atomically with the current decision.
-    Save { record: Stored },
+    /// Save one record atomically with the current decision, carrying the
+    /// owner's post-commit entry and read-afresh handoffs without inspecting it.
+    Save { record: Stored, release: Option<u64>, read_afresh: Option<Name> },
     /// Erase one record atomically with the current decision.
     Erase { key: Key },
     /// A resource is held or a writer slot is taken.
