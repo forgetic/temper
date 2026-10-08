@@ -353,6 +353,16 @@ pub enum Key {
     Issue(u64),
     Release(u64),
 }
+/// A completed phase of the connector's restart contract.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RestartStage {
+    /// Durable connector records and entries are restored.
+    Restored,
+    /// Every live resource has had its first fresh read.
+    ReadAfresh,
+    /// Every uncertain restored entry has been looked for.
+    Settled,
+}
 /// A parent or child input to the connector top.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
@@ -438,6 +448,10 @@ pub enum Event {
     Restore { record: Stored },
     /// Finish restoration and reconcile loaded entries.
     Restored { clock: client::RecoveryClock },
+    /// Read the system's live resources before procedures step.
+    ReadAfresh,
+    /// Look for each restored uncertain entry before procedures step.
+    SettleOutbox,
 }
 /// The connector's output to the root, including child API calls.
 #[derive(PartialEq, Eq, Debug)]
@@ -486,4 +500,6 @@ pub enum Request {
     Call { call: Token, repository: client::api::Repository, op: client::api::Op },
     /// One bounded fresh connector read for a root worker tool.
     Read { owner: Token, result: Result<client::api::Answer, client::api::Error> },
+    /// The requested restart phase finished; the root may request the next.
+    RestartDone { stage: RestartStage },
 }

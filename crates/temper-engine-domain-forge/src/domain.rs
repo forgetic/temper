@@ -8,8 +8,8 @@ use temper_engine_domain_forge_issues as issues;
 
 use crate::{
     Adopted, Adoption, BranchHead, ChangeRow, CiState, Class, Event, Hold, IssueRow, Key, Kinds, Limits, Name, News,
-    Protection, PullState, ReleaseEnding, ReleaseRow, Repository, Request, Role, Stored, Subscriber, Topic, What,
-    Writer,
+    Protection, PullState, ReleaseEnding, ReleaseRow, Repository, Request, RestartStage, Role, Stored, Subscriber,
+    Topic, What, Writer,
 };
 use crate::{brief, held};
 
@@ -550,6 +550,8 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         Event::Client(event) => child(d, env, event, out),
         Event::Restore { record } => restore(d, env, record),
         Event::Restored { clock } => restored(d, env, clock, out),
+        Event::ReadAfresh => child(d, env, client::Event::ReadAfresh, out),
+        Event::SettleOutbox => child(d, env, client::Event::SettleOutbox, out),
     }
 }
 
@@ -659,6 +661,8 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                     lost_read(d, env, owner, result, out);
                 }
             }
+            client::Request::ReadAfreshDone => emit(out, Request::RestartDone { stage: RestartStage::ReadAfresh }),
+            client::Request::OutboxDone => emit(out, Request::RestartDone { stage: RestartStage::Settled }),
         }
     }
 }
@@ -1078,7 +1082,9 @@ fn kept(out: &Queue<client::Request>) -> bool {
             | client::Request::Erase { .. }
             | client::Request::Outcome { .. }
             | client::Request::Call { .. }
-            | client::Request::Read { .. } => {}
+            | client::Request::Read { .. }
+            | client::Request::ReadAfreshDone
+            | client::Request::OutboxDone => {}
         }
     }
     false
@@ -2893,6 +2899,7 @@ fn restore(d: &mut Domain, env: &Env<Limits>, record: Stored) {
 
 fn restored(d: &mut Domain, env: &Env<Limits>, clock: client::RecoveryClock, out: &mut Queue<Request>) {
     child(d, env, client::Event::Restored { clock }, out);
+    child(d, env, client::Event::PauseOutbox, out);
     let mut entries = List::with_capacity(env.limits.entries);
     for (_, entry) in &d.entries {
         entries.push(entry.clone()).expect("entry list capacity");
@@ -2912,4 +2919,5 @@ fn restored(d: &mut Domain, env: &Env<Limits>, clock: client::RecoveryClock, out
     for (repository, head) in &ci {
         ci_refresh(d, env, *repository, *head, out);
     }
+    emit(out, Request::RestartDone { stage: RestartStage::Restored });
 }

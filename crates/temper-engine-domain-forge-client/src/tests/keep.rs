@@ -80,6 +80,9 @@ impl Harness {
                     self.read_refusals.push(error).expect("read refusals fit");
                 }
                 Request::Read { result: Ok(_), .. } => panic!("no successful fresh parent read"),
+                Request::ReadAfreshDone | Request::OutboxDone => {
+                    panic!("ordinary keep test did not request restart phases")
+                }
             }
         }
         self.domain.reclaim();

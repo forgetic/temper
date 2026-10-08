@@ -825,7 +825,7 @@ struct ResultPage {
 enum Startup {
     Cold,
     Loading(Range),
-    Adopting,
+    Adopting(jig_core::connector::RestartStage),
     Running,
     Failed,
 }
@@ -2174,7 +2174,7 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
         close(domain, env, decision, out);
         return;
     }
-    if domain.ready() {
+    if domain.ready() || startup_adopting(domain.startup) {
         if domain.forge.is_ready() {
             let mut decision =
                 route_decision(domain, &env.limits).expect("journal room checked before connector continuation");
@@ -2183,6 +2183,9 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
             forge_route::outputs(domain, env, &mut decision, &mut child);
             route_into(domain, env, &mut decision);
             close(domain, env, decision, out);
+            return;
+        }
+        if !domain.ready() {
             return;
         }
         if domain.core.accounts.usable(domain.core.settings.account) && !domain.core.due.is_empty() {
@@ -2222,7 +2225,20 @@ fn fire_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>)
         let mut view_out = view_requests(routed, views::max_out(&env.limits.views));
         view_outputs(domain, env, &mut view_out, out);
     }
-    if !domain.ready() || !admits(domain, &env.limits) {
+    if !admits(domain, &env.limits) {
+        return;
+    }
+    if startup_adopting(domain.startup) {
+        let mut decision =
+            route_decision(domain, &env.limits).expect("journal room checked before forge restart timer");
+        let mut forge_out = Queue::with_capacity(forge::max_out(&env.limits.forge));
+        forge::fire(&mut domain.forge, &environment_forge(env), &mut forge_out);
+        forge_route::outputs(domain, env, &mut decision, &mut forge_out);
+        route_into(domain, env, &mut decision);
+        close(domain, env, decision, out);
+        return;
+    }
+    if !domain.ready() {
         return;
     }
     let mut decision = route_decision(domain, &env.limits).expect("journal room checked before firing children");
@@ -5934,7 +5950,7 @@ fn startup_page(
 ) {
     let range = match domain.startup {
         Startup::Loading(range) => range,
-        Startup::Cold | Startup::Adopting | Startup::Running | Startup::Failed => return,
+        Startup::Cold | Startup::Adopting(_) | Startup::Running | Startup::Failed => return,
     };
     for row in rows {
         restore_page_row(domain, env, row);
@@ -6006,8 +6022,7 @@ fn startup_page(
         out.push(Request::Stop);
         return;
     }
-    domain.startup = Startup::Adopting;
-    domain.work.push(Work::Forge(forge::Event::Restored { clock: forge_client::RecoveryClock::Wall }));
+    domain.startup = Startup::Adopting(jig_core::connector::RestartStage::Restored);
     domain.work.push(Work::Tasks(tasks::Event::Restored));
     route_into(domain, env, &mut decision);
     if domain.startup == Startup::Failed {
@@ -6023,12 +6038,41 @@ fn startup_page(
         out.push(Request::Stop);
         return;
     }
-    domain.startup = Startup::Running;
-    for _ in 0..domain.core.due.len() {
-        domain.work.push(Work::Activate(domain.core.due.pop().expect("restored due tasks")));
-    }
+    domain.work.push(Work::Forge(forge::Event::Restored { clock: forge_client::RecoveryClock::Wall }));
     route_into(domain, env, &mut decision);
     close(domain, env, decision, out);
+}
+
+/// Until jig-core owns the script, the root advances only on the connector's
+/// explicit completion in jig's restart vocabulary.
+fn connector_restart_done(domain: &mut Domain, stage: jig_core::connector::RestartStage) {
+    if domain.startup != Startup::Adopting(stage) {
+        domain.startup = Startup::Failed;
+        return;
+    }
+    match stage {
+        jig_core::connector::RestartStage::Restored => {
+            domain.startup = Startup::Adopting(jig_core::connector::RestartStage::ReadAfresh);
+            domain.work.push(Work::Forge(forge::Event::ReadAfresh));
+        }
+        jig_core::connector::RestartStage::ReadAfresh => {
+            domain.startup = Startup::Adopting(jig_core::connector::RestartStage::Settled);
+            domain.work.push(Work::Forge(forge::Event::SettleOutbox));
+        }
+        jig_core::connector::RestartStage::Settled => {
+            domain.startup = Startup::Running;
+            for _ in 0..domain.core.due.len() {
+                domain.work.push(Work::Activate(domain.core.due.pop().expect("restored due tasks")));
+            }
+        }
+    }
+}
+
+fn startup_adopting(startup: Startup) -> bool {
+    match startup {
+        Startup::Adopting(_) => true,
+        Startup::Cold | Startup::Loading(_) | Startup::Running | Startup::Failed => false,
+    }
 }
 
 fn account_event(domain: &mut Domain, env: &Env<Limits>, event: accounts::Event, out: &mut Queue<Request>) {
@@ -7151,7 +7195,7 @@ fn header_loaded(startup: Startup) -> bool {
             | Range::TaskTranscript { .. }
             | Range::TaskResult { .. },
         )
-        | Startup::Adopting
+        | Startup::Adopting(_)
         | Startup::Running => true,
     }
 }

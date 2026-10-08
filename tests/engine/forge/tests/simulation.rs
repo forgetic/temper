@@ -722,6 +722,7 @@ fn a_change_produced_opened_checked_queued_and_landed() {
                 | top::Request::BriefReady { .. }
                 | top::Request::BriefSized { .. }
                 | top::Request::BriefTaken { .. }
+                | top::Request::RestartDone { .. }
                 | top::Request::Call { .. } => {}
             }
         }
@@ -837,6 +838,55 @@ fn a_created_issue_with_its_answer_lost_is_found_after_restart() {
         Some(top::Stored::Issue(row)) => assert!(row.number.is_some()),
         Some(_) | None => panic!("recovered issue"),
     }
+}
+
+#[test]
+fn a_restored_write_waits_for_the_fresh_repository_read() {
+    let mut world = World::new(124);
+    world.adopt();
+    world.event(top::Event::Names {
+        task: 51,
+        resources: Box::new([top::Name {
+            forge: REPO.forge,
+            repository: REPO.repository,
+            what: top::What::Branch(Box::new([Box::from(&b"main"[..])])),
+        }]),
+    });
+    world.run_for(1);
+    world.event(top::Event::Enqueue {
+        entry: client::Entry {
+            number: 1,
+            task: 51,
+            repository: REPO,
+            effect: client::Effect {
+                write: client::api::Write::CreateIssue {
+                    key: Box::from(&b"restart-read"[..]),
+                    title: Box::from(&b"Restart read"[..]),
+                    body: Box::from(&b"after fresh repository state"[..]),
+                },
+                condition: client::Condition::None,
+            },
+            start: None,
+            attempt: None,
+            failures: 0,
+        },
+    });
+    assert!(world.stored().contains_key(&top::Key::Entry(1)));
+    world.take_seen();
+    world.slow_calls(skein_lib::Duration::from_secs(5));
+    world.restart();
+    world.run_for(2);
+    assert_eq!(world.writes(), 0, "a restored entry cannot write before the fresh read");
+    assert!(world.seen().contains(&top::Request::RestartDone { stage: top::RestartStage::Restored }));
+    assert!(!world.seen().contains(&top::Request::RestartDone { stage: top::RestartStage::ReadAfresh }));
+    world.run_for(20);
+    assert_eq!(world.writes(), 1);
+    let stages: Vec<_> = world
+        .seen()
+        .iter()
+        .filter_map(|request| if let top::Request::RestartDone { stage } = request { Some(*stage) } else { None })
+        .collect();
+    assert_eq!(stages, [top::RestartStage::Restored, top::RestartStage::ReadAfresh, top::RestartStage::Settled]);
 }
 
 #[test]

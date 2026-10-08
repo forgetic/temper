@@ -20,6 +20,8 @@ use skein_lib::{Duration, Env, Map, Queue, Time, Wall};
 pub(crate) struct Outbox {
     entries: Map<u64, Writing>,
     ready: bool,
+    paused: bool,
+    settling: bool,
     clock: RecoveryClock,
 }
 #[derive(Debug)]
@@ -29,6 +31,7 @@ struct Writing {
     clock: Time,
     state: State,
     uncertain: bool,
+    restart_checked: bool,
     withdrawn: bool,
 }
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -54,10 +57,16 @@ enum Phase {
 }
 impl Outbox {
     pub(crate) fn new(l: &Limits) -> Outbox {
-        Outbox { entries: Map::with_capacity(l.entries), ready: false, clock: RecoveryClock::Monotonic }
+        Outbox {
+            entries: Map::with_capacity(l.entries),
+            ready: false,
+            paused: false,
+            settling: false,
+            clock: RecoveryClock::Monotonic,
+        }
     }
     pub(crate) fn is_ready(&self, keep: &crate::keep::Keep) -> bool {
-        if !self.ready {
+        if !self.ready || self.paused {
             return false;
         }
         for (&number, writing) in &self.entries {
@@ -170,7 +179,15 @@ pub(crate) fn make(d: &mut Domain, env: &Env<Limits>, entry: Entry, out: &mut Qu
         .entries
         .insert(
             number,
-            Writing { entry, lane, clock: Time::ZERO, state: State::Due(phase), uncertain, withdrawn: false },
+            Writing {
+                entry,
+                lane,
+                clock: Time::ZERO,
+                state: State::Due(phase),
+                uncertain,
+                restart_checked: !uncertain,
+                withdrawn: false,
+            },
         )
         .expect("outbox admission checked");
 }
@@ -178,6 +195,27 @@ pub(crate) fn restored(d: &mut Domain, clock: RecoveryClock) {
     assert!(!d.outbox.ready, "restored once");
     d.outbox.ready = true;
     d.outbox.clock = clock;
+}
+pub(crate) fn pause(d: &mut Domain) {
+    assert!(d.outbox.ready, "pause after restore");
+    d.outbox.paused = true;
+}
+pub(crate) fn start_settle(d: &mut Domain) {
+    assert!(d.outbox.ready && d.outbox.paused, "settle follows restored fresh reads");
+    d.outbox.paused = false;
+    d.outbox.settling = true;
+}
+pub(crate) fn settle_done(d: &mut Domain) -> bool {
+    if !d.outbox.settling {
+        return false;
+    }
+    for (_, entry) in &d.outbox.entries {
+        if !entry.restart_checked {
+            return false;
+        }
+    }
+    d.outbox.settling = false;
+    true
 }
 pub(crate) fn withdraw(d: &mut Domain, number: u64, out: &mut Queue<Request>) {
     let Some(writing) = d.outbox.entries.get(&number) else {
@@ -198,7 +236,7 @@ pub(crate) fn withdraw(d: &mut Domain, number: u64, out: &mut Queue<Request>) {
     finish(d, number, Outcome::Withdrawn, out);
 }
 pub(crate) fn pump(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) -> bool {
-    if !d.outbox.ready || d.calls.is_full() {
+    if !d.outbox.ready || d.outbox.paused || d.calls.is_full() {
         return false;
     }
     let mut selected = None;
@@ -347,6 +385,7 @@ fn remaining(entry: &Entry, clock: RecoveryClock, env: &Env<Limits>) -> Duration
     }
 }
 fn not_found(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Request>) {
+    d.outbox.entries.get_mut(&number).expect("find owns entry").restart_checked = true;
     let w = d.outbox.entries.get(&number).expect("find owns entry");
     let left = remaining(&w.entry, d.outbox.clock, env);
     if left == Duration::ZERO {

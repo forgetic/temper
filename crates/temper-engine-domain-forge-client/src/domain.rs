@@ -123,7 +123,7 @@ impl Domain {
 /// A call sent, or one logical read completed/refused.
 #[must_use]
 pub const fn max_out(l: &Limits) -> u32 {
-    let batch = l.resources.saturating_mul(2).saturating_add(l.repositories.saturating_mul(2)).saturating_add(1);
+    let batch = l.resources.saturating_mul(2).saturating_add(l.repositories.saturating_mul(2)).saturating_add(3);
     if batch > 4 { batch } else { 4 }
 }
 /// Decide one parent event and emit the records and effects of that decision.
@@ -143,6 +143,19 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
             outbox::restored(d, clock);
             keep::restored(d);
         }
+        Event::PauseOutbox => outbox::pause(d),
+        Event::ReadAfresh => {
+            keep::start_fresh(d);
+            if keep::fresh_done(d) {
+                out.push(Request::ReadAfreshDone);
+            }
+        }
+        Event::SettleOutbox => {
+            outbox::start_settle(d);
+            if outbox::settle_done(d) {
+                out.push(Request::OutboxDone);
+            }
+        }
         Event::Read { owner, repository, read } => {
             let op = api::Op::Read(read);
             let refusal = if !bounds::op(&op, &env.limits) {
@@ -160,7 +173,15 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
                 None => calls::queue(&mut d.calls, calls::Owner::Read(owner), repository, op, Priority::Fresh),
             }
         }
-        Event::Answered { call, cost, result } => calls::answered(d, env, call, cost, result, out),
+        Event::Answered { call, cost, result } => {
+            calls::answered(d, env, call, cost, result, out);
+            if keep::fresh_done(d) {
+                out.push(Request::ReadAfreshDone);
+            }
+            if outbox::settle_done(d) {
+                out.push(Request::OutboxDone);
+            }
+        }
     }
 }
 /// One queued call per loop iteration. Only uncertain outbox entries retain
@@ -169,16 +190,28 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
 pub fn resume(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     if calls::background_owed(&d.calls, env) && keep::pump(d, env, out) {
         calls::send(d, env, out);
+        if outbox::settle_done(d) {
+            out.push(Request::OutboxDone);
+        }
         return;
     }
     if outbox::pump(d, env, out) {
+        if outbox::settle_done(d) {
+            out.push(Request::OutboxDone);
+        }
         return;
     }
     if keep::pump(d, env, out) {
         calls::send(d, env, out);
+        if outbox::settle_done(d) {
+            out.push(Request::OutboxDone);
+        }
         return;
     }
     calls::send(d, env, out);
+    if outbox::settle_done(d) {
+        out.push(Request::OutboxDone);
+    }
 }
 /// Expire one client deadline at the injected time.
 pub fn fire(d: &mut Domain, env: &Env<Limits>, _out: &mut Queue<Request>) {

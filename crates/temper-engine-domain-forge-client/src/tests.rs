@@ -109,7 +109,9 @@ impl Harness {
                 | Request::Outcome { .. }
                 | Request::Kept { .. }
                 | Request::Changed { .. }
-                | Request::Drift { .. },
+                | Request::Drift { .. }
+                | Request::ReadAfreshDone
+                | Request::OutboxDone,
             ) => {
                 panic!("read resume only sends a call")
             }

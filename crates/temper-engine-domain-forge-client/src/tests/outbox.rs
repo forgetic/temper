@@ -83,6 +83,9 @@ impl Harness {
                 | Request::Changed { .. }
                 | Request::Drift { .. } => panic!("outbox tests keep no resources"),
                 Request::Read { .. } => panic!("outbox tests make no parent read requests"),
+                Request::ReadAfreshDone | Request::OutboxDone => {
+                    panic!("ordinary outbox test did not request restart phases")
+                }
             }
         }
     }

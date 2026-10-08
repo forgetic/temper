@@ -391,6 +391,7 @@ impl World {
 
     fn take_top(&mut self) {
         let mut calls = List::with_capacity(self.top_out.len());
+        let mut restart = None;
         for _ in 0..self.top_out.len() {
             let request = self.top_out.pop().expect("counted top output");
             match request {
@@ -406,6 +407,14 @@ impl World {
                 }
                 top::Request::Call { call, repository, op } => {
                     calls.push((call, repository, op)).expect("bounded calls");
+                }
+                top::Request::RestartDone { stage } => {
+                    restart = match stage {
+                        top::RestartStage::Restored => Some(top::Event::ReadAfresh),
+                        top::RestartStage::ReadAfresh => Some(top::Event::SettleOutbox),
+                        top::RestartStage::Settled => None,
+                    };
+                    self.seen.push(top::Request::RestartDone { stage }).expect("world output capacity");
                 }
                 other @ (top::Request::Adopted { .. }
                 | top::Request::Taken { .. }
@@ -431,6 +440,9 @@ impl World {
         }
         for (call, repository, op) in calls.into_boxed() {
             self.submit(call, repository, op);
+        }
+        if let Some(event) = restart {
+            self.event(event);
         }
     }
 

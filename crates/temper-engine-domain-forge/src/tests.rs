@@ -175,7 +175,15 @@ fn a_hold_and_writer_slot_are_exclusive_until_answered() {
 fn an_outbox_entry_waits_for_its_commit() {
     let mut d = domain();
     outputs(&mut d, Event::Restore { record: Stored::Repository(adopted()) });
-    outputs(&mut d, Event::Restored { clock: client::RecoveryClock::Monotonic });
+    assert_eq!(
+        outputs(&mut d, Event::Restored { clock: client::RecoveryClock::Monotonic }).as_ref(),
+        &[Request::RestartDone { stage: RestartStage::Restored }],
+    );
+    assert_eq!(
+        outputs(&mut d, Event::ReadAfresh).as_ref(),
+        &[Request::RestartDone { stage: RestartStage::ReadAfresh }],
+    );
+    assert_eq!(outputs(&mut d, Event::SettleOutbox).as_ref(), &[Request::RestartDone { stage: RestartStage::Settled }],);
     let entry = client::Entry {
         number: 11,
         task: 7,
@@ -242,7 +250,8 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::BriefReady { .. }
         | Request::BriefSized { .. }
         | Request::EffectsSettled { .. }
-        | Request::BriefTaken { .. } => panic!("permission call"),
+        | Request::BriefTaken { .. }
+        | Request::RestartDone { .. } => panic!("permission call"),
     };
     assert_eq!(op, client::api::Op::Read(client::api::Read::Permission { user: 7 }));
     let result = outputs(
@@ -279,7 +288,8 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::BriefReady { .. }
         | Request::BriefSized { .. }
         | Request::EffectsSettled { .. }
-        | Request::BriefTaken { .. } => panic!("branches call"),
+        | Request::BriefTaken { .. }
+        | Request::RestartDone { .. } => panic!("branches call"),
     };
     assert!(
         outputs(
@@ -316,7 +326,8 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::BriefReady { .. }
         | Request::BriefSized { .. }
         | Request::EffectsSettled { .. }
-        | Request::BriefTaken { .. } => panic!("settings follows collision read"),
+        | Request::BriefTaken { .. }
+        | Request::RestartDone { .. } => panic!("settings follows collision read"),
     }
 }
 

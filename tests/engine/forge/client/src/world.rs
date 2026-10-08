@@ -375,7 +375,7 @@ impl World {
                         "one fresh result per owner"
                     );
                 }
-                Request::Drift { .. } => {}
+                Request::Drift { .. } | Request::ReadAfreshDone | Request::OutboxDone => {}
             }
         }
         // The entire decision is committed before any Call is released.
@@ -389,7 +389,9 @@ impl World {
                 | Request::Changed { .. }
                 | Request::Kept { .. }
                 | Request::Drift { .. }
-                | Request::Read { .. } => unreachable!("only calls withheld"),
+                | Request::Read { .. }
+                | Request::ReadAfreshDone
+                | Request::OutboxDone => unreachable!("only calls withheld"),
             }
         }
     }

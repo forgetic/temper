@@ -253,6 +253,12 @@ pub enum Event {
     Restore { record: Stored },
     /// Finish restoring the working set and select a recovery clock.
     Restored { clock: RecoveryClock },
+    /// Hold restored writes while the connector reads its live resources.
+    PauseOutbox,
+    /// Read every restored live resource before procedures resume.
+    ReadAfresh,
+    /// Reconcile restored outbox entries after the fresh reads.
+    SettleOutbox,
     /// A page read for a decision. Always enters the fresh class.
     Read { owner: Token, repository: Repository, read: Read },
     /// Exactly one terminal for each Call, including calls with no HTTP cost.
@@ -279,4 +285,8 @@ pub enum Request {
     Call { call: Token, repository: Repository, op: Op },
     /// Exactly one logical terminal, including admission refusal.
     Read { owner: Token, result: Result<Answer, Error> },
+    /// Every restored live resource has completed its first fresh pass.
+    ReadAfreshDone,
+    /// Every restored uncertain entry has been looked for at least once.
+    OutboxDone,
 }

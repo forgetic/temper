@@ -2012,6 +2012,14 @@ pub(super) fn outputs(
     for _ in 0..out.len() {
         let request = out.pop().expect("connector output count");
         match request {
+            forge::Request::RestartDone { stage } => {
+                let stage = match stage {
+                    forge::RestartStage::Restored => jig_core::connector::RestartStage::Restored,
+                    forge::RestartStage::ReadAfresh => jig_core::connector::RestartStage::ReadAfresh,
+                    forge::RestartStage::Settled => jig_core::connector::RestartStage::Settled,
+                };
+                super::connector_restart_done(domain, stage);
+            }
             forge::Request::BriefClient { event } => domain.work.push(Work::Forge(forge::Event::Client(event))),
             forge::Request::BriefReady { .. } => unreachable!("the root uses held forge sections"),
             forge::Request::BriefSized { section, size } => {

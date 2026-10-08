@@ -21,12 +21,14 @@ pub(crate) struct Keep {
     sequence: u64,
     ready: bool,
     failed: bool,
+    fresh_active: bool,
 }
 #[derive(Debug)]
 struct Live {
     record: LiveRecord,
     alarm: u64,
     active: bool,
+    fresh: Fresh,
     writer: bool,
     hinted: bool,
     state: State,
@@ -58,8 +60,14 @@ enum Phase {
 struct Repo {
     record: RepositoryRecord,
     active: bool,
+    fresh: Fresh,
     state: Scan,
     hinted: bool,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fresh {
+    Pending,
+    Complete,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Scan {
@@ -92,6 +100,7 @@ impl Keep {
             sequence: 0,
             ready: false,
             failed: false,
+            fresh_active: false,
         }
     }
     pub(crate) fn is_ready(&self) -> bool {
@@ -164,6 +173,7 @@ fn live(record: LiveRecord, l: &Limits, alarm: u64) -> Live {
         record,
         alarm,
         active: true,
+        fresh: Fresh::Complete,
         writer: false,
         hinted: false,
         state: State::Due(phase, Priority::Keep),
@@ -174,7 +184,7 @@ fn live(record: LiveRecord, l: &Limits, alarm: u64) -> Live {
 }
 fn repository(record: RepositoryRecord) -> Repo {
     let progress = Progress::first(record.mark);
-    Repo { record, active: true, state: Scan::Due(progress), hinted: false }
+    Repo { record, active: true, fresh: Fresh::Complete, state: Scan::Due(progress), hinted: false }
 }
 fn has(watches: &[Watch], resource: &Resource) -> bool {
     for watch in watches {
@@ -419,6 +429,44 @@ pub(crate) fn restored(d: &mut Domain) {
     }
     d.keep.ready = true;
 }
+pub(crate) fn start_fresh(d: &mut Domain) {
+    assert!(d.keep.ready && !d.keep.fresh_active, "fresh pass follows restored records once");
+    d.keep.fresh_active = true;
+    for key in keys(&d.keep) {
+        let row = d.keep.live.get_mut(&key).expect("restored live resource remains");
+        if row.active {
+            row.fresh = match &row.record.watch.resource.what {
+                What::Repository => Fresh::Complete,
+                What::Branch(_) | What::Pull(_) | What::Issue(_) => Fresh::Pending,
+            };
+            row.state = State::Due(first(&row.record.watch.resource), Priority::Fresh);
+        }
+    }
+    for key in repos(&d.keep) {
+        let row = d.keep.repos.get_mut(&key).expect("restored repository remains");
+        if row.active {
+            row.fresh = Fresh::Pending;
+            row.state = Scan::Due(Progress::first(row.record.mark));
+        }
+    }
+}
+pub(crate) fn fresh_done(d: &mut Domain) -> bool {
+    if !d.keep.fresh_active {
+        return false;
+    }
+    for (_, row) in &d.keep.live {
+        if row.active && row.fresh == Fresh::Pending {
+            return false;
+        }
+    }
+    for (_, row) in &d.keep.repos {
+        if row.active && row.fresh == Fresh::Pending {
+            return false;
+        }
+    }
+    d.keep.fresh_active = false;
+    true
+}
 pub(crate) fn pump(d: &mut Domain, _env: &Env<Limits>, out: &mut Queue<Request>) -> bool {
     if !d.keep.is_ready() || d.calls.is_full() {
         return false;
@@ -434,7 +482,7 @@ pub(crate) fn pump(d: &mut Domain, _env: &Env<Limits>, out: &mut Queue<Request>)
                     Owner::Repository(*key),
                     *key,
                     Op::Read(Read::Items { since: progress.since, page: progress.page, kind: None }),
-                    Priority::Keep,
+                    if row.fresh == Fresh::Pending { Priority::Fresh } else { Priority::Keep },
                 );
                 return true;
             }
@@ -729,6 +777,7 @@ pub(crate) fn answered_repository(
                     progress.newest
                 });
                 row.state = Scan::Idle;
+                row.fresh = Fresh::Complete;
                 let interval = if row.hinted { env.limits.hinted } else { env.limits.poll };
                 row.hinted = false;
                 d.alarms.arm(Alarm::Repository(key), env.now.saturating_add(interval)).expect("one repository alarm");
@@ -1080,11 +1129,15 @@ fn failed_resource(
 ) {
     out.push(Request::Changed { resource: key.clone(), result: Err(error) });
     let row = d.keep.live.get_mut(key).expect("resource remains");
+    if error == Error::Missing {
+        row.fresh = Fresh::Complete;
+    }
     row.state = State::Waiting(phase, Priority::Slow);
     d.alarms.arm(Alarm::Resource(row.alarm), env.now.saturating_add(env.limits.backoff)).expect("one resource alarm");
 }
 fn rest_resource(d: &mut Domain, env: &Env<Limits>, key: &Resource) {
     let row = d.keep.live.get_mut(key).expect("resource remains");
+    row.fresh = Fresh::Complete;
     let interval = if row.hinted {
         env.limits.hinted
     } else {

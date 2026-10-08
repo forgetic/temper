@@ -85,7 +85,9 @@ impl Measured {
                 | Request::Changed { .. }
                 | Request::Drift { .. }
                 | Request::Kept { .. }
-                | Request::Read { .. } => {}
+                | Request::Read { .. }
+                | Request::ReadAfreshDone
+                | Request::OutboxDone => {}
             }
         }
         self.meter.check(measured, self.bound, self.env.limits);
