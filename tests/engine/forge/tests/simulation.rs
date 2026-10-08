@@ -1474,6 +1474,30 @@ fn a_landing_wakes_overlapping_work_and_keeps_unrelated_news() {
         request,
         top::Request::News { task: 2, news: top::News::Landing { .. }, class: top::Class::Kept, .. }
     )));
+    for (task, class) in [(1, top::Class::Wakes), (2, top::Class::Kept)] {
+        assert_eq!(
+            world
+                .seen()
+                .iter()
+                .filter(|request| matches!(request,
+            top::Request::News { task: found, news: top::News::Landing { .. }, class: found_class, .. }
+                if *found == task && *found_class == class))
+                .count(),
+            1
+        );
+    }
+    world.take_seen();
+    for _ in 0..2 {
+        world.event(top::Event::Hint {
+            hint: client::api::Hint {
+                repository: REPO,
+                change: client::api::Change::Branch(Box::from(&b"main"[..])),
+                key: None,
+            },
+        });
+    }
+    world.run_for(5);
+    assert!(!world.seen().iter().any(|request| matches!(request, top::Request::News { .. })));
 }
 
 #[test]
@@ -1662,4 +1686,109 @@ fn an_outside_push_during_a_worker_slot_holds_the_task_with_evidence() {
         top::DriftChange::Branch { expected: before, observed: Some(after) }
     );
     assert!(hold.drift.as_ref().expect("drift").at > Wall::EPOCH);
+}
+
+#[test]
+fn a_waiting_procedure_stepped_twice_on_unchanged_facts_keeps_its_decision_and_state() {
+    let (mut world, head) = reviewed_change(true, change::Freshness::Exact);
+    world.produce(b"temper/50");
+    let front_head = translate::commit(world.branch(b"temper/50"));
+    let mut front = change_row();
+    front.branch = Box::from(&b"temper/50"[..]);
+    front.task = 50;
+    front.change.task = 50;
+    front.priority = 100;
+    front.change.state = change::State::Queued { head: front_head, ready_since: Wall::EPOCH };
+    world.event(top::Event::Change { row: front });
+    let gates = Box::new([change::GateReport { number: 9, head, status: change::Status::Passed }]);
+    let first = change_step(&mut world, 100, change::Status::Passed, gates.clone());
+    let before = world.stored().get(&top::Key::Change(51)).expect("procedure state").clone();
+    let second = change_step(&mut world, 101, change::Status::Passed, gates);
+    assert_eq!(first, change::Decision::Wait { until: None });
+    assert_eq!(second, first);
+    assert_eq!(world.stored().get(&top::Key::Change(51)), Some(&before));
+    assert_eq!(world.writes(), 0);
+}
+
+#[test]
+fn dropping_a_completed_section_frees_it_and_its_token_can_be_reused() {
+    let mut world = World::new(131);
+    world.adopt();
+    world.produce(b"temper/51");
+    let pull = world.open_pull(b"temper/51", b"main");
+    let head = translate::commit(world.branch(b"temper/51"));
+    let mut row = change_row();
+    row.pull = Some(pull);
+    row.change.last_head = Some(head);
+    world.event(top::Event::Change { row });
+    let section = Token::new(96);
+    let gather = || top::Event::GatherBriefHeld {
+        section,
+        source: top::BriefSource::Pull {
+            item: top::BriefItem { repository: REPO.repository, number: pull },
+            head: top::BriefCommit(head),
+        },
+        parts: 1,
+        bytes: 512,
+        max_job_bytes: 0,
+    };
+    world.take_seen();
+    world.event(gather());
+    world.run_for(5);
+    assert!(world.seen().iter().any(|request| matches!(request,
+        top::Request::BriefSized { section: found, size: Some(_) } if *found == section)));
+    world.take_seen();
+    world.event(top::Event::DropBrief { section });
+    world.event(top::Event::TakeBrief { section });
+    assert_eq!(world.seen(), &[top::Request::BriefTaken { section, bytes: None }]);
+    world.take_seen();
+    world.event(gather());
+    world.run_for(5);
+    assert!(world.seen().iter().any(|request| matches!(request,
+        top::Request::BriefSized { section: found, size: Some(_) } if *found == section)));
+    world.take_seen();
+    world.event(top::Event::TakeBrief { section });
+    assert!(world.seen().iter().any(|request| matches!(request,
+        top::Request::BriefTaken { section: found, bytes: Some(_) } if *found == section)));
+    world.take_seen();
+    world.event(top::Event::TakeBrief { section });
+    assert_eq!(world.seen(), &[top::Request::BriefTaken { section, bytes: None }]);
+}
+
+#[test]
+fn a_lost_run_confirms_its_unreported_forward_head_by_fresh_reads() {
+    let mut world = World::new(132);
+    world.adopt();
+    world.produce(b"temper/51");
+    let name = top::Name {
+        forge: REPO.forge,
+        repository: REPO.repository,
+        what: top::What::Branch(Box::new([Box::from(&b"temper"[..]), Box::from(&b"51"[..])])),
+    };
+    world.event(top::Event::Names { task: 51, resources: Box::new([name.clone()]) });
+    world.event(top::Event::Hold { task: 51, resource: name.clone(), from: None });
+    world.event(top::Event::Claim { task: 51, attempt: 1, writes: Box::new([name.clone()]), holders: Box::new([]) });
+    world.event(top::Event::Answered {
+        task: 51,
+        attempt: 1,
+        pushed: Box::new([(name.clone(), translate::commit(world.branch(b"temper/51")))]),
+    });
+    world.run_for(1);
+    world.event(top::Event::Claim { task: 51, attempt: 2, writes: Box::new([name.clone()]), holders: Box::new([]) });
+    world.push(b"temper/51", b"unreported work");
+    let head = translate::commit(world.branch(b"temper/51"));
+    let calls = world.calls();
+    world.event(top::Event::Lost { task: 51, attempt: 2 });
+    world.run_for(5);
+    assert!(world.calls() >= calls + 2, "head read and ancestry comparison");
+    let Some(top::Stored::Hold(hold)) = world.stored().get(&top::Key::Hold(name.clone())) else {
+        panic!("hold retained")
+    };
+    assert_eq!(hold.writer, None);
+    assert_eq!(hold.drift, None);
+    let Some(top::Stored::BranchHead(recorded)) = world.stored().get(&top::Key::BranchHead(name)) else {
+        panic!("head confirmed")
+    };
+    assert_eq!(recorded.commit, head);
+    assert!(recorded.owned);
 }
