@@ -373,6 +373,9 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 05.0 inherited-pipe finish skein repin | merged locally | smith c87a8a7 | Pinned Skein b1c9e90; fmt/clippy pass; 1,319 focused / 6.689 s; 15 fuzzy / 6.918 s. |
 | 05.4 simulated agent process world | merged locally | smith 08d53cd, 225bedf | TLS fake LLM and scripted host reach Answer and clean process exit; signal cancellation, startup errors, memory bound and 64 seeded runs covered. fmt/clippy pass; 1,323 focused / 4.019 s; 16 fuzzy / 4.670 s; world serial 3 focused / 0.027 s and one fuzzy / 0.224 s. |
 | 06.1 host process adapter | merged locally | smith 1900d8c | Three-pipe spawn, opening deadline, bounded standard-error tail, signals and cleanup. fmt 0.96 s; Clippy 13.27 s; 1,327 focused / 4.365 s; 16 fuzzy / 5.533 s. |
+| 06.0 hosted-service simulator Skein repin | merged locally | smith a535b9c | Pinned Skein 9840f495 for child-service simulation. fmt 0.97 s; Clippy 25.55 s; 1,327 focused / 6.819 s; 16 fuzzy / 6.852 s. |
+| 06.2 simulated host process world | merged locally | smith 9fcc632 | Host service spawns the agent service over child pipes and fake LLM; covers exit, refusal, stderr tail, opening deadline and forced stop. fmt 0.975 s; Clippy 0.185 s; 1,332 focused / 4.413 s; 16 fuzzy / 5.010 s; world serial 5 focused / 0.039 s. |
+| 06.3 host referee, crash sweep and memory | merged locally | smith bf4b992 | Referee checks single answer, call terminals and child teardown before slot release; sweeps and replays hosted crashes at every step and meters process memory. fmt 0.962 s; Clippy 13.787 s; 1,336 focused / 4.330 s; 17 fuzzy / 5.481 s; world serial 9 focused / 0.163 s and one fuzzy / 0.777 s. |
 
 ## jig extraction
 
