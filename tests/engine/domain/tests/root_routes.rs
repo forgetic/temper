@@ -848,6 +848,7 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
             | Delivery::InboxPage { .. }
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
+            | Delivery::Host(_)
             | Delivery::CallAnswer { .. }
             | Delivery::ForgeCommitted { .. }
             | Delivery::ForgeCall { .. }
@@ -1324,6 +1325,7 @@ fn assigned(driver: &Driver) -> engine::Assignment {
             | Delivery::InboxPage { .. }
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
+            | Delivery::Host(_)
             | Delivery::CallAnswer { .. }
             | Delivery::ForgeCommitted { .. }
             | Delivery::ForgeCall { .. }
@@ -3396,6 +3398,7 @@ fn a_lost_attempt_is_told_of_the_calls_committed_after_its_last_turn() {
         [temper_engine_domain::CallRecord {
             key: temper_engine_domain::CallKey { task: first.task, attempt: first.attempt, completion: 2, position: 0 },
             answer: temper_engine_domain::CallAnswer::Unavailable,
+            settled: None,
         }]
     );
 }
@@ -3966,6 +3969,7 @@ fn coalesced_history_waiters_survive_simultaneous_io_completion_under_full_journ
             | Delivery::InboxPage { .. }
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
+            | Delivery::Host(_)
             | Delivery::CallAnswer { .. }
             | Delivery::ForgeCommitted { .. }
             | Delivery::ForgeCall { .. }
@@ -4728,6 +4732,7 @@ fn assigned_from_last(delivered: &[Delivery]) -> engine::Assignment {
             | Delivery::InboxPage { .. }
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
+            | Delivery::Host(_)
             | Delivery::CallAnswer { .. }
             | Delivery::ForgeCommitted { .. }
             | Delivery::ForgeCall { .. }
@@ -4773,6 +4778,7 @@ fn say(driver: &mut Driver, task: u64, key: u8) -> u64 {
             | Delivery::InboxPage { .. }
             | Delivery::InboxView { .. }
             | Delivery::BeginInboxView { .. }
+            | Delivery::Host(_)
             | Delivery::CallAnswer { .. }
             | Delivery::ForgeCommitted { .. }
             | Delivery::ForgeCall { .. }
@@ -5433,4 +5439,180 @@ fn a_worker_frozen_past_its_grace_gets_no_next_attempt_until_its_sum_has_passed(
         panic!("retryable lost task")
     };
     assert_eq!(task.tries.lost, 1);
+}
+
+fn typed_unavailable(driver: &mut Driver, assignment: &engine::Assignment, name: &[u8]) -> jig_core::SettledCall {
+    driver.send(engine::Event::CallTyped {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        call: fleet::TypedCall {
+            name: name.into(),
+            tool: b"unknown-tool".as_slice().into(),
+            writes: false,
+            input: b"opaque-input".as_slice().into(),
+            deadline: Duration::from_secs(2),
+        },
+    });
+    for _ in 0..20 {
+        driver.advance(true);
+        if !driver.host_requests.is_empty() {
+            break;
+        }
+    }
+    let engine::HostRequest::Decode { to, task, attempt, call } = *driver.host_requests.remove(0) else {
+        panic!("typed decode request")
+    };
+    assert_eq!(task, assignment.task);
+    assert_eq!(attempt, assignment.attempt);
+    assert_eq!(call.name.as_ref(), name);
+    assert_eq!(call.tool.as_ref(), b"unknown-tool");
+    assert_eq!(call.input.as_ref(), b"opaque-input");
+    assert!(!call.writes);
+    assert_eq!(call.deadline, Duration::from_secs(2));
+    driver.send(engine::Event::DecodedTypedCall {
+        to,
+        body: engine::Call { completion: 2, position: 0, tool: engine::Tool::Unavailable },
+    });
+    for _ in 0..20 {
+        driver.advance(true);
+        if driver.delivered.iter().any(|delivery| matches!(delivery, Delivery::Host(host) if matches!(host.as_ref(), engine::HostDelivery::Render { .. }))) { break; }
+    }
+    let index = driver.delivered.iter().position(|delivery| matches!(delivery, Delivery::Host(host) if matches!(host.as_ref(), engine::HostDelivery::Render { .. }))).expect("render only after logical decision commits");
+    let Delivery::Host(host) = driver.delivered.remove(index) else { panic!("host delivery") };
+    let engine::HostDelivery::Render { to, key, name: raw_name, tool, answer } = *host else {
+        panic!("render request")
+    };
+    assert_eq!(raw_name.as_ref(), name);
+    assert_eq!(tool.as_ref(), b"unknown-tool");
+    assert_eq!(answer, temper_engine_domain::CallAnswer::Unavailable);
+    assert!(driver.store.rows.contains_key(&Key::Call(key)), "render follows its durable decision");
+    driver.send(engine::Event::RenderedTypedCall {
+        to,
+        answer: jig_core::SettledAnswer::Delivery {
+            outcome: jig_core::DeliveryOutcome::Nothing,
+            evidence: b"\x01opaque\x00evidence".as_slice().into(),
+        },
+    });
+    assert!(!driver.delivered.iter().any(|delivery| matches!(delivery, Delivery::Host(host) if matches!(host.as_ref(), engine::HostDelivery::Answer { .. }))), "the settled evidence is held until its store commit");
+    driver.settle();
+    driver
+        .delivered
+        .iter()
+        .rev()
+        .find_map(|delivery| {
+            if let Delivery::Host(host) = delivery {
+                match host.as_ref() {
+                    engine::HostDelivery::Answer { name: raw_name, call, .. } => {
+                        if raw_name.as_ref() == name {
+                            Some(call.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    engine::HostDelivery::Render { .. } | engine::HostDelivery::Inbound { .. } => None,
+                }
+            } else {
+                None
+            }
+        })
+        .expect("settled typed answer")
+}
+
+#[test]
+fn typed_calls_keep_their_opaque_answers_for_resumed_assignments() {
+    let (mut driver, first) = chat_driver();
+    turn(&mut driver, &first, 1, 1);
+    driver.settle();
+    let settled = typed_unavailable(&mut driver, &first, b"opaque-call");
+    assert_ne!(settled.serial, 0);
+    let key = temper_engine_domain::CallKey { task: first.task, attempt: first.attempt, completion: 2, position: 0 };
+    assert!(
+        matches!(driver.store.rows.get(&Key::Call(key)), Some(Record::Call(record)) if record.settled.as_ref()==Some(&settled))
+    );
+    driver.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: first.task,
+        attempt: first.attempt,
+        cumulative: 1,
+        end: tasks::End::Parked,
+        saved: None,
+    });
+    driver.settle();
+    say(&mut driver, first.task, 93);
+    let resumed = assigned_from_last(&driver.delivered);
+    assert_eq!(resumed.transcript.as_ref(), [Box::<[u8]>::from(&b"step"[..])]);
+    assert_eq!(resumed.settled.as_ref(), std::slice::from_ref(&settled));
+    assert_eq!(resumed.answered[0].settled.as_ref(), Some(&settled));
+}
+
+#[test]
+fn typed_messages_keep_their_label_and_whole_words() {
+    let (mut driver, assignment) = chat_driver();
+    let number = say(&mut driver, assignment.task, 94);
+    driver.send(engine::Event::InboundTyped {
+        task: assignment.task,
+        attempt: assignment.attempt,
+        message: engine::HostMessage {
+            name: number,
+            sender: b"Person: alice".as_slice().into(),
+            words: Box::from([94]),
+        },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery, Delivery::Host(host) if matches!(host.as_ref(), engine::HostDelivery::Inbound { channel, task, attempt, message } if *channel==Token::new(7) && *task==assignment.task && *attempt==assignment.attempt && message.name==number && message.sender.as_ref()==b"Person: alice" && message.words.as_ref()==[94]))));
+    driver.send(engine::Event::Turn {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        turn: engine::Turn {
+            number: 1,
+            cumulative: 1,
+            read: Some(number),
+            transcript: b"read labeled words".as_slice().into(),
+        },
+    });
+    driver.settle();
+    assert!(
+        matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(assignment.task))), Some(Record::Tasks(tasks::Stored::Live(task))) if task.inbox.is_empty())
+    );
+}
+
+#[test]
+fn a_typed_call_replay_uses_the_settled_record_without_rendering_again() {
+    let (mut driver, assignment) = chat_driver();
+    let saved = typed_unavailable(&mut driver, &assignment, b"replay");
+    let before = driver.store.applied;
+    let rows = driver.store.rows.clone();
+    let delivered = driver.delivered.len();
+    driver.send(engine::Event::CallTyped {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        call: fleet::TypedCall {
+            name: b"replay".as_slice().into(),
+            tool: b"unknown-tool".as_slice().into(),
+            writes: false,
+            input: b"opaque-input".as_slice().into(),
+            deadline: Duration::from_secs(2),
+        },
+    });
+    for _ in 0..20 {
+        driver.advance(true);
+        if !driver.host_requests.is_empty() {
+            break;
+        }
+    }
+    let engine::HostRequest::Decode { to, .. } = *driver.host_requests.remove(0) else {
+        panic!("typed decode request")
+    };
+    driver.send(engine::Event::DecodedTypedCall {
+        to,
+        body: engine::Call { completion: 2, position: 0, tool: engine::Tool::Unavailable },
+    });
+    driver.settle();
+    assert_eq!(driver.store.applied, before);
+    assert_eq!(driver.store.rows, rows);
+    assert!(!driver.delivered[delivered..].iter().any(|delivery| matches!(delivery, Delivery::Host(host) if matches!(host.as_ref(), engine::HostDelivery::Render { .. }))));
+    assert!(driver.delivered[delivered..].iter().any(|delivery| matches!(delivery, Delivery::Host(host) if matches!(host.as_ref(), engine::HostDelivery::Answer { call, .. } if *call==saved))));
 }

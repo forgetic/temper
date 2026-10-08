@@ -50,6 +50,8 @@ pub struct Limits {
 /// resumed by the root and never passed to the protocol as child events.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Delivery {
+    /// Typed protocol handoffs follow their prerequisite commits.
+    Host(Box<crate::engine::HostDelivery>),
     /// Release a committed connector entry to its client.
     ForgeCommitted { entry: u64 },
     /// One bounded connector call after all preceding progress commits.
@@ -518,6 +520,7 @@ impl Decision {
                     && word.words.len() <= usize::try_from(limits.transcript_bytes).expect("u32 fits usize")
             }
             Delivery::Assigned { assignment, .. } => assignment_within(assignment, limits),
+            Delivery::Host(host) => host_within(host, limits),
             Delivery::CallAnswer { .. }
             | Delivery::ForgeCommitted { .. }
             | Delivery::ForgeCall { .. }
@@ -800,6 +803,54 @@ fn assignment_within(assignment: &crate::engine::Assignment, limits: &Limits) ->
         };
         transcript = total;
     }
+    if !answered_within(assignment, limits) {
+        return false;
+    }
+    let answered_bytes = u64::try_from(assignment.answered.len())
+        .expect("usize fits u64")
+        .checked_mul(u64::try_from(size_of::<crate::CallRecord>()).expect("usize fits u64"));
+    let total = match (transcript.checked_add(inbox_bytes), answered_bytes) {
+        (Some(transcript), Some(answered)) => transcript.checked_add(answered),
+        (None, _) | (_, None) => None,
+    };
+    let within = match total {
+        Some(all) => all <= u64::from(limits.transcript_bytes),
+        None => false,
+    };
+    owned <= u64::from(limits.result_bytes) && within
+}
+
+fn host_within(host: &crate::engine::HostDelivery, limits: &Limits) -> bool {
+    match host {
+        crate::engine::HostDelivery::Render { name, tool, answer, .. } => {
+            length_within(name.len().checked_add(tool.len()), limits.transcript_bytes)
+                && bytes_within(crate::store::call_answer_bytes(answer), limits.transcript_bytes)
+        }
+        crate::engine::HostDelivery::Answer { call, .. } => match call.owned_bytes() {
+            Some(bytes) => bytes <= u64::from(limits.transcript_bytes).checked_add(4).expect("bounded busy answer"),
+            None => false,
+        },
+        crate::engine::HostDelivery::Inbound { message, .. } => {
+            length_within(message.sender.len().checked_add(message.words.len()), limits.transcript_bytes)
+        }
+    }
+}
+
+pub(crate) fn length_within(bytes: Option<usize>, limit: u32) -> bool {
+    match bytes {
+        Some(bytes) => bytes <= usize::try_from(limit).expect("u32 fits usize"),
+        None => false,
+    }
+}
+
+fn bytes_within(bytes: Option<u64>, limit: u32) -> bool {
+    match bytes {
+        Some(bytes) => bytes <= u64::from(limit),
+        None => false,
+    }
+}
+
+fn answered_within(assignment: &crate::engine::Assignment, limits: &Limits) -> bool {
     let mut previous = None;
     for row in &assignment.answered {
         let key = row.key;
@@ -816,16 +867,26 @@ fn assignment_within(assignment: &crate::engine::Assignment, limits: &Limits) ->
         }
         previous = Some(key);
     }
-    let answered_bytes = u64::try_from(assignment.answered.len())
-        .expect("usize fits u64")
-        .checked_mul(u64::try_from(size_of::<crate::CallRecord>()).expect("usize fits u64"));
-    let total = match (transcript.checked_add(inbox_bytes), answered_bytes) {
-        (Some(transcript), Some(answered)) => transcript.checked_add(answered),
-        (None, _) | (_, None) => None,
-    };
-    let within = match total {
-        Some(all) => all <= u64::from(limits.transcript_bytes),
-        None => false,
-    };
-    owned <= u64::from(limits.result_bytes) && within
+    let mut serial = 0;
+    for call in &assignment.settled {
+        if call.serial <= serial
+            || call.name.is_empty()
+            || call.tool.is_empty()
+            || !bytes_within(call.owned_bytes(), limits.transcript_bytes)
+        {
+            return false;
+        }
+        serial = call.serial;
+    }
+    for row in &assignment.answered {
+        if !bytes_within(crate::store::call_answer_bytes(&row.answer), limits.transcript_bytes)
+            || match &row.settled {
+                Some(call) => !bytes_within(call.owned_bytes(), limits.transcript_bytes),
+                None => false,
+            }
+        {
+            return false;
+        }
+    }
+    true
 }

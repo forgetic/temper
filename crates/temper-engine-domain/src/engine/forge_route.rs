@@ -2136,7 +2136,15 @@ pub(super) fn outputs(
                         };
                         let answer = CallAnswer::ForgeEffect { entry, deadline, outcome: Some(outcome) };
                         domain.connector_calls.insert(key, answer.clone()).expect("replaces retained named effect");
-                        save(decision, &env.limits, Write::Save(Record::Call(crate::CallRecord { key, answer })));
+                        save(
+                            decision,
+                            &env.limits,
+                            Write::Save(Record::Call(crate::CallRecord {
+                                key,
+                                answer,
+                                settled: domain.core.call_settled.get(&key).cloned(),
+                            })),
+                        );
                     }
                 }
                 let result = match outcome {

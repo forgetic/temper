@@ -445,6 +445,7 @@ fn held_assignment_checks_owned_bytes_and_section_backing_before_acceptance() {
         workspace: crate::engine::ForgeWorkspace { key: Box::new([]), repositories: Box::new([]) },
         transcript: Box::new([]),
         answered: Box::new([]),
+        settled: Box::new([]),
         grant: accounts::Grant { account: 1, generation: 1, valid: skein_lib::Duration::from_secs(1) },
     };
     assert!(decision.deliver(&limits, Delivery::Assigned { channel: Token::new(1), assignment }).is_err());

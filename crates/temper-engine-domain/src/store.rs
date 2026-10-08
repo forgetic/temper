@@ -198,6 +198,8 @@ impl CallAnswer {
 pub struct CallRecord {
     pub key: CallKey,
     pub answer: CallAnswer,
+    /// The exact protocol-rendered host answer and any opaque delivery evidence.
+    pub settled: Option<jig_core::SettledCall>,
 }
 
 /// Ordered address of a durable row. Root and child identities keep their own
@@ -622,47 +624,13 @@ impl Write {
 pub fn record_bytes(record: &Record) -> Option<u64> {
     match record {
         Record::EscalationDecision(row) => decision_bytes(&row.decision),
-        Record::Call(row) => match &row.answer {
-            CallAnswer::ForgeRead(result) => match result.as_ref() {
-                Ok(answer) => temper_engine_domain_forge_client::answer_bytes_unbounded(answer),
-                Err(_) => Some(0),
-            },
-            CallAnswer::ForgeEffect { .. }
-            | CallAnswer::ForgeEffectRefused(_)
-            | CallAnswer::Unavailable
-            | CallAnswer::Proposed { .. }
-            | CallAnswer::ProposalDecided { .. }
-            | CallAnswer::ProposalRefused(_)
-            | CallAnswer::EscalationDecided { .. }
-            | CallAnswer::EscalationRefused(_)
-            | CallAnswer::Controlled
-            | CallAnswer::ControlRefused(_)
-            | CallAnswer::ControlDenied { .. }
-            | CallAnswer::Introduced
-            | CallAnswer::Sent { .. }
-            | CallAnswer::MessageRefused(_)
-            | CallAnswer::Subscribed { .. }
-            | CallAnswer::Unsubscribed
-            | CallAnswer::SubscriptionRefused(_)
-            | CallAnswer::DelegationRefused(_)
-            | CallAnswer::NoteWritten { .. }
-            | CallAnswer::NoteRefused(_) => Some(0),
-            CallAnswer::NoteRecalled { entries, .. } => {
-                let mut bytes = u64::try_from(entries.len())
-                    .ok()?
-                    .checked_mul(u64::try_from(size_of::<jig_core_notes::Entry>()).ok()?)?;
-                for entry in entries {
-                    bytes = bytes.checked_add(note_entry_bytes(entry)?)?;
-                }
-                Some(bytes)
-            }
-            CallAnswer::Delegated(numbers) => u64::try_from(numbers.len()).ok()?.checked_mul(8),
-            CallAnswer::DelegationDenied { findings, .. }
-            | CallAnswer::ForgeEffectDenied { findings, .. }
-            | CallAnswer::ToolDenied { findings, .. } => u64::try_from(findings.len())
-                .ok()?
-                .checked_mul(u64::try_from(size_of::<jig_core_authority::Finding>()).ok()?),
-        },
+        Record::Call(row) => {
+            let answer = call_answer_bytes(&row.answer);
+            answer?.checked_add(match &row.settled {
+                Some(call) => call.owned_bytes()?,
+                None => 0,
+            })
+        }
         Record::ProposalDecision(_) | Record::Deployment(_) => Some(0),
         Record::Turn(turn) => u64::try_from(turn.transcript.len()).ok(),
         Record::RunProof(row) => match &row.terminal {
@@ -822,5 +790,49 @@ fn decision_bytes(decision: &jig_core_people::EscalationDecision) -> Option<u64>
     match decision {
         jig_core_people::EscalationDecision::Release | jig_core_people::EscalationDecision::Pass => Some(0),
         jig_core_people::EscalationDecision::Reject { reason } => u64::try_from(reason.len()).ok(),
+    }
+}
+
+pub(crate) fn call_answer_bytes(answer: &CallAnswer) -> Option<u64> {
+    match answer {
+        CallAnswer::ForgeRead(result) => match result.as_ref() {
+            Ok(answer) => temper_engine_domain_forge_client::answer_bytes_unbounded(answer),
+            Err(_) => Some(0),
+        },
+        CallAnswer::ForgeEffect { .. }
+        | CallAnswer::ForgeEffectRefused(_)
+        | CallAnswer::Unavailable
+        | CallAnswer::Proposed { .. }
+        | CallAnswer::ProposalDecided { .. }
+        | CallAnswer::ProposalRefused(_)
+        | CallAnswer::EscalationDecided { .. }
+        | CallAnswer::EscalationRefused(_)
+        | CallAnswer::Controlled
+        | CallAnswer::ControlRefused(_)
+        | CallAnswer::ControlDenied { .. }
+        | CallAnswer::Introduced
+        | CallAnswer::Sent { .. }
+        | CallAnswer::MessageRefused(_)
+        | CallAnswer::Subscribed { .. }
+        | CallAnswer::Unsubscribed
+        | CallAnswer::SubscriptionRefused(_)
+        | CallAnswer::DelegationRefused(_)
+        | CallAnswer::NoteWritten { .. }
+        | CallAnswer::NoteRefused(_) => Some(0),
+        CallAnswer::NoteRecalled { entries, .. } => {
+            let mut bytes = u64::try_from(entries.len())
+                .ok()?
+                .checked_mul(u64::try_from(size_of::<jig_core_notes::Entry>()).ok()?)?;
+            for entry in entries {
+                bytes = bytes.checked_add(note_entry_bytes(entry)?)?;
+            }
+            Some(bytes)
+        }
+        CallAnswer::Delegated(numbers) => u64::try_from(numbers.len()).ok()?.checked_mul(8),
+        CallAnswer::DelegationDenied { findings, .. }
+        | CallAnswer::ForgeEffectDenied { findings, .. }
+        | CallAnswer::ToolDenied { findings, .. } => u64::try_from(findings.len())
+            .ok()?
+            .checked_mul(u64::try_from(size_of::<jig_core_authority::Finding>()).ok()?),
     }
 }

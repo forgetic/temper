@@ -335,6 +335,7 @@ impl World {
                 | engine::Request::CallBusy { .. }
                 | engine::Request::TurnBusy { .. }
                 | engine::Request::AnswerBusy { .. } => {}
+                engine::Request::Host(_) => panic!("legacy forge world received typed input"),
                 engine::Request::Stop => panic!("root startup or store failure"),
             }
         }

@@ -631,6 +631,7 @@ impl World {
                 ) => {}
                 engine::Request::AnswerBusy { .. } => self.answer(),
                 engine::Request::TurnBusy { .. } => panic!("outside worker offered no turns"),
+                engine::Request::Host(_) => panic!("legacy fixture received a typed protocol request"),
                 engine::Request::CallBusy { .. } => panic!("escalation world sent no calls"),
                 engine::Request::View(_) | engine::Request::WatchRefused { .. } => panic!("unrequested view output"),
                 engine::Request::Stop => panic!("escalation root stopped: {:?}", self.trace),
@@ -789,7 +790,7 @@ impl World {
             | Delivery::Relay { .. }
             | Delivery::Inbound { .. }
             | Delivery::Load { .. } => panic!("internal root callback leaked to world"),
-            Delivery::CallAnswer { .. } => panic!("escalation world sent no calls"),
+            Delivery::Host(_) | Delivery::CallAnswer { .. } => panic!("escalation world sent no calls"),
             Delivery::Procedure { .. } => panic!("escalation world sent no procedures"),
         }
     }

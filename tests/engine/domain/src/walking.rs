@@ -645,6 +645,7 @@ impl World {
                     },
                     1,
                 ),
+                engine::Request::Host(_) => panic!("legacy fixture received a typed protocol request"),
                 engine::Request::CallBusy { .. } => panic!("walking story sent no calls"),
                 engine::Request::View(_) | engine::Request::WatchRefused { .. } => panic!("unrequested view output"),
                 engine::Request::Stop => panic!("walking story stopped: {:?}", self.trace),
@@ -731,7 +732,8 @@ impl World {
                     .result(&self.store.rows, person, task, &words)
                     .expect("committed result reaches person once");
             }
-            Delivery::CallAnswer { .. }
+            Delivery::Host(_)
+            | Delivery::CallAnswer { .. }
             | Delivery::ForgeCall { .. }
             | Delivery::Procedure { .. }
             | Delivery::Reply { .. }

@@ -96,6 +96,7 @@ fn walking_referee_rejects_duplicate_transaction_keys_and_transcripts() {
     let writes = [Write::Save(charged.clone()), Write::Save(row.clone()), Write::Save(row.clone())];
     assert_eq!(WalkingReferee::default().commit(&writes), Err("same key written twice in one decision"));
     let proof = Record::RunProof(temper_engine_domain::RunProof {
+        transcript_from: 0,
         task: task.number,
         attempt: task.attempt,
         offered: None,
@@ -201,6 +202,7 @@ fn walking_referee_rejects_wrong_task_or_uncommitted_or_duplicate_assignment() {
         workspace: engine::ForgeWorkspace { key: Box::from(task.number.to_be_bytes()), repositories: Box::new([]) },
         transcript: Box::new([]),
         answered: Box::new([]),
+        settled: Box::new([]),
         grant: Grant { account: 1, generation: 1, valid: Duration::from_secs(60) },
     };
     assignment.task = task.number + 1;
@@ -293,6 +295,7 @@ fn walking_referee_rejects_missing_or_split_current_claim_turn_and_terminal_proo
     live.turn = 0;
     live.run_spent = 0;
     let initial = Record::RunProof(temper_engine_domain::RunProof {
+        transcript_from: 0,
         task: task.number,
         attempt: task.attempt,
         offered: None,
@@ -423,6 +426,7 @@ fn independent_terminal_cut_referee_rejects_missing_or_altered_evidence() {
     rows.insert(
         Key::RunProof { task: task.number },
         Record::RunProof(temper_engine_domain::RunProof {
+            transcript_from: 0,
             task: task.number,
             attempt: task.attempt,
             offered: None,

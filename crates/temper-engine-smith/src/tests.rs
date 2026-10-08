@@ -65,6 +65,7 @@ fn assignment() -> engine::Assignment {
         workspace: engine::ForgeWorkspace { key: Box::new([]), repositories: Box::new([]) },
         transcript: Box::new([]),
         answered: Box::new([]),
+        settled: Box::new([]),
         grant: accounts::Grant { account: 1, generation: 2, valid: Duration::from_secs(30) },
     }
 }

@@ -27,6 +27,8 @@
 //! internal idleness, while an external referee establishes final story results.
 mod escalation;
 mod forge_route;
+mod typed_route;
+pub use typed_route::{HostDelivery, HostMessage, HostRequest};
 mod inbox;
 mod landing;
 mod policy_translate;
@@ -263,6 +265,7 @@ pub struct Assignment {
     /// Named answers committed after the task's last accepted turn. The
     /// worker gives these to the new attempt before it can decide new calls.
     pub answered: Box<[crate::CallRecord]>,
+    pub settled: Box<[jig_core::SettledCall]>,
     /// Secret-free account grant; token bytes stay in the protocol.
     pub grant: accounts::Grant,
 }
@@ -447,24 +450,80 @@ pub struct Call {
 /// be dropped by fleet. Store and refresh variants are terminals, not new calls.
 #[derive(Debug)]
 pub enum Event {
+    /// Typed calls are decoded by the protocol after fleet authenticates their claim.
+    CallTyped {
+        channel: Token,
+        task: u64,
+        attempt: u64,
+        call: fleet::TypedCall,
+    },
+    DecodedTypedCall {
+        to: ReplyTo,
+        body: Call,
+    },
+    RenderedTypedCall {
+        to: ReplyTo,
+        answer: jig_core::SettledAnswer,
+    },
+    InboundTyped {
+        task: u64,
+        attempt: u64,
+        message: HostMessage,
+    },
     /// One bounded provider call terminal routed to its connector.
-    ForgeAnswered { call: Token, cost: u32, result: Result<forge_client::api::Answer, forge_client::api::Error> },
+    ForgeAnswered {
+        call: Token,
+        cost: u32,
+        result: Result<forge_client::api::Answer, forge_client::api::Error>,
+    },
     /// An untrusted provider hint; the connector reads current facts.
-    ForgeHint { hint: forge_client::api::Hint },
+    ForgeHint {
+        hint: forge_client::api::Hint,
+    },
     /// An authenticated person opens one live run, task-tree or project-goal watch.
-    Watch { watcher: Token, sign_in: u64, key: [u8; 16], subject: views::Subject },
+    Watch {
+        watcher: Token,
+        sign_in: u64,
+        key: [u8; 16],
+        subject: views::Subject,
+    },
     /// A person or stream stops one watch.
-    Unwatch { watcher: Token },
+    Unwatch {
+        watcher: Token,
+    },
     /// One watcher delivery was consumed or dropped by its stream.
-    ViewDelivered { watcher: Token, done: bool },
+    ViewDelivered {
+        watcher: Token,
+        done: bool,
+    },
     /// Deployment configuration starts one durable core recurring procedure.
-    StartRecurring { project: u32, authority: tasks::Authority, template: tasks::RecurringTemplate },
+    StartRecurring {
+        project: u32,
+        authority: tasks::Authority,
+        template: tasks::RecurringTemplate,
+    },
     /// Deployment configuration opens a newer period and wakes its recurring procedures.
-    Period { project: u32, period: u64, budget: u64 },
+    Period {
+        project: u32,
+        period: u64,
+        budget: u64,
+    },
     /// Connector to root: one fenced procedure step, after a committed step request.
-    ProcedureStep { task: u64, step: u64, connector: u16, code: u32, action: ProcedureAction },
+    ProcedureStep {
+        task: u64,
+        step: u64,
+        connector: u16,
+        code: u32,
+        action: ProcedureAction,
+    },
     /// Worker host call, validated by fleet and decided once by the root.
-    Call { channel: Token, task: u64, attempt: u64, call: Token, body: Call },
+    Call {
+        channel: Token,
+        task: u64,
+        attempt: u64,
+        call: Token,
+        body: Call,
+    },
     /// Authenticated named held-chat read; one bounded view or refusal terminal,
     /// without persistent inbox/history restore.
     ReadEscalation {
@@ -598,7 +657,12 @@ pub enum Event {
         most: u32,
     },
     /// Authenticated newest-first page of live waiting work and unread results.
-    ViewInbox { reply_to: ReplyTo, sign_in: u64, most: u32, before: Option<crate::InboxCursor> },
+    ViewInbox {
+        reply_to: ReplyTo,
+        sign_in: u64,
+        most: u32,
+        before: Option<crate::InboxCursor>,
+    },
     /// Account protocol completes a refresh with secret-free lifetime.
     Refreshed {
         /// Configured secret-free account number; bounded by accounts account room.
@@ -624,6 +688,8 @@ pub enum Event {
 /// terminal; deliveries are notices or consume a `ReplyTo` (domain/engine.md, 5).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Protocol decoding and transport terminals for the typed host boundary.
+    Host(Box<HostRequest>),
     /// One bounded forge API call after the decision it follows.
     Forge { call: Token, repository: forge_client::api::Repository, op: forge_client::api::Op },
     /// Live view/watch request routed to the shell.
@@ -700,6 +766,7 @@ pub enum Request {
 
 #[derive(Debug)]
 enum Work {
+    TypedDecoded { to: ReplyTo, body: Call },
     Core(jig_core::Event),
     Tasks(tasks::Event),
     People(people::Event),
@@ -734,6 +801,8 @@ struct PreparedWorkspace {
 enum Payload {
     Call { key: CallKey, body: Call },
     CallAnswer(CallAnswer),
+    TypedAnswer(jig_core::SettledCall),
+    TypedMessage(HostMessage),
     Turn { task: u64, attempt: u64, body: Turn },
     Answer { task: u64, attempt: u64, cumulative: u64, end: tasks::End, saved: Option<Box<[u32]>> },
 }
@@ -820,6 +889,7 @@ pub struct Domain {
     result_reads: Slab<Option<Read>>,
     result_pages: Queue<ResultPage>,
     connector_calls: Map<CallKey, CallAnswer>,
+    typed_calls: Map<Token, typed_route::Flight>,
     work: Queue<Work>,
     before_header: Queue<Work>,
     cold_channels: Map<Token, bool>,
@@ -1005,6 +1075,7 @@ impl Domain {
             result_reads: Slab::with_capacity(limits.loads.loads),
             result_pages: Queue::with_capacity(limits.loads.loads),
             connector_calls: Map::with_capacity(limits.call_records),
+            typed_calls: Map::with_capacity(limits.fleet.calls),
             work: Queue::with_capacity(route_bound(limits).expect("valid routes")),
             before_header: Queue::with_capacity(limits.fleet.workers),
             cold_channels: Map::with_capacity(limits.fleet.workers),
@@ -1043,6 +1114,7 @@ impl Domain {
             && self.forge_unsubscribing.is_empty()
             && self.forge_reading.is_empty()
             && self.forge.briefs_idle()
+            && self.typed_calls.is_empty()
             && self.forge_effecting.is_empty()
             && self.forge_effects.is_empty()
             && self.brief_connectors.is_empty()
@@ -1109,6 +1181,7 @@ fn core_limits(limits: &Limits) -> jig_core::Limits {
         authority: limits.authority,
         load_slots: limits.loads.loads,
         call_records: limits.call_records,
+        call_answer_bytes: limits.journal.transcript_bytes,
         people: limits.people,
         fleet: limits.fleet,
         brief: brief_limits(&limits.brief),
@@ -1175,6 +1248,10 @@ fn view_requests(routed: jig_core::Requests, room: u32) -> Queue<views::Request>
                 | jig_core::Now::EscalationRefused { .. }
                 | jig_core::Now::CallPayload { .. }
                 | jig_core::Now::ProcedureDelegateOutcome { .. }
+                | jig_core::Now::SettledCallRefused { .. }
+                | jig_core::Now::CallTyped { .. }
+                | jig_core::Now::DropTyped { .. }
+                | jig_core::Now::UndeliveredTyped { .. }
                 | jig_core::Now::RestoreRefused => unreachable!("view route owns its now output"),
             },
             jig_core::Request::Decided => {}
@@ -1255,6 +1332,10 @@ fn open_watch(
                 | jig_core::Now::EscalationRefused { .. }
                 | jig_core::Now::CallPayload { .. }
                 | jig_core::Now::ProcedureDelegateOutcome { .. }
+                | jig_core::Now::SettledCallRefused { .. }
+                | jig_core::Now::CallTyped { .. }
+                | jig_core::Now::DropTyped { .. }
+                | jig_core::Now::UndeliveredTyped { .. }
                 | jig_core::Now::RestoreRefused => unreachable!("watch route has only volatile view outputs"),
             },
             jig_core::Request::Decided => {}
@@ -1477,6 +1558,51 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
             }
             domain.work.push(Work::People(people::Event::Ask { reply_to, sign_in, key, ask }));
         }
+        Event::CallTyped { channel, task, attempt, call } => {
+            let bytes = match call.name.len().checked_add(call.tool.len()) {
+                Some(size) => size.checked_add(call.input.len()),
+                None => None,
+            };
+            if !domain.ready()
+                || !admits(domain, &env.limits)
+                || domain.core.fleet.calls() >= env.limits.fleet.calls
+                || call.tool.is_empty()
+                || !crate::decision::length_within(bytes, env.limits.journal.transcript_bytes)
+            {
+                out.push(Request::Host(Box::new(HostRequest::Busy { channel, task, attempt, name: call.name })));
+                return;
+            }
+            domain.work.push(Work::Fleet(fleet::Event::RelayTyped {
+                channel,
+                run: Token::new(task),
+                attempt: Token::new(attempt),
+                call,
+            }));
+        }
+        Event::DecodedTypedCall { to, body } => domain.work.push(Work::TypedDecoded { to, body }),
+        Event::RenderedTypedCall { to, answer } => typed_route::rendered(domain, to, answer),
+        Event::InboundTyped { task, attempt, message } => {
+            if domain.ready() && admits(domain, &env.limits) {
+                if message.name == 0
+                    || message.sender.is_empty()
+                    || message.sender.len() > usize::try_from(env.limits.people.identity_bytes).expect("u32 fits usize")
+                    || message.words.len() > usize::try_from(env.limits.people.words).expect("u32 fits usize")
+                    || !crate::decision::length_within(
+                        message.sender.len().checked_add(message.words.len()),
+                        env.limits.journal.transcript_bytes,
+                    )
+                {
+                    return;
+                }
+                let name = Token::new(message.name);
+                let Ok(id) = domain.payloads.insert(Some(Payload::TypedMessage(message))) else { return };
+                domain.work.push(Work::Fleet(fleet::Event::InboundTyped {
+                    run: Token::new(task),
+                    attempt: Token::new(attempt),
+                    message: fleet::TypedMessage { name, sender: id.token(), words: id.token() },
+                }));
+            }
+        }
         Event::Call { channel, task, attempt, call, mut body } => {
             let key = CallKey { task, attempt, completion: body.completion, position: body.position };
             if !domain.ready()
@@ -1494,57 +1620,7 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 out.push(Request::CallBusy { channel, task, attempt, call });
                 return;
             }
-            let note_valid = match &body.tool {
-                Tool::Note { entry, .. } => notes::valid_new(entry, &env.limits.notes),
-                Tool::Recall { by, .. } => notes::valid_recall(by, &env.limits.notes),
-                Tool::Delegate { .. }
-                | Tool::Message { .. }
-                | Tool::Amend { .. }
-                | Tool::Cancel { .. }
-                | Tool::Release { .. }
-                | Tool::Decide { .. }
-                | Tool::DecideEscalation { .. }
-                | Tool::Withdraw { .. }
-                | Tool::Propose { .. }
-                | Tool::Introduce { .. }
-                | Tool::Subscribe { .. }
-                | Tool::SubscribeForge { .. }
-                | Tool::ReadForge { .. }
-                | Tool::EffectForge { .. }
-                | Tool::Unsubscribe { .. }
-                | Tool::Unavailable
-                | Tool::Rejected(_)
-                | Tool::RejectedMessage(_)
-                | Tool::RejectedControl(_)
-                | Tool::RejectedProposal(_)
-                | Tool::RejectedNote(_) => true,
-            };
-            if !note_valid {
-                body.tool = Tool::RejectedNote(notes::Refusal::Oversized);
-            }
-            if let Some(why) = call_shape(&body.tool, &env.limits.tasks) {
-                body.tool = match body.tool {
-                    Tool::Message { .. } => Tool::RejectedMessage(why),
-                    Tool::Amend { .. } | Tool::Cancel { .. } | Tool::Release { .. } | Tool::DecideEscalation { .. } => {
-                        Tool::RejectedControl(why)
-                    }
-                    Tool::Propose { .. } | Tool::Decide { .. } | Tool::Withdraw { .. } => Tool::RejectedProposal(why),
-                    Tool::Note { .. } | Tool::Recall { .. } => Tool::RejectedNote(jig_core_notes::Refusal::Oversized),
-                    Tool::Delegate { .. }
-                    | Tool::Introduce { .. }
-                    | Tool::Subscribe { .. }
-                    | Tool::SubscribeForge { .. }
-                    | Tool::ReadForge { .. }
-                    | Tool::EffectForge { .. }
-                    | Tool::Unsubscribe { .. }
-                    | Tool::Rejected(_)
-                    | Tool::RejectedMessage(_)
-                    | Tool::RejectedControl(_)
-                    | Tool::RejectedProposal(_)
-                    | Tool::RejectedNote(_)
-                    | Tool::Unavailable => Tool::Rejected(why),
-                };
-            }
+            body = checked_call(body, &env.limits);
             let Ok(id) = domain.payloads.insert(Some(Payload::Call { key, body })) else {
                 out.push(Request::CallBusy { channel, task, attempt, call });
                 return;
@@ -1682,7 +1758,8 @@ fn publish_now(domain: &mut Domain, out: &mut Queue<Request>) {
         match request {
             Request::Stop => out.push(Request::Stop),
             Request::Commit { number, writes } => out.push(Request::Commit { number, writes }),
-            request @ (Request::Forge { .. }
+            request @ (Request::Host(_)
+            | Request::Forge { .. }
             | Request::View(_)
             | Request::WatchRefused { .. }
             | Request::CallBusy { .. }
@@ -1714,7 +1791,8 @@ fn stage_now(domain: &mut Domain, out: &mut Queue<Request>) {
     while let Some(request) = out.pop() {
         match request {
             Request::Stop => domain.stop_pending = true,
-            request @ (Request::Forge { .. }
+            request @ (Request::Host(_)
+            | Request::Forge { .. }
             | Request::View(_)
             | Request::WatchRefused { .. }
             | Request::CallBusy { .. }
@@ -2068,7 +2146,11 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                 save(
                                     decision,
                                     &env.limits,
-                                    Write::Save(Record::Call(crate::CallRecord { key: row.key, answer })),
+                                    Write::Save(Record::Call(crate::CallRecord {
+                                        key: row.key,
+                                        answer,
+                                        settled: row.settled,
+                                    })),
                                 );
                             }
                             jig_core::Record::Core(jig_core::CoreRecord::RunProof(proof)) => {
@@ -2359,12 +2441,16 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                     emit(
                                         decision,
                                         &env.limits,
-                                        Delivery::Fleet(fleet::Event::Start {
+                                        Delivery::Fleet(fleet::Event::StartTyped {
                                             kinds: fleet::Kinds::Workers,
                                             reply_to: internal(task),
                                             run: Token::new(task),
                                             attempt: Token::new(attempt),
                                             workstream,
+                                            assignment: fleet::TypedAssignment {
+                                                turns: Token::new(task),
+                                                answered: Token::new(task),
+                                            },
                                         }),
                                     );
                                 }
@@ -2429,6 +2515,40 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                         }
                     }
                     jig_core::Request::Held(held) => match *held {
+                        jig_core::Held::SettledCall { to, call, .. } => {
+                            typed_route::settled(domain, &env.limits, decision, to, call);
+                        }
+                        jig_core::Held::RelayedTyped { channel, run, attempt, call: name, answer } => {
+                            let Some(Payload::TypedAnswer(call)) = take_payload(domain, answer) else {
+                                unreachable!("typed answer payload")
+                            };
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::Host(Box::new(HostDelivery::Answer {
+                                    channel,
+                                    task: run.raw(),
+                                    attempt: attempt.raw(),
+                                    name,
+                                    call,
+                                })),
+                            );
+                        }
+                        jig_core::Held::InboundTyped { channel, run, attempt, message } => {
+                            let Some(Payload::TypedMessage(message)) = take_payload(domain, message.words) else {
+                                unreachable!("typed message payload")
+                            };
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::Host(Box::new(HostDelivery::Inbound {
+                                    channel,
+                                    task: run.raw(),
+                                    attempt: attempt.raw(),
+                                    message,
+                                })),
+                            );
+                        }
                         jig_core::Held::MakeEffect { connector, entry } => {
                             assert!(connector == domain.config.forge_connector, "numbered forge make");
                             emit(decision, &env.limits, Delivery::ForgeCommitted { entry });
@@ -2473,7 +2593,8 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                         jig_core::Held::Result { person, task, words } => {
                             emit(decision, &env.limits, Delivery::Result { person, task, words });
                         }
-                        jig_core::Held::Assign { channel, run, attempt } => {
+                        jig_core::Held::Assign { channel, run, attempt }
+                        | jig_core::Held::AssignTyped { channel, run, attempt, .. } => {
                             let assignment =
                                 domain.assignments.remove(&run.raw()).expect("durable claim has prepared assignment");
                             assert!(assignment.attempt == attempt.raw(), "assignment names current attempt");
@@ -2577,6 +2698,35 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                         }
                     },
                     jig_core::Request::Now(now) => match *now {
+                        jig_core::Now::CallTyped { to, run, attempt, call } => {
+                            typed_route::decode(domain, to, run.raw(), attempt.raw(), call);
+                        }
+                        jig_core::Now::DropTyped { call } => {
+                            self::now(domain, Request::Host(Box::new(HostRequest::Dropped { call })));
+                        }
+                        jig_core::Now::UndeliveredTyped { run, attempt, message } => {
+                            drop(take_payload(domain, message.words));
+                            self::now(
+                                domain,
+                                Request::Host(Box::new(HostRequest::Undelivered {
+                                    task: run.raw(),
+                                    attempt: attempt.raw(),
+                                    message,
+                                })),
+                            );
+                        }
+                        jig_core::Now::SettledCallRefused { to, key: _, name, tool } => typed_route::settled(
+                            domain,
+                            &env.limits,
+                            decision,
+                            to,
+                            jig_core::SettledCall {
+                                serial: 0,
+                                name,
+                                tool,
+                                answer: jig_core::SettledAnswer::Host { error: true, body: Box::from(&b"busy"[..]) },
+                            },
+                        ),
                         jig_core::Now::SignInRefused { to } => {
                             emit(
                                 decision,
@@ -2596,7 +2746,11 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                             let payload = domain.payloads.get(Id::from_token(body)).expect("fleet returns owned token");
                             let payload = match payload.as_ref().expect("fleet returns owned payload") {
                                 Payload::Turn { body: payload, .. } => payload,
-                                Payload::Answer { .. } | Payload::Call { .. } | Payload::CallAnswer(_) => {
+                                Payload::Answer { .. }
+                                | Payload::Call { .. }
+                                | Payload::CallAnswer(_)
+                                | Payload::TypedAnswer(_)
+                                | Payload::TypedMessage(_) => {
                                     unreachable!("fleet returns turn family")
                                 }
                             };
@@ -2615,7 +2769,11 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                 Payload::Answer { cumulative, end, saved, .. } => {
                                     (*cumulative, end.clone(), saved.clone())
                                 }
-                                Payload::Turn { .. } | Payload::Call { .. } | Payload::CallAnswer(_) => {
+                                Payload::Turn { .. }
+                                | Payload::Call { .. }
+                                | Payload::CallAnswer(_)
+                                | Payload::TypedAnswer(_)
+                                | Payload::TypedMessage(_) => {
                                     unreachable!("fleet returns answer family")
                                 }
                             };
@@ -2642,7 +2800,11 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                             let payload = take_payload(domain, payload).expect("charged turn owns payload");
                             let body = match payload {
                                 Payload::Turn { body, .. } => body,
-                                Payload::Answer { .. } | Payload::Call { .. } | Payload::CallAnswer(_) => {
+                                Payload::Answer { .. }
+                                | Payload::Call { .. }
+                                | Payload::CallAnswer(_)
+                                | Payload::TypedAnswer(_)
+                                | Payload::TypedMessage(_) => {
                                     unreachable!("turn family")
                                 }
                             };
@@ -2664,7 +2826,12 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                 Some(Payload::Answer { task, attempt, .. }) => {
                                     Some(jig_core::PayloadRefusal::Answer { task, attempt })
                                 }
-                                Some(Payload::Call { .. } | Payload::CallAnswer(_)) => {
+                                Some(
+                                    Payload::Call { .. }
+                                    | Payload::CallAnswer(_)
+                                    | Payload::TypedAnswer(_)
+                                    | Payload::TypedMessage(_),
+                                ) => {
                                     unreachable!("task refusal owns a task payload")
                                 }
                                 None => None,
@@ -2766,7 +2933,13 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                             let mut records = List::with_capacity(domain.limits.call_records);
                             for key in answered {
                                 let answer = call_answer(domain, key).expect("live call part has its connector answer");
-                                records.push(crate::CallRecord { key, answer }).expect("retained call bound");
+                                records
+                                    .push(crate::CallRecord {
+                                        key,
+                                        answer,
+                                        settled: domain.core.call_settled.get(&key).cloned(),
+                                    })
+                                    .expect("retained call bound");
                             }
                             let assignment = Assignment {
                                 task,
@@ -2780,6 +2953,7 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                 workspace: workspace.workspace.clone(),
                                 transcript,
                                 answered: records.into_boxed(),
+                                settled: domain.core.settled_calls(task, attempt),
                                 grant,
                             };
                             let budget = assignment.run.budget;
@@ -2889,6 +3063,7 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
             break;
         };
         match work {
+            Work::TypedDecoded { to, body } => typed_route::decoded(domain, env, decision, to, body),
             Work::Core(event) => {
                 let routed = jig_core::step(&mut domain.core, &environment_core(env), event);
                 route_core_requests(domain, env, decision, routed);
@@ -2943,7 +3118,63 @@ fn call_answer(domain: &Domain, key: CallKey) -> Option<CallAnswer> {
     }
 }
 
+fn checked_call(mut body: Call, limits: &Limits) -> Call {
+    let note_valid = match &body.tool {
+        Tool::Note { entry, .. } => notes::valid_new(entry, &limits.notes),
+        Tool::Recall { by, .. } => notes::valid_recall(by, &limits.notes),
+        Tool::Delegate { .. }
+        | Tool::Message { .. }
+        | Tool::Amend { .. }
+        | Tool::Cancel { .. }
+        | Tool::Release { .. }
+        | Tool::Decide { .. }
+        | Tool::DecideEscalation { .. }
+        | Tool::Withdraw { .. }
+        | Tool::Propose { .. }
+        | Tool::Introduce { .. }
+        | Tool::Subscribe { .. }
+        | Tool::SubscribeForge { .. }
+        | Tool::ReadForge { .. }
+        | Tool::EffectForge { .. }
+        | Tool::Unsubscribe { .. }
+        | Tool::Unavailable
+        | Tool::Rejected(_)
+        | Tool::RejectedMessage(_)
+        | Tool::RejectedControl(_)
+        | Tool::RejectedProposal(_)
+        | Tool::RejectedNote(_) => true,
+    };
+    if !note_valid {
+        body.tool = Tool::RejectedNote(notes::Refusal::Oversized);
+    }
+    if let Some(why) = call_shape(&body.tool, &limits.tasks) {
+        body.tool = match body.tool {
+            Tool::Message { .. } => Tool::RejectedMessage(why),
+            Tool::Amend { .. } | Tool::Cancel { .. } | Tool::Release { .. } | Tool::DecideEscalation { .. } => {
+                Tool::RejectedControl(why)
+            }
+            Tool::Propose { .. } | Tool::Decide { .. } | Tool::Withdraw { .. } => Tool::RejectedProposal(why),
+            Tool::Note { .. } | Tool::Recall { .. } => Tool::RejectedNote(jig_core_notes::Refusal::Oversized),
+            Tool::Delegate { .. }
+            | Tool::Introduce { .. }
+            | Tool::Subscribe { .. }
+            | Tool::SubscribeForge { .. }
+            | Tool::ReadForge { .. }
+            | Tool::EffectForge { .. }
+            | Tool::Unsubscribe { .. }
+            | Tool::Rejected(_)
+            | Tool::RejectedMessage(_)
+            | Tool::RejectedControl(_)
+            | Tool::RejectedProposal(_)
+            | Tool::RejectedNote(_)
+            | Tool::Unavailable => Tool::Rejected(why),
+        };
+    }
+    body
+}
+
 fn relay_call(domain: &mut Domain, limits: &Limits, decision: &mut Decision, to: ReplyTo, answer: CallAnswer) {
+    let Some((to, answer)) = typed_route::render(domain, limits, decision, to, answer) else { return };
     let id = domain.payloads.insert(Some(Payload::CallAnswer(answer))).expect("answer payload room reserved");
     emit(decision, limits, Delivery::Fleet(fleet::Event::Relayed { to, answer: id.token() }));
 }
@@ -3165,7 +3396,15 @@ fn decide_call(
     if connector_owned {
         assert!(domain.connector_calls.insert(key, answer.clone()) == Ok(None), "connector answer room reserved");
     }
-    save(decision, limits, Write::Save(Record::Call(crate::CallRecord { key, answer: answer.clone() })));
+    save(
+        decision,
+        limits,
+        Write::Save(Record::Call(crate::CallRecord {
+            key,
+            answer: answer.clone(),
+            settled: domain.core.call_settled.get(&key).cloned(),
+        })),
+    );
     relay_call(domain, limits, decision, to, answer);
 }
 
@@ -4453,6 +4692,10 @@ fn account_outputs(routed: jig_core::Requests, out: &mut Queue<Request>) {
                 | jig_core::Now::EscalationRefused { .. }
                 | jig_core::Now::CallPayload { .. }
                 | jig_core::Now::ProcedureDelegateOutcome { .. }
+                | jig_core::Now::SettledCallRefused { .. }
+                | jig_core::Now::CallTyped { .. }
+                | jig_core::Now::DropTyped { .. }
+                | jig_core::Now::UndeliveredTyped { .. }
                 | jig_core::Now::RestoreRefused => unreachable!("account route owns its now output"),
             },
             jig_core::Request::Decided => {}
@@ -4619,6 +4862,17 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     }
     let mut bytes =
         crate::worst_case(&limits.journal)?.checked_add(jig_core::effect_worst_case(&core_limits(limits))?)?;
+    bytes = bytes
+        .checked_add(jig_core::typed_worst_case(&core_limits(limits))?)?
+        .checked_add(u64::from(limits.journal.held).checked_mul(u64::from(limits.journal.transcript_bytes))?)?
+        .checked_add(
+            u64::from(payload_slots(limits)?)
+                .checked_mul(u64::from(limits.people.identity_bytes).checked_add(u64::from(limits.people.words))?)?,
+        )?
+        .checked_add(Map::<Token, typed_route::Flight>::worst_case(limits.fleet.calls)?)?
+        .checked_add(
+            u64::from(limits.fleet.calls).checked_mul(u64::from(limits.journal.transcript_bytes).checked_mul(4)?)?,
+        )?;
     let effect_flights = limits.call_records.checked_add(limits.tasks.tasks)?;
     bytes = bytes
         .checked_add(Map::<Token, forge_route::EffectFlight>::worst_case(effect_flights)?)?
@@ -5099,7 +5353,11 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
             loads::unloaded(&mut domain.loads, owner, &mut out);
             assert!(out.is_empty(), "halted waiter emits no delivery");
         }
-        Event::StartRecurring { .. }
+        Event::CallTyped { .. }
+        | Event::DecodedTypedCall { .. }
+        | Event::RenderedTypedCall { .. }
+        | Event::InboundTyped { .. }
+        | Event::StartRecurring { .. }
         | Event::ForgeAnswered { .. }
         | Event::ForgeHint { .. }
         | Event::Period { .. }
@@ -5184,7 +5442,11 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             }
             let part = record.answer.core_part(domain.config.forge_connector);
             if domain.core.restore_core(
-                jig_core::CoreRecord::Call(jig_core::CallRecord { key, part: part.clone() }),
+                jig_core::CoreRecord::Call(jig_core::CallRecord {
+                    key,
+                    part: part.clone(),
+                    settled: record.settled.clone(),
+                }),
                 &core_limits(&env.limits),
             ) != jig_core::Restored::Live
             {

@@ -24,6 +24,7 @@ pub struct Driver {
     pub fail_archive_once: bool,
     pub transactions: Vec<Vec<Write>>,
     pub result_loads: Vec<(u32, usize)>,
+    pub host_requests: Vec<Box<engine::HostRequest>>,
     pub call_busy: Vec<Token>,
 }
 
@@ -49,6 +50,7 @@ impl Driver {
             fail_archive_once: false,
             transactions: Vec::new(),
             result_loads: Vec::new(),
+            host_requests: Vec::new(),
             call_busy: Vec::new(),
         }
     }
@@ -95,6 +97,7 @@ impl Driver {
                     panic!("root route fixture did not adopt forge")
                 }
                 engine::Request::Stop => self.stopped = true,
+                engine::Request::Host(request) => self.host_requests.push(request),
                 engine::Request::CallBusy { call, .. } => self.call_busy.push(call),
                 engine::Request::TurnBusy { .. } | engine::Request::AnswerBusy { .. } => {
                     panic!("unexpected route refusal")
@@ -165,6 +168,7 @@ impl Driver {
                 | Delivery::InboxPage { .. }
                 | Delivery::InboxView { .. }
                 | Delivery::BeginInboxView { .. }
+                | Delivery::Host(_)
                 | Delivery::CallAnswer { .. }
                 | Delivery::ForgeCommitted { .. }
                 | Delivery::ForgeCall { .. }

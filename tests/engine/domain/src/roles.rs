@@ -499,6 +499,7 @@ impl World {
                     | accounts::Request::Refused { .. }
                     | accounts::Request::Closed { .. },
                 ) => {}
+                engine::Request::Host(_) => panic!("legacy fixture received a typed protocol request"),
                 engine::Request::CallBusy { .. }
                 | engine::Request::AnswerBusy { .. }
                 | engine::Request::TurnBusy { .. } => {
