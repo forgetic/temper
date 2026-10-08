@@ -311,6 +311,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-ops-domain"
+version = "0.0.0"
+dependencies = [
+ "jig-charter",
+ "jig-core",
+ "jig-core-accounts",
+ "jig-core-authority",
+ "jig-core-brief",
+ "jig-core-fleet",
+ "jig-core-notes",
+ "jig-core-people",
+ "jig-core-tasks",
+ "jig-core-views",
+ "jig-core-world",
+ "jig-host",
+ "jig-inline-agent",
+ "jig-ops-domain-infrastructure",
+ "jig-ops-domain-observability",
+ "jig-ops-world",
+ "skein-json",
+ "skein-lib",
+ "smith-agent-world",
+ "smith-charter",
+ "smith-domain",
+ "smith-domain-run",
+ "smith-host-domain",
+ "smith-protocol-channel",
+ "smith-transcript",
+]
+
+[[package]]
 name = "jig-ops-domain-infrastructure"
 version = "0.0.0"
 dependencies = [
