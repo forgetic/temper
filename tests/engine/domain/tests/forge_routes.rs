@@ -4,7 +4,7 @@ use jig_core_authority as authority;
 use jig_core_fleet as fleet;
 use jig_core_people as people;
 use jig_core_tasks as tasks;
-use skein_lib::{Duration, Env, Queue, ReplyTo, Time, Token, Wall};
+use skein_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token, Wall};
 use std::collections::{BTreeMap, VecDeque};
 use temper_engine_domain::{Delivery, Key, Record, engine};
 use temper_engine_domain_forge as forge_top;
@@ -107,7 +107,7 @@ impl World {
             limits.tasks.parameters = 8;
             limits.tasks.spec_bytes = 512;
             limits.tasks.executor_kinds = 2;
-            limits.tasks.authority_grants = 5;
+            limits.tasks.authority_grants = 6;
             limits.tasks.authority_segments = 9;
             limits.tasks.authority_bytes = 512;
             limits.tasks.contract_choices = 2;
@@ -115,7 +115,7 @@ impl World {
             limits.tasks.inbox_bytes = 1024;
             limits.authority.executors = 2;
             limits.authority.batch = 2;
-            limits.authority.grants = 5;
+            limits.authority.grants = 6;
             limits.authority.segments = 9;
             limits.authority.segment_bytes = 64;
             limits.authority.writes = 2;
@@ -129,8 +129,9 @@ impl World {
             limits.fleet.workstreams = 2;
         }
         if with_read {
+            limits.tasks.inbox_bytes = limits.tasks.inbox_bytes.max(256);
             if !with_change {
-                limits.authority.grants = 2;
+                limits.authority.grants = 3;
             }
             limits.authority.segments = 9;
             limits.authority.segment_bytes = 64;
@@ -172,7 +173,12 @@ impl World {
             } else {
                 Box::new([grant.clone(), effect_grant.clone()])
             };
-            rules.ceiling.grants.clone_from(&grants);
+            let mut ceiling_grants = List::with_capacity(limits.authority.grants);
+            for grant in &grants {
+                ceiling_grants.push(grant.clone()).expect("configured task grants");
+            }
+            ceiling_grants.push(authority::Grant { kind: 7, ..grant.clone() }).expect("projection comments");
+            rules.ceiling.grants = ceiling_grants.into_boxed();
             if approval.is_some() || agent_gate || owner_gate {
                 let landing: Box<[engine::LandingRule]> = Box::new([engine::LandingRule {
                     connector: 0,
@@ -213,7 +219,8 @@ impl World {
             }
             let mut policy = config.authority.policy(1).expect("walk policy").clone();
             policy.ceiling.tools = authority::Tools(1023);
-            policy.ceiling.grants.clone_from(&grants);
+            policy.ceiling.grants.clone_from(&rules.ceiling.grants);
+            policy.projections.clone_from(&rules.ceiling.grants);
             if approval.is_some() || agent_gate || owner_gate {
                 let mut maintainer = policy.roles[0].clone();
                 maintainer.number = 1;

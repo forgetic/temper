@@ -536,6 +536,12 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
             }
         }
         Event::Enqueue { entry } => enqueue(d, env, entry, out),
+        Event::KeepProjection { row, entry } => {
+            d.issues.insert(row.goal, row.clone()).expect("projection capacity admitted");
+            emit(out, Request::Save { record: Stored::Issue(row) });
+            d.entries.insert(entry.number, entry.clone()).expect("outbox capacity admitted");
+            emit(out, Request::Save { record: Stored::Entry(entry) });
+        }
         Event::Project { entry, repository, view } => project(d, env, entry, repository, view, out),
         Event::ProjectDesired { entry, goal } => {
             if let Some(row) = d.issues.get(&goal)
@@ -2065,6 +2071,13 @@ fn settle_effects(
 }
 
 fn settle_prior_effects(d: &mut Domain, task: u64, out: &mut Queue<Request>) {
+    if let Some(issue) = d.issues.get(&task)
+        && let Some(desired) = &issue.desired
+        && desired.finished.is_some()
+        && !issue.state.closed
+    {
+        return;
+    }
     for (_, pending) in &d.entries {
         if pending.task == task {
             return;
@@ -2378,10 +2391,11 @@ fn project(
                 failed: false,
                 desired: Some(view),
             };
-            d.issues.insert(goal, row.clone()).expect("projection capacity checked");
-            emit(out, Request::Save { record: Stored::Issue(row) });
-            d.entries.insert(number, entry.clone()).expect("outbox capacity checked");
-            emit(out, Request::Save { record: Stored::Entry(entry) });
+            let Some(description) = crate::describe_projection_effect(adopted, &entry.effect.write) else {
+                emit(out, Request::ProjectionFailed { goal });
+                return;
+            };
+            emit(out, Request::ProjectionEffect { row, entry, description });
         }
     }
 }

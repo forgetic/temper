@@ -434,7 +434,7 @@ fn describe_agent(
     for (_, flight) in &domain.forge_effects {
         match flight {
             EffectFlight::Call { .. } => staged = staged.saturating_add(1),
-            EffectFlight::Procedure { .. } => {}
+            EffectFlight::Procedure { .. } | EffectFlight::Projection { .. } => {}
         }
     }
     if !domain.forge.effect_room(&env.limits.forge, staged) {
@@ -842,33 +842,6 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks:
     }
     let Some(repository) = domain.forge.home(goal.project) else { return };
     let provider = repository.provider;
-    let Some(name) = resource_name(repository, &forge::What::Repository, env.limits.authority.segments) else {
-        domain.work.push(Work::Tasks(tasks::Event::Hold { task: goal.number, why: tasks::Hold::Effects }));
-        return;
-    };
-    let mut findings =
-        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
-    let description = EffectDescription {
-        connector: domain.config.forge_connector,
-        purpose: goal.number,
-        effect: authority::Effect {
-            connector: domain.config.forge_connector,
-            kind: 8,
-            name,
-            state: [0; 32],
-            price: None,
-            access: effect_access(repository, &forge::What::Repository, 8),
-            additional: Box::new([]),
-            guards: Box::new([]),
-        },
-        form: EffectForm::Creation,
-        recovery: Recovery::Unrecoverable,
-    };
-    let allowed = domain.core.connector_goal_effect_admit(goal, &description, env.wall, &mut findings);
-    if allowed != authority::Answer::Allow {
-        domain.work.push(Work::Tasks(tasks::Event::Hold { task: goal.number, why: tasks::Hold::Effects }));
-        return;
-    }
     let Some(text) = core::str::from_utf8(&goal.spec.words).ok() else {
         domain.work.push(Work::Tasks(tasks::Event::Hold { task: goal.number, why: tasks::Hold::Effects }));
         return;
@@ -932,7 +905,9 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks:
             plan: plan.into_boxed(),
             milestones: milestones.into_boxed(),
             finished: match goal.phase {
-                tasks::Phase::Ended(_) => Some(Box::from("Goal finished")),
+                tasks::Phase::Closing(_)
+                | tasks::Phase::Ended(_)
+                | tasks::Phase::Held { was: tasks::Was::Closing(_), .. } => Some(Box::from("Goal finished")),
                 _ => None,
             },
         },
@@ -1949,11 +1924,15 @@ pub(super) fn outputs(
                 save(decision, &env.limits, Write::Save(Record::Forge { id: number, row: Box::new(record) }));
                 if let Some((entry, task)) = entry {
                     let core_effect = domain.forge_effecting.remove(&entry).is_some();
+                    let projection_pending = match domain.forge.issue(task) {
+                        Some(row) => row.pending == Some(entry),
+                        None => false,
+                    };
                     let change_pending = match domain.forge.change(task) {
                         Some(row) => row.pending == Some(entry),
                         None => false,
                     };
-                    if first && !change_pending && !core_effect {
+                    if first && !change_pending && !projection_pending && !core_effect {
                         emit(decision, &env.limits, Delivery::ForgeCommitted { entry });
                     }
                 }
@@ -2188,6 +2167,58 @@ pub(super) fn outputs(
             forge::Request::ReleaseFailed { task } => {
                 domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::EffectFailed }));
             }
+            forge::Request::ProjectionEffect { row, entry, description } => {
+                let Some(adopted) = domain.forge.repository(entry.repository) else { continue };
+                let Some(name) = resource_name(adopted, &description.resource, env.limits.authority.segments) else {
+                    continue;
+                };
+                let access = match description.access {
+                    forge::Access::Owned => authority::EffectAccess::Owned,
+                    forge::Access::Participant => authority::EffectAccess::Participant,
+                    forge::Access::Context => authority::EffectAccess::Context,
+                    forge::Access::Unavailable => authority::EffectAccess::Unavailable,
+                };
+                let description = EffectDescription {
+                    connector: domain.config.forge_connector,
+                    purpose: entry.number,
+                    effect: authority::Effect {
+                        connector: domain.config.forge_connector,
+                        kind: description.kind,
+                        name,
+                        state: [0; 32],
+                        price: None,
+                        access,
+                        additional: Box::new([]),
+                        guards: Box::new([]),
+                    },
+                    form: match description.form {
+                        forge::EffectForm::Creation => EffectForm::Creation,
+                        forge::EffectForm::Transition => EffectForm::Transition,
+                        forge::EffectForm::Set => EffectForm::Set,
+                    },
+                    recovery: match description.recovery {
+                        forge::Recovery::Keyed => Recovery::Keyed,
+                        forge::Recovery::Conditional => Recovery::Conditional,
+                        forge::Recovery::Idempotent => Recovery::Idempotent,
+                        forge::Recovery::Unrecoverable => Recovery::Unrecoverable,
+                    },
+                };
+                let goal = row.goal;
+                let number = entry.number;
+                let owner = effect_owner(domain);
+                domain
+                    .forge_effects
+                    .insert(
+                        owner,
+                        EffectFlight::Projection { description: Box::new(description), row: Box::new(row), entry },
+                    )
+                    .expect("bounded projection handoff");
+                domain.work.push(Work::Core(jig_core::Event::EffectStart {
+                    owner,
+                    connector: domain.config.forge_connector,
+                    origin: jig_core::EffectOrigin::Projection { goal, entry: Some(number) },
+                }));
+            }
             forge::Request::ProjectionFailed { goal } => {
                 domain.work.push(Work::Tasks(tasks::Event::Hold { task: goal, why: tasks::Hold::Effects }));
             }
@@ -2284,6 +2315,11 @@ pub(super) enum EffectFlight {
         key: CallKey,
         resource: forge::What,
     },
+    Projection {
+        description: Box<EffectDescription>,
+        row: Box<forge::IssueRow>,
+        entry: forge_client::Entry,
+    },
     Procedure {
         description: Box<EffectDescription>,
         entry: u64,
@@ -2338,9 +2374,11 @@ pub(super) fn effect_ask(domain: &mut Domain, env: &Env<Limits>, number: u16, as
     match ask {
         jig_core::connector::Ask::Describe { owner } => {
             let description = match domain.forge_effects.get(&owner) {
-                Some(EffectFlight::Call { description, .. } | EffectFlight::Procedure { description, .. }) => {
-                    description.clone()
-                }
+                Some(
+                    EffectFlight::Call { description, .. }
+                    | EffectFlight::Procedure { description, .. }
+                    | EffectFlight::Projection { description, .. },
+                ) => description.clone(),
                 None => return,
             };
             domain.work.push(Work::Core(jig_core::Event::EffectConnector(jig_core::connector::Event::Described {
@@ -2406,7 +2444,9 @@ pub(super) fn effect_ask(domain: &mut Domain, env: &Env<Limits>, number: u16, as
                     },
                 }));
             }
-            Some(EffectFlight::Procedure { .. }) | None => unreachable!("agent effect proposal was described"),
+            Some(EffectFlight::Procedure { .. } | EffectFlight::Projection { .. }) | None => {
+                unreachable!("agent effect proposal was described")
+            }
         },
         jig_core::connector::Ask::DropProposal { proposal } => {
             domain.work.push(Work::Forge(forge::Event::DropProposedEffect { number: proposal }));
@@ -2444,6 +2484,10 @@ pub(super) fn effect_ask(domain: &mut Domain, env: &Env<Limits>, number: u16, as
                         },
                     }));
                 }
+                Some(EffectFlight::Projection { row, entry: kept, .. }) => {
+                    assert!(kept.number == entry && kept.task == task, "admitted projection entry");
+                    domain.work.push(Work::Forge(forge::Event::KeepProjection { row: *row, entry: kept }));
+                }
                 Some(EffectFlight::Procedure { entry: kept, .. }) => {
                     assert!(kept == entry, "core releases the described procedure entry");
                 }
@@ -2462,7 +2506,7 @@ pub(super) fn effect_ask(domain: &mut Domain, env: &Env<Limits>, number: u16, as
                     domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
                 }
             }
-            Some(EffectFlight::Call { .. }) | None => {}
+            Some(EffectFlight::Call { .. } | EffectFlight::Projection { .. }) | None => {}
         },
         jig_core::connector::Ask::Judge { owner, judge, state, resources: _ } => {
             let (verdict, guarded) = judge_effect(domain, env, owner, number, judge, state);
@@ -2540,6 +2584,6 @@ fn judge_effect(
             };
             (verdict, guarded)
         }
-        Some(EffectFlight::Call { .. }) | None => (authority::Verdict::Wait, false),
+        Some(EffectFlight::Call { .. } | EffectFlight::Projection { .. }) | None => (authority::Verdict::Wait, false),
     }
 }

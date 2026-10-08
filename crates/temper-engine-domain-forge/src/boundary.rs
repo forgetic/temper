@@ -413,7 +413,9 @@ pub enum Event {
     DropProposedEffect { number: u64 },
     /// Enqueue a checked effect in the same decision as its cause.
     Enqueue { entry: client::Entry },
-    /// Project a goal after the root checked its issue authority.
+    /// Keep a projection candidate after core admission.
+    KeepProjection { row: IssueRow, entry: client::Entry },
+    /// Describe the next write for a goal projection.
     Project { entry: u64, repository: client::api::Repository, view: issues::GoalView },
     /// Continue the latest authorized snapshot after an outbox outcome or interval.
     ProjectDesired { entry: u64, goal: u64 },
@@ -501,6 +503,8 @@ pub enum Request {
     Retained { task: u64, root: u64, resource: Name },
     /// A cleanup effect failed and the closing task needs a person's decision.
     ReleaseFailed { task: u64 },
+    /// A connector-described projection candidate, awaiting core admission.
+    ProjectionEffect { row: IssueRow, entry: client::Entry, description: crate::ProjectionEffect },
     /// A projection has to wait until its interval or prior effect settles.
     ProjectAfter { goal: u64, when: Option<skein_lib::Wall> },
     /// A projection could not continue under current facts or limits.

@@ -207,6 +207,7 @@ pub fn config(seed: u64) -> engine::Config {
     };
     let mut domain = authority::Domain::new(rules, authority_limits()).expect("valid authority configuration");
     let policy = authority::Policy {
+        projections: ceiling.grants.clone(),
         escalation_role: Some(0),
         ceiling,
         period_spend: 1000,

@@ -242,6 +242,7 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::ReleaseFailed { .. }
         | Request::News { .. }
         | Request::Drift { .. }
+        | Request::ProjectionEffect { .. }
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
         | Request::ChangeDecision { .. }
@@ -280,6 +281,7 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::ReleaseFailed { .. }
         | Request::News { .. }
         | Request::Drift { .. }
+        | Request::ProjectionEffect { .. }
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
         | Request::ChangeDecision { .. }
@@ -318,6 +320,7 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::ReleaseFailed { .. }
         | Request::News { .. }
         | Request::Drift { .. }
+        | Request::ProjectionEffect { .. }
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
         | Request::ChangeDecision { .. }

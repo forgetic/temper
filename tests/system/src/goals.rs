@@ -51,7 +51,7 @@ fn configured() -> Driver {
     limits.tasks.depth = 2;
     limits.tasks.batch = 3;
     limits.tasks.spec_bytes = 128;
-    limits.tasks.inbox_messages = 6;
+    limits.tasks.inbox_messages = 7;
     limits.tasks.inbox_bytes = 1024;
     limits.people.people = 4;
     limits.people.sign_ins = 4;

@@ -398,6 +398,16 @@ impl World {
                 top::Request::BriefClient { event } => {
                     top::step(&mut self.top, &self.env, top::Event::Client(event), &mut self.top_out);
                 }
+                top::Request::ProjectionEffect { row, entry, .. } => {
+                    let mut kept = Queue::with_capacity(top::max_out(&self.env.limits));
+                    top::step(&mut self.top, &self.env, top::Event::KeepProjection { row, entry }, &mut kept);
+                    for _ in 0..kept.len() {
+                        let top::Request::Save { record } = kept.pop().expect("projection keep count") else {
+                            panic!("admitted projection saves only")
+                        };
+                        self.stored.insert(key(&record), record).expect("world store capacity");
+                    }
+                }
                 top::Request::Save { record } => {
                     let key = key(&record);
                     self.stored.insert(key, record).expect("world store capacity");

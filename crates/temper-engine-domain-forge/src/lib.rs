@@ -346,3 +346,44 @@ pub fn stored_bytes(record: &Stored) -> Option<u64> {
         },
     }
 }
+
+/// Connector-owned description of one goal projection write.
+#[derive(PartialEq, Eq, Debug)]
+pub struct ProjectionEffect {
+    pub resource: What,
+    pub kind: u16,
+    pub form: EffectForm,
+    pub recovery: Recovery,
+    pub access: Access,
+}
+
+/// Describe the write selected by the issue projection mechanism.
+#[must_use]
+pub fn describe_projection_effect(
+    repository: &Repository,
+    write: &temper_engine_domain_forge_client::api::Write,
+) -> Option<ProjectionEffect> {
+    use temper_engine_domain_forge_client as client;
+    let (resource, kind, form) = match write {
+        client::api::Write::CreateIssue { .. } => (What::Repository, 8, EffectForm::Creation),
+        client::api::Write::Edit { number, .. } => (What::Issue(*number), 8, EffectForm::Set),
+        client::api::Write::Post { number, .. } => (What::Issue(*number), 7, EffectForm::Creation),
+        client::api::Write::Close { number } => (What::Issue(*number), 8, EffectForm::Transition),
+        client::api::Write::Status { .. }
+        | client::api::Write::OpenPull { .. }
+        | client::api::Write::Review { .. }
+        | client::api::Write::SetReviewers { .. }
+        | client::api::Write::Reopen { .. }
+        | client::api::Write::Merge { .. }
+        | client::api::Write::Update { .. }
+        | client::api::Write::CreateBranch { .. }
+        | client::api::Write::DeleteBranch { .. } => return None,
+    };
+    let recovery = match client::recovery(write) {
+        client::Recovery::Keyed => Recovery::Keyed,
+        client::Recovery::Conditional => Recovery::Conditional,
+        client::Recovery::Idempotent => Recovery::Idempotent,
+        client::Recovery::Unrecoverable => Recovery::Unrecoverable,
+    };
+    Some(ProjectionEffect { access: effect_access(repository, &resource, kind), resource, kind, form, recovery })
+}
