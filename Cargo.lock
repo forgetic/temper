@@ -105,6 +105,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-conformance"
+version = "0.0.0"
+dependencies = [
+ "jig-test-system",
+ "skein-lib",
+ "skein-world",
+]
+
+[[package]]
 name = "jig-core"
 version = "0.0.0"
 dependencies = [
@@ -179,6 +188,7 @@ dependencies = [
 name = "jig-core-world"
 version = "0.0.0"
 dependencies = [
+ "jig-conformance",
  "jig-core",
  "jig-core-accounts",
  "jig-core-authority",

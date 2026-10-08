@@ -9,6 +9,7 @@ members = [
     "jig/crates/jig-core-accounts",
     "jig/testing/jig-test-connector",
     "jig/testing/jig-test-domain",
+    "jig/testing/jig-conformance",
     "jig/testing/jig-fake-store",
     "jig/testing/jig-fake-workers",
     "jig/testing/jig-fake-parties",
@@ -88,6 +89,7 @@ temper-fake-person = { path = "testing/temper-fake-person" }
 jig-core-accounts = { path = "jig/crates/jig-core-accounts" }
 jig-test-connector = { path = "jig/testing/jig-test-connector" }
 jig-test-domain = { path = "jig/testing/jig-test-domain" }
+jig-conformance = { path = "jig/testing/jig-conformance" }
 jig-fake-store = { path = "jig/testing/jig-fake-store" }
 jig-fake-workers = { path = "jig/testing/jig-fake-workers" }
 jig-fake-parties = { path = "jig/testing/jig-fake-parties" }
