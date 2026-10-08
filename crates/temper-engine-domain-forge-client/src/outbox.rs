@@ -486,6 +486,7 @@ pub(crate) fn answered(
         | Answer::Remarks { .. }
         | Answer::PullFiles { .. }
         | Answer::Checks(_)
+        | Answer::File { .. }
         | Answer::Job { .. }
         | Answer::Protection(_)
         | Answer::Settings(_)

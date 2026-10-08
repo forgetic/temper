@@ -101,6 +101,7 @@ fn drawn_root_stories_reach_every_durable_ending_and_held_route() {
                     tasks::TaskResult::Failure { reason: b"failed".as_slice().into() }
                 };
                 driver.send(engine::Event::Answer {
+                    pushed: Box::new([]),
                     saved: None,
                     channel: Token::new(7),
                     task: assignment.task,

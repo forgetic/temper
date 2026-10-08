@@ -527,6 +527,16 @@ fn forge_answer(text: &mut Text, answer: &api::Answer) -> Result<(), Problem> {
                 text.add(b"\n[log truncated]")?;
             }
         }
+        api::Answer::File { head, path, bytes, truncated } => {
+            text.add(path)?;
+            text.add(b" at ")?;
+            text.hex(head)?;
+            text.add(b":\n")?;
+            text.add(bytes)?;
+            if *truncated {
+                text.add(b"\n[file truncated]")?;
+            }
+        }
         api::Answer::Protection(protection) => match protection {
             Some(rule) => {
                 text.add(b"Protected branch ")?;

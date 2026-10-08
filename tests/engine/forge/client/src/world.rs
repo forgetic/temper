@@ -719,6 +719,7 @@ fn inbox_count(answer: &api::Answer) -> u32 {
         | api::Answer::PullFiles { .. }
         | api::Answer::Compare { .. }
         | api::Answer::Checks(_)
+        | api::Answer::File { .. }
         | api::Answer::Job { .. }
         | api::Answer::Protection(_)
         | api::Answer::Settings(_)

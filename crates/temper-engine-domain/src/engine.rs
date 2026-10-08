@@ -635,6 +635,8 @@ pub enum Event {
         /// Full set of repository tags with saved work after this terminal, when the worker made
         /// a save; absent preserves the previous set.
         saved: Option<Box<[u32]>>,
+        /// Last heads actually pushed by the worker, indexed by deployment repository tag.
+        pushed: Box<[forge::Pushed]>,
     },
     /// Web to root: read a named historical result. People validates the session; the loaded ended
     /// task must name its person as requester. Ends once with `ResultReply` or a refused
@@ -800,15 +802,28 @@ struct PreparedWorkspace {
 }
 
 #[derive(Debug)]
-#[expect(clippy::large_enum_variant, reason = "the bounded whole call remains with its durable decision payload")]
 enum Payload {
-    Call { key: CallKey, body: Call },
+    Call {
+        key: CallKey,
+        body: Call,
+    },
     CallAnswer(CallAnswer),
     SettledCall(jig_core::SettledCall),
     Message(HostMessage),
     InboxWord(tasks::Word),
-    Turn { task: u64, attempt: u64, body: Turn },
-    Answer { task: u64, attempt: u64, cumulative: u64, end: tasks::End, saved: Option<Box<[u32]>> },
+    Turn {
+        task: u64,
+        attempt: u64,
+        body: Turn,
+    },
+    Answer {
+        task: u64,
+        attempt: u64,
+        cumulative: u64,
+        end: tasks::End,
+        saved: Option<Box<[u32]>>,
+        pushed: Box<[forge::Pushed]>,
+    },
 }
 
 #[derive(Debug)]
@@ -873,6 +888,7 @@ pub struct Domain {
     forge_subscribing: Map<Token, forge::Subscriber>,
     forge_unsubscribing: Map<Token, (u64, forge::Topic)>,
     forge_reading: Map<Token, (ReplyTo, CallKey)>,
+    forge_left: Map<(u64, u64), Box<[forge::Pushed]>>,
     forge_effecting: Map<u64, (ReplyTo, CallKey)>,
     forge_effects: Map<Token, forge_route::EffectFlight>,
     next_effect_owner: u64,
@@ -1058,6 +1074,7 @@ impl Domain {
             forge_subscribing: Map::with_capacity(limits.fleet.calls),
             forge_unsubscribing: Map::with_capacity(limits.fleet.calls),
             forge_reading: Map::with_capacity(limits.fleet.calls),
+            forge_left: Map::with_capacity(limits.tasks.tasks),
             forge_effecting: Map::with_capacity(limits.fleet.calls),
             forge_effects: Map::with_capacity(
                 limits.call_records.checked_add(limits.tasks.tasks).expect("effect handoff capacity"),
@@ -1675,18 +1692,21 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 body: id.token(),
             }));
         }
-        Event::Answer { channel, task, attempt, cumulative, end, saved } => {
+        Event::Answer { channel, task, attempt, cumulative, end, saved, pushed } => {
             if !domain.ready() || !admits(domain, &env.limits) {
                 out.push(Request::AnswerBusy { channel, task, attempt });
                 return;
             }
             if end_bytes(&end) > u64::from(env.limits.tasks.result_bytes).checked_mul(2).expect("bounded result bytes")
                 || !tasks_saved_within(saved.as_deref(), env.limits.tasks.saved_resources)
+                || pushed.len() > usize::try_from(env.limits.forge.resources_per_task).expect("u32 fits usize")
             {
                 out.push(Request::AnswerBusy { channel, task, attempt });
                 return;
             }
-            let Ok(id) = domain.payloads.insert(Some(Payload::Answer { task, attempt, cumulative, end, saved })) else {
+            let Ok(id) =
+                domain.payloads.insert(Some(Payload::Answer { task, attempt, cumulative, end, saved, pushed }))
+            else {
                 out.push(Request::AnswerBusy { channel, task, attempt });
                 return;
             };
@@ -2329,7 +2349,14 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                             }
                             jig_core::Ask::Lost { task, attempt } => {
                                 if connector == domain.config.forge_connector {
-                                    domain.work.push(Work::Forge(forge::Event::Lost { task, attempt }));
+                                    match domain.forge_left.remove(&(task, attempt)) {
+                                        Some(pushed) if !pushed.is_empty() => {
+                                            forge_route::left(domain, env, task, attempt, pushed);
+                                        }
+                                        Some(_) | None => {
+                                            domain.work.push(Work::Forge(forge::Event::Lost { task, attempt }));
+                                        }
+                                    }
                                 }
                                 None
                             }
@@ -2819,19 +2846,24 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                         }
                         jig_core::Now::AnswerPayload { run, attempt, payload } => {
                             let body = domain.payloads.get(Id::from_token(payload)).expect("fleet returns owned token");
-                            let (cumulative, end, saved) = match body.as_ref().expect("fleet returns owned payload") {
-                                Payload::Answer { cumulative, end, saved, .. } => {
-                                    (*cumulative, end.clone(), saved.clone())
-                                }
-                                Payload::Turn { .. }
-                                | Payload::Call { .. }
-                                | Payload::CallAnswer(_)
-                                | Payload::SettledCall(_)
-                                | Payload::Message(_)
-                                | Payload::InboxWord(_) => {
-                                    unreachable!("fleet returns answer family")
-                                }
-                            };
+                            let (cumulative, end, saved, pushed) =
+                                match body.as_ref().expect("fleet returns owned payload") {
+                                    Payload::Answer { cumulative, end, saved, pushed, .. } => {
+                                        (*cumulative, end.clone(), saved.clone(), pushed.clone())
+                                    }
+                                    Payload::Turn { .. }
+                                    | Payload::Call { .. }
+                                    | Payload::CallAnswer(_)
+                                    | Payload::SettledCall(_)
+                                    | Payload::Message(_)
+                                    | Payload::InboxWord(_) => {
+                                        unreachable!("fleet returns answer family")
+                                    }
+                                };
+                            domain
+                                .forge_left
+                                .insert((run.raw(), attempt.raw()), pushed)
+                                .expect("one current answer per run");
                             let (saved, invalid_saved) = match saved {
                                 Some(tags) => {
                                     match forge_route::saved_resources(domain.config.forge_connector, &tags) {
@@ -2880,6 +2912,7 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                     Some(jig_core::PayloadRefusal::Turn { task, attempt, turn: body.number })
                                 }
                                 Some(Payload::Answer { task, attempt, .. }) => {
+                                    domain.forge_left.remove(&(task, attempt));
                                     Some(jig_core::PayloadRefusal::Answer { task, attempt })
                                 }
                                 Some(
@@ -5146,6 +5179,13 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
             )?,
         )?
         .checked_add(u64::from(limits.tasks.tasks).checked_mul(row_bound(limits)?.checked_mul(2)?)?)?;
+    let pushed_bytes =
+        u64::from(limits.forge.resources_per_task).checked_mul(u64::try_from(size_of::<forge::Pushed>()).ok()?)?;
+    bytes = bytes.checked_add(Map::<(u64, u64), Box<[forge::Pushed]>>::worst_case(limits.tasks.tasks)?)?.checked_add(
+        u64::from(limits.tasks.tasks)
+            .checked_add(u64::from(payload_slots(limits)?).checked_mul(2)?)?
+            .checked_mul(pushed_bytes)?,
+    )?;
     bytes = bytes.checked_add(Map::<u64, Assignment>::worst_case(limits.tasks.tasks)?)?.checked_add(
         u64::from(limits.tasks.tasks).checked_add(u64::from(limits.journal.held))?.checked_mul(
             u64::from(limits.brief.brief_bytes)

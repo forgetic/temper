@@ -579,6 +579,7 @@ impl World {
         self.pending_answer = true;
         self.queue(
             engine::Event::Answer {
+                pushed: Box::new([]),
                 saved: None,
                 channel: Token::new(7),
                 task: assignment.task,
@@ -634,6 +635,7 @@ impl World {
                 engine::Request::TurnBusy { turn, .. } => self.turn(turn),
                 engine::Request::AnswerBusy { channel, task, attempt } => self.queue(
                     engine::Event::Answer {
+                        pushed: Box::new([]),
                         saved: None,
                         channel,
                         task,

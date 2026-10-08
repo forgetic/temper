@@ -608,6 +608,7 @@ mod system_stories {
         let terminal =
             temper_engine_smith::result(smith_world::copy_answer(agent.answer()), change).expect("typed Smith result");
         world.send(engine::Event::Answer {
+            pushed: Box::new([]),
             saved: None,
             channel: Token::new(7),
             task: assignment.task,

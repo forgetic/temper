@@ -868,6 +868,7 @@ fn a_small_fix_made_in_a_chat_lands() {
     fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"fixed", 1)
         .expect("producer pushed its branch");
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: producer.task,
         attempt: producer.attempt,
@@ -929,6 +930,7 @@ fn a_pushed_change_is_recovered_before_its_worker_reports_the_head() {
     }
     assert!(world.root.ready(), "restored root did not become ready");
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: producer.task,
         attempt: producer.attempt,
@@ -985,6 +987,7 @@ fn a_change_whose_ci_never_reports_is_stalled_and_held() {
     fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"fixed", 1)
         .expect("producer pushed its branch");
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: producer.task,
         attempt: producer.attempt,
@@ -1045,6 +1048,7 @@ fn check_gate_landing(no_ci: bool, owner_gate: bool) {
     fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"review this diff", 1)
         .expect("producer pushed review head");
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: producer.task,
         attempt: producer.attempt,
@@ -1085,6 +1089,7 @@ fn check_gate_landing(no_ci: bool, owner_gate: bool) {
     );
     assert_eq!(gate.workspace.repositories[0].start, engine::ForgeStart::Branch(branch));
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: gate.task,
         attempt: gate.attempt,
@@ -1134,6 +1139,7 @@ fn check_gate_repair(no_ci: bool) {
     fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"first version", 1)
         .expect("first head pushed");
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: producer.task,
         attempt: producer.attempt,
@@ -1157,6 +1163,7 @@ fn check_gate_repair(no_ci: bool) {
     }
     let first = world.assigned.get(2).expect("first review assigned").clone();
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: first.task,
         attempt: first.attempt,
@@ -1184,6 +1191,7 @@ fn check_gate_repair(no_ci: bool) {
     fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"safe revision", 1)
         .expect("repair pushed second head");
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: repair.task,
         attempt: repair.attempt,
@@ -1208,6 +1216,7 @@ fn check_gate_repair(no_ci: bool) {
     let second = world.assigned.get(4).expect("second review assigned").clone();
     assert_ne!(first.task, second.task);
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: second.task,
         attempt: second.attempt,
@@ -1257,6 +1266,7 @@ fn a_change_failing_ci_is_repaired_reviewed_at_its_head_and_lands() {
         }),
     );
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: producer.task,
         attempt: producer.attempt,
@@ -1335,6 +1345,7 @@ fn a_change_failing_ci_is_repaired_reviewed_at_its_head_and_lands() {
         raw::Answer::Reviewed(_)
     ));
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: repair.task,
         attempt: repair.attempt,
@@ -1393,6 +1404,7 @@ fn an_unreadable_failed_job_log_is_named_and_repair_still_runs() {
         }),
     );
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: producer.task,
         attempt: producer.attempt,
@@ -1444,6 +1456,7 @@ fn failed_ci_with_delayed_brief() -> (World, u64, u64) {
     );
     world.slow_brief_reads = true;
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: producer.task,
         attempt: producer.attempt,
@@ -1594,6 +1607,7 @@ fn a_conflicting_update_is_resolved_from_a_merge_in_progress() {
     let base = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", b"main", b"file", b"base change", 1)
         .expect("another change moved the base");
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: producer.task,
         attempt: producer.attempt,
@@ -1648,6 +1662,7 @@ fn a_conflicting_update_is_resolved_from_a_merge_in_progress() {
         raw::Answer::Pushed(raw::Pushed::Pushed)
     ));
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: resolver.task,
         attempt: resolver.attempt,
@@ -1695,6 +1710,7 @@ fn an_approval_carries_over_a_clean_update_and_is_asked_again_after_a_repair() {
     let first = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"fix", 1)
         .expect("producer pushed branch");
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: producer.task,
         attempt: producer.attempt,
@@ -1796,6 +1812,7 @@ fn an_approval_carries_over_a_clean_update_and_is_asked_again_after_a_repair() {
         }),
     );
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: producer.task,
         attempt: producer.attempt,
@@ -1855,6 +1872,7 @@ fn an_approval_carries_over_a_clean_update_and_is_asked_again_after_a_repair() {
         }),
     );
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: repair.task,
         attempt: repair.attempt,
@@ -1952,6 +1970,7 @@ fn a_worker_frozen_past_its_grace_resumes_with_a_push_in_hand_and_lands_nothing_
     );
     assert_eq!(world.fake.branch(b"org/repo", &branch), Some(pushed));
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(8),
         task: resumed.task,
         attempt: resumed.attempt,
@@ -2019,6 +2038,7 @@ fn a_broken_landing_branch_gets_one_deployment_repair_before_waiting_changes_lan
     fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"fix", 1)
         .expect("original change pushed");
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: producer.task,
         attempt: producer.attempt,
@@ -2065,6 +2085,7 @@ fn a_broken_landing_branch_gets_one_deployment_repair_before_waiting_changes_lan
     fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &repair_branch, b"base", b"fixed", 1)
         .expect("base repair pushed");
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: repair.task,
         attempt: repair.attempt,
@@ -2318,6 +2339,7 @@ fn a_saved_repository_tag_becomes_a_concrete_checkout_in_the_next_attempt() {
     world.until(Until::Assigned);
     let first = world.assigned[0].clone();
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: first.task,
         attempt: first.attempt,
@@ -2446,6 +2468,7 @@ fn a_goal_ending_while_its_issue_is_opening_eventually_closes_that_issue() {
     world.until(Until::Assigned);
     let goal = world.assigned[0].clone();
     world.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: goal.task,
         attempt: goal.attempt,
@@ -2756,10 +2779,46 @@ fn an_authorized_forge_read_returns_a_bounded_typed_answer() {
             tool: engine::Tool::ReadForge { repository: forge_world::REPO, read: client::api::Read::Branches },
         },
     });
+    assert!(world.store.pending.is_empty(), "an agent read crosses the door without a commit");
     world.until(Until::Read);
     assert!(
         matches!(world.answers.as_slice(), [temper_engine_domain::CallAnswer::ForgeRead(result)] if result.is_ok())
     );
+    world.answers.clear();
+    let file_head = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", b"main", b"file", b"contents", 1)
+        .expect("file head");
+    world.send(engine::Event::Call {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        call: Token::new(94),
+        body: engine::Call {
+            completion: 2,
+            position: 1,
+            tool: engine::Tool::ReadForge {
+                repository: forge_world::REPO,
+                read: client::api::Read::File {
+                    head: translate::commit(file_head),
+                    path: Box::from(&b"file"[..]),
+                    max_bytes: 2,
+                },
+            },
+        },
+    });
+    assert!(world.store.pending.is_empty(), "an agent read crosses the door without a commit");
+    world.until(Until::Read);
+    assert!(matches!(world.answers.as_slice(), [temper_engine_domain::CallAnswer::ForgeRead(result)]
+        if matches!(result.as_ref(), Ok(client::api::Answer::File { head, bytes, truncated: true, .. })
+            if *head == translate::commit(file_head) && bytes.len() == 2)));
+    for completion in [1, 2] {
+        let key = temper_engine_domain::CallKey {
+            task: assignment.task,
+            attempt: assignment.attempt,
+            completion,
+            position: 1,
+        };
+        assert!(!world.store.rows.contains_key(&Key::Call(key)), "read answers are never durable call records");
+    }
 }
 
 #[test]
@@ -3105,6 +3164,7 @@ fn a_tracked_goals_changes_install_landing_and_current_head_ci_topics_without_ag
     let pushed = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"fixed", 1)
         .expect("producer pushed");
     world.send(engine::Event::Answer {
+        pushed: Box::new([forge_top::Pushed { tag: forge_world::REPO.repository, commit: translate::commit(pushed) }]),
         channel: Token::new(7),
         task: producer.task,
         attempt: producer.attempt,
@@ -3128,6 +3188,8 @@ fn a_tracked_goals_changes_install_landing_and_current_head_ci_topics_without_ag
             break;
         }
     }
+    assert!(world.store.rows.values().any(|stored| matches!(stored,
+        Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::BranchHead(head) if head.commit == translate::commit(pushed)))));
     let current = subscriptions(&world);
     let ci = current
         .iter()

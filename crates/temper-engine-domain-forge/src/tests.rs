@@ -409,3 +409,25 @@ fn restored_ci_subscriptions_are_read_in_the_fresh_step_and_delay_its_completion
     );
     assert!(done.contains(&Request::RestartDone { stage: RestartStage::ReadAfresh }));
 }
+
+#[test]
+fn workspace_items_are_sized_context_is_read_only_and_saved_work_starts_the_next_run() {
+    let mut d = domain();
+    let mut repository = adopted();
+    repository.role = Role::Context;
+    outputs(&mut d, Event::Restore { record: Stored::Repository(repository) });
+    let item = d
+        .workspace_item(items::Seed {
+            task: 7,
+            parent: None,
+            repository: REPO,
+            run_branch: Box::from(&b"temper/7/r7"[..]),
+            saved_branch: Some(Box::from(&b"temper/7/s7"[..])),
+        })
+        .expect("item");
+    assert_eq!(item.start, items::Start::Saved(Box::from(&b"temper/7/s7"[..])));
+    assert!(item.push.is_none());
+    assert!(item.bytes > 0);
+    assert_eq!(d.context_repositories(5, 1).expect("bounded context").len(), 1);
+    assert!(d.context_repositories(5, 0).is_none());
+}

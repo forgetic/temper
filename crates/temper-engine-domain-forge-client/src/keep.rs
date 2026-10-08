@@ -794,6 +794,7 @@ pub(crate) fn answered_repository(
         | Answer::PullFiles { .. }
         | Answer::Compare { .. }
         | Answer::Checks(_)
+        | Answer::File { .. }
         | Answer::Job { .. }
         | Answer::Protection(_)
         | Answer::Settings(_)
@@ -887,6 +888,7 @@ pub(crate) fn answered_resource(
         | Answer::PullFiles { .. }
         | Answer::Compare { .. }
         | Answer::Checks(_)
+        | Answer::File { .. }
         | Answer::Job { .. }
         | Answer::Protection(_)
         | Answer::Settings(_)

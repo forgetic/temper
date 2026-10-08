@@ -177,6 +177,7 @@ fn asked(op: &api::Op) -> Asked {
             | api::Read::Remarks { .. }
             | api::Read::PullFiles { .. }
             | api::Read::Checks { .. }
+            | api::Read::File { .. }
             | api::Read::Job { .. }
             | api::Read::Protection { .. }
             | api::Read::Settings

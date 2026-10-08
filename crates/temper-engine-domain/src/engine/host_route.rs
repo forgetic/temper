@@ -1,5 +1,5 @@
 //! Typed host calls cross the protocol boundary before tool decisions and after
-//! their durable answers (jig's domain/engine.md, 7.3; domain/hosts.md, 2).
+//! their answers (jig's domain/engine.md, 7.3; domain/hosts.md, 2).
 use super::{
     Call, CallAnswer, CallKey, Decision, Delivery, Domain, Env, Limits, Payload, Request, Work, emit, relay_payload,
 };
@@ -177,5 +177,28 @@ pub(super) fn relayed(
         | Payload::InboxWord(_)
         | Payload::Turn { .. }
         | Payload::Answer { .. } => unreachable!("fleet answer payload"),
+    }
+}
+
+/// A read's owned value crosses the journal door before any durable decision.
+pub(super) fn read(domain: &mut Domain, to: ReplyTo, answer: CallAnswer) {
+    let right = to.into_token();
+    let to = ReplyTo::new(right);
+    match domain.host_calls.get(&right) {
+        Some(flight) => {
+            let request = Request::Deliver(Delivery::Host(Box::new(HostDelivery::Render {
+                to,
+                key: flight.key.expect("decoded read"),
+                name: flight.name.clone(),
+                tool: flight.tool.clone(),
+                answer,
+            })));
+            assert!(super::now(domain, request), "read render door reserved");
+        }
+        None => {
+            let id =
+                domain.payloads.insert(Some(Payload::CallAnswer(answer))).expect("fleet read reserves payload room");
+            domain.work.push(Work::Fleet(fleet::Event::Relayed { to, answer: id.token() }));
+        }
     }
 }

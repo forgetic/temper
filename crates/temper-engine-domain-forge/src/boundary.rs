@@ -168,6 +168,12 @@ pub enum ReleaseEnding {
     /// The task was cancelled, so its pull closes before its branch is deleted.
     Cancelled,
 }
+/// The last head pushed in one repository by a hosted attempt.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Pushed {
+    pub tag: u32,
+    pub commit: client::api::Commit,
+}
 /// A run or connector effect occupying one writer slot.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Writer {

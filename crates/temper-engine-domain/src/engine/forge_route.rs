@@ -2,8 +2,9 @@
 //! calls cross one root decision; the connector never owns the store.
 use super::{
     CallAnswer, CallKey, Decision, Delivery, Domain, Env, Family, ForgeRepository, ForgeStart, ForgeWorkspace,
-    Freshness, Id, Key, LandingRule, Limits, List, ProcedureAction, Queue, Record, ReplyTo, Token, Work, Write,
-    authority, decide_call, emit, escalation, forge, forge_change, forge_client, forge_issues, people, save, tasks,
+    Freshness, Id, Key, LandingRule, Limits, List, ProcedureAction, Queue, Record, ReplyTo, Request, Token, Work,
+    Write, authority, decide_call, emit, escalation, forge, forge_change, forge_client, forge_issues, people, save,
+    tasks,
 };
 use alloc::boxed::Box;
 use jig_core::connector::{EffectDescription, EffectForm, Recovery};
@@ -302,7 +303,8 @@ fn read_name(repository: &forge::Repository, read: &forge_client::api::Read, lim
         forge_client::api::Read::Branch { branch } | forge_client::api::Read::Protection { branch } => {
             Some((b"branch".as_slice(), Some(branch.clone())))
         }
-        forge_client::api::Read::Items { .. }
+        forge_client::api::Read::File { .. }
+        | forge_client::api::Read::Items { .. }
         | forge_client::api::Read::PullFor { .. }
         | forge_client::api::Read::Statuses { .. }
         | forge_client::api::Read::Compare { .. }
@@ -491,29 +493,23 @@ fn describe_agent(
 pub(super) fn read_call(
     domain: &mut Domain,
     env: &Env<Limits>,
-    decision: &mut Decision,
+    _decision: &mut Decision,
     to: ReplyTo,
     key: CallKey,
     repository: forge_client::api::Repository,
     read: forge_client::api::Read,
 ) {
     let Some(adopted) = domain.forge.repository(repository) else {
-        return decide_call(
+        return super::host_route::read(
             domain,
-            &env.limits,
-            decision,
             to,
-            key,
             CallAnswer::ForgeRead(Box::new(Err(forge_client::api::Error::Missing))),
         );
     };
     let Some(context) = domain.core.tasks.delegation(key.task) else {
-        return decide_call(
+        return super::host_route::read(
             domain,
-            &env.limits,
-            decision,
             to,
-            key,
             CallAnswer::ForgeRead(Box::new(Err(forge_client::api::Error::Forbidden))),
         );
     };
@@ -540,37 +536,28 @@ pub(super) fn read_call(
         Some(_) | None => false,
     };
     if !allowed {
-        return decide_call(
+        return super::host_route::read(
             domain,
-            &env.limits,
-            decision,
             to,
-            key,
             CallAnswer::ForgeRead(Box::new(Err(forge_client::api::Error::Forbidden))),
         );
     }
-    let Some(serial) = crate::fresh(&mut domain.core.counters, Family::Call) else {
-        return decide_call(
+    let Some(serial) = domain.next_effect_owner.checked_add(1) else {
+        return super::host_route::read(
             domain,
-            &env.limits,
-            decision,
             to,
-            key,
             CallAnswer::ForgeRead(Box::new(Err(forge_client::api::Error::Busy))),
         );
     };
     if serial >= 1_u64 << 61_u32 {
-        return decide_call(
+        return super::host_route::read(
             domain,
-            &env.limits,
-            decision,
             to,
-            key,
             CallAnswer::ForgeRead(Box::new(Err(forge_client::api::Error::Busy))),
         );
     }
+    domain.next_effect_owner = serial;
     let owner = Token::new(serial | (1_u64 << 61_u32));
-    assert!(domain.core.reserve_connector_call(key), "call record room reserved");
     assert!(domain.forge_reading.insert(owner, (to, key)) == Ok(None), "one fresh read correlation");
     domain.work.push(Work::Forge(forge::Event::Client(forge_client::Event::Read { owner, repository, read })));
 }
@@ -1260,6 +1247,13 @@ pub(super) fn run_workspace(
             include_repository(&mut selected, repository)?;
         }
     }
+    let context_repositories =
+        domain.forge.context_repositories(context.project, env.limits.forge.resources_per_task)?;
+    for provider in &context_repositories {
+        let repository = domain.forge.repository(*provider)?;
+        include_repository(&mut selected, repository)?;
+    }
+    let mut workspace_bytes = 0_u64;
     let mut repositories = List::with_capacity(env.limits.forge.resources_per_task);
     let mut writes = List::with_capacity(env.limits.authority.writes);
     let mut names = List::with_capacity(env.limits.forge.resources_per_task);
@@ -1270,39 +1264,34 @@ pub(super) fn run_workspace(
             connector: domain.config.forge_connector,
             path: Box::new([Box::from(repository.provider.repository.to_be_bytes())]),
         });
-        let (start, mut push, holder) = if let Some((row, kind)) = inherited {
-            key = row.task;
-            match kind {
-                forge_change::Delegate::Produce => {
-                    let name = forge::Name {
-                        forge: repository.provider.forge,
-                        repository: repository.provider.repository,
-                        what: branch_what(&row.branch, env.limits.forge.name_bytes)?,
-                    };
-                    let start = if domain.forge.branch_head(&name).is_some() {
-                        ForgeStart::Branch(row.branch.clone())
-                    } else {
-                        ForgeStart::Base(row.base.clone())
-                    };
-                    (start, Some(row.branch.clone()), Some(row.task))
-                }
-                forge_change::Delegate::Repair(_) => {
-                    (ForgeStart::Branch(row.branch.clone()), Some(row.branch.clone()), Some(row.task))
-                }
-                forge_change::Delegate::Resolve { base } => {
-                    (ForgeStart::Merge { branch: row.branch.clone(), base }, Some(row.branch.clone()), Some(row.task))
-                }
-                forge_change::Delegate::Gate { .. } => (ForgeStart::Branch(row.branch.clone()), None, None),
-            }
+        let run_branch = tree_branch(repository, root, b'r', context.task, None, env.limits.forge.name_bytes)?;
+        let saved_branch = if saved {
+            Some(tree_branch(repository, root, b's', context.task, None, env.limits.forge.name_bytes)?)
         } else {
-            let branch = tree_branch(repository, root, b'r', context.task, None, env.limits.forge.name_bytes)?;
-            let start = if saved {
-                ForgeStart::Saved(tree_branch(repository, root, b's', context.task, None, env.limits.forge.name_bytes)?)
-            } else {
-                ForgeStart::Base(repository.settings.default_branch.clone())
-            };
-            (start, Some(branch), None)
+            None
         };
+        let item = domain.forge.workspace_item(forge::items::Seed {
+            task: context.task,
+            parent,
+            repository: repository.provider,
+            run_branch,
+            saved_branch,
+        })?;
+        let start = match item.start {
+            forge::items::Start::Base(branch) => ForgeStart::Base(branch),
+            forge::items::Start::Branch(branch) => ForgeStart::Branch(branch),
+            forge::items::Start::Saved(branch) => ForgeStart::Saved(branch),
+            forge::items::Start::Merge { branch, base } => ForgeStart::Merge { branch, base },
+        };
+        let mut push = item.push;
+        let holder = item.holder;
+        if let Some((row, _)) = inherited {
+            key = row.task;
+        }
+        workspace_bytes = workspace_bytes.checked_add(item.bytes)?;
+        if workspace_bytes > u64::from(env.limits.journal.run_bytes) {
+            return None;
+        }
         if inherited.is_none() {
             let permitted = match &push {
                 Some(branch) => may_push(domain, env, context, repository, branch),
@@ -1360,14 +1349,14 @@ pub(super) fn run_workspace(
                 .ok()?;
             names.push(name).ok()?;
         }
-        let provider = repository.provider;
+        let provider = item.provider;
         repositories
             .push(ForgeRepository {
                 tag: provider.repository,
                 provider,
-                name: repository.name.clone(),
-                host: repository.host.clone(),
-                owner: repository.owner.clone(),
+                name: item.name,
+                host: item.host,
+                owner: item.owner,
                 start,
                 push,
                 identity: u32::from(provider.forge),
@@ -2147,12 +2136,17 @@ pub(super) fn outputs(
                     save(decision, &env.limits, Write::Erase(Key::Forge(number)));
                 }
             }
-            forge::Request::Call { call, repository, op } => {
-                emit(decision, &env.limits, Delivery::ForgeCall { call, repository, op });
-            }
+            forge::Request::Call { call, repository, op } => match op {
+                op @ forge_client::api::Op::Read(_) => {
+                    assert!(super::now(domain, Request::Forge { call, repository, op }), "forge read door reserved");
+                }
+                op @ forge_client::api::Op::Write(_) => {
+                    emit(decision, &env.limits, Delivery::ForgeCall { call, repository, op });
+                }
+            },
             forge::Request::Read { owner, result } => {
-                if let Some((to, key)) = domain.forge_reading.remove(&owner) {
-                    decide_call(domain, &env.limits, decision, to, key, CallAnswer::ForgeRead(Box::new(result)));
+                if let Some((to, _key)) = domain.forge_reading.remove(&owner) {
+                    super::host_route::read(domain, to, CallAnswer::ForgeRead(Box::new(result)));
                 }
             }
             forge::Request::Adopted { reply_to, result } => {
@@ -2790,4 +2784,33 @@ fn judge_effect(
         }
         Some(EffectFlight::Call { .. } | EffectFlight::Projection { .. }) | None => (authority::Verdict::Wait, false),
     }
+}
+
+/// Translate reported heads only against the assignment's granted write destinations.
+pub(super) fn left(domain: &mut Domain, env: &Env<Limits>, task: u64, attempt: u64, pushed: Box<[forge::Pushed]>) {
+    let mut names = List::with_capacity(env.limits.forge.resources_per_task);
+    if let Some(assignment) = domain.assignments.get(&task) {
+        for repository in &assignment.workspace.repositories {
+            for reported in &pushed {
+                if repository.tag != reported.tag {
+                    continue;
+                }
+                let Some(branch) = &repository.push else { continue };
+                let Some(what) = branch_what(branch, env.limits.forge.name_bytes) else { continue };
+                names
+                    .push((
+                        forge::Name {
+                            forge: repository.provider.forge,
+                            repository: repository.provider.repository,
+                            what,
+                        },
+                        reported.commit,
+                    ))
+                    .expect("bounded assignment repositories");
+                break;
+            }
+        }
+    }
+    domain.work.push(Work::Forge(forge::Event::Answered { task, attempt, pushed: names.into_boxed() }));
+    domain.work.push(Work::Forge(forge::Event::Lost { task, attempt }));
 }

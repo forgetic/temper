@@ -104,6 +104,7 @@ fn read_op(read: &client::Read, l: &Limits) -> forge::Read {
         client::Read::Compare { before, after } => {
             forge::Read::Compare { base: number(*before), head: number(*after), page: 1, limit: l.rows }
         }
+        client::Read::File { head, path, .. } => forge::Read::File { commit: number(*head), path: path.clone() },
         client::Read::Checks { commit } => forge::Read::Checks { commit: number(*commit) },
         client::Read::Job { attempt, max_bytes } => forge::Read::Job {
             commit: number(attempt.head),
@@ -233,20 +234,7 @@ pub fn answer(asked: &client::Op, answer: forge::Answer, l: &Limits) -> client::
             }
         }
         forge::Answer::Checks(checks) => checks_answer(asked, checks),
-        forge::Answer::File(log) => {
-            let attempt = match asked {
-                client::Op::Read(client::Read::Job { attempt, .. }) => *attempt,
-                client::Op::Read(_) | client::Op::Write(_) => panic!("job answer belongs to a job read"),
-            };
-            let max_bytes = match asked {
-                client::Op::Read(client::Read::Job { max_bytes, .. }) => *max_bytes,
-                client::Op::Read(_) | client::Op::Write(_) => panic!("job answer belongs to a job read"),
-            };
-            let cap = usize::try_from(max_bytes).expect("world maximum fits usize");
-            let truncated = log.len() > cap;
-            let start = log.len().saturating_sub(cap);
-            client::Answer::Job { attempt, log: Box::from(log.get(start..).expect("bounded log")), truncated }
-        }
+        forge::Answer::File(content) => byte_answer(asked, &content),
         forge::Answer::Protection(protection) => client::Answer::Protection(match protection {
             Some(p) => Some(client::Protection {
                 branch: p.branch,
@@ -387,6 +375,7 @@ fn pull_answer(asked: &client::Op, pull: forge::Pull, l: &Limits) -> client::Ans
             | client::Read::Protection { .. }
             | client::Read::Settings
             | client::Read::Collaborators { .. }
+            | client::Read::File { .. }
             | client::Read::Permission { .. } => panic!("pull route projection"),
         },
         client::Op::Write(_) => panic!("pull answers a read"),
@@ -496,4 +485,30 @@ pub fn digest(bytes: &[u8]) -> u64 {
         hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
     }
     hash
+}
+
+fn byte_answer(asked: &client::Op, content: &[u8]) -> client::Answer {
+    match asked {
+        client::Op::Read(client::Read::Job { attempt, max_bytes }) => {
+            let cap = usize::try_from(*max_bytes).expect("world maximum fits usize");
+            let truncated = content.len() > cap;
+            let start = content.len().saturating_sub(cap);
+            client::Answer::Job {
+                attempt: *attempt,
+                log: Box::from(content.get(start..).expect("bounded log")),
+                truncated,
+            }
+        }
+        client::Op::Read(client::Read::File { head, path, max_bytes }) => {
+            let cap = usize::try_from(*max_bytes).expect("world maximum fits usize");
+            let truncated = content.len() > cap;
+            client::Answer::File {
+                head: *head,
+                path: path.clone(),
+                bytes: Box::from(content.get(..content.len().min(cap)).expect("bounded file")),
+                truncated,
+            }
+        }
+        client::Op::Read(_) | client::Op::Write(_) => panic!("byte answer belongs to a bounded byte read"),
+    }
 }

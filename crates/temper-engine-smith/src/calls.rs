@@ -18,7 +18,7 @@ struct Spec {
 
 const READ_SCHEMA: &[u8] = br#"{"type":"object","properties":{"repository":{"type":"object"},"read":{"type":"object"}},"required":["repository","read"]}"#;
 
-const SPECS: [Spec; 33] = [
+const SPECS: [Spec; 34] = [
     Spec { name: b"read_items", description: b"Read one page of forge items.", schema: READ_SCHEMA, effect: run::HostEffect::Read },
     Spec { name: b"read_item", description: b"Read an issue or pull and its comments.", schema: READ_SCHEMA, effect: run::HostEffect::Read },
     Spec { name: b"read_pull", description: b"Read a pull request.", schema: READ_SCHEMA, effect: run::HostEffect::Read },
@@ -31,6 +31,7 @@ const SPECS: [Spec; 33] = [
     Spec { name: b"read_pull_files", description: b"Read changed files on a pull.", schema: READ_SCHEMA, effect: run::HostEffect::Read },
     Spec { name: b"read_compare", description: b"Compare two commits.", schema: READ_SCHEMA, effect: run::HostEffect::Read },
     Spec { name: b"read_checks", description: b"Read a commit's combined checks.", schema: READ_SCHEMA, effect: run::HostEffect::Read },
+    Spec { name: b"read_file", description: b"Read a bounded file at one head.", schema: READ_SCHEMA, effect: run::HostEffect::Read },
     Spec { name: b"read_job", description: b"Read one bounded CI job log.", schema: READ_SCHEMA, effect: run::HostEffect::Read },
     Spec { name: b"read_protection", description: b"Read branch protection.", schema: READ_SCHEMA, effect: run::HostEffect::Read },
     Spec { name: b"read_settings", description: b"Read repository settings.", schema: READ_SCHEMA, effect: run::HostEffect::Read },
@@ -91,6 +92,7 @@ pub fn call(name: run::CallName, tool: &[u8], input: &run::HostInput) -> Result<
         | b"read_pull_files"
         | b"read_compare"
         | b"read_checks"
+        | b"read_file"
         | b"read_job"
         | b"read_protection"
         | b"read_settings"

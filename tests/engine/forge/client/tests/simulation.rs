@@ -537,6 +537,7 @@ fn adoption_reads_history_and_preserves_foreign_or_copied_marker_news() {
             | api::Answer::PullFiles { .. }
             | api::Answer::Compare { .. }
             | api::Answer::Checks(_)
+            | api::Answer::File { .. }
             | api::Answer::Job { .. }
             | api::Answer::Protection(_)
             | api::Answer::Settings(_)
@@ -600,6 +601,7 @@ fn comment_ids(world: &World) -> skein_lib::List<u64> {
             | api::Answer::PullFiles { .. }
             | api::Answer::Compare { .. }
             | api::Answer::Checks(_)
+            | api::Answer::File { .. }
             | api::Answer::Job { .. }
             | api::Answer::Protection(_)
             | api::Answer::Settings(_)
@@ -653,6 +655,7 @@ fn review_page_recovery_keeps_old_pending_submissions_without_duplicate_news() {
             | api::Answer::PullFiles { .. }
             | api::Answer::Compare { .. }
             | api::Answer::Checks(_)
+            | api::Answer::File { .. }
             | api::Answer::Job { .. }
             | api::Answer::Protection(_)
             | api::Answer::Settings(_)
@@ -763,6 +766,7 @@ fn review_count(world: &World) -> u32 {
             | api::Answer::PullFiles { .. }
             | api::Answer::Compare { .. }
             | api::Answer::Checks(_)
+            | api::Answer::File { .. }
             | api::Answer::Job { .. }
             | api::Answer::Protection(_)
             | api::Answer::Settings(_)

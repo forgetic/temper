@@ -169,7 +169,7 @@ fn agent_for_with_options(
     settings.cancel_at = cancel_at;
     settings.budget = charter.budget;
     settings.limits.run.budget = charter.budget;
-    settings.limits.run.host_tools = 33;
+    settings.limits.run.host_tools = 34;
     settings.limits.run.brief_sections = 16;
     settings.limits.session.spend = charter.budget.spend;
     let scripts = match script {
@@ -283,6 +283,7 @@ pub fn run_assignment(root: &mut Driver, assignment: &engine::Assignment, agent:
     }
     let terminal = temper_engine_smith::result(copy_answer(agent.answer()), None).expect("typed terminal");
     root.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: assignment.task,

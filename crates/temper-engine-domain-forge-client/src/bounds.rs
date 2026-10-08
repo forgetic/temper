@@ -25,7 +25,7 @@ fn rows(count: usize, width: usize, limit: u32) -> Option<u64> {
 }
 pub(crate) fn op(value: &Op, l: &Limits) -> bool {
     match value {
-        Op::Read(Read::Job { max_bytes, .. }) => {
+        Op::Read(Read::Job { max_bytes, .. } | Read::File { max_bytes, .. }) => {
             if *max_bytes == 0 || *max_bytes > l.answer_bytes {
                 return false;
             }
@@ -43,6 +43,13 @@ pub(crate) fn op(value: &Op, l: &Limits) -> bool {
 }
 pub(crate) fn read(value: &Read) -> Option<u64> {
     match value {
+        Read::File { path, .. } => {
+            if path.is_empty() {
+                None
+            } else {
+                bytes(path)
+            }
+        }
         Read::PullFor { head, base } => bytes(head)?.checked_add(bytes(base)?),
         Read::Branch { branch } | Read::Protection { branch } => bytes(branch),
         Read::Items { page, .. }
@@ -142,6 +149,7 @@ fn answer_heap(value: &Answer, limit: u32) -> Option<u64> {
             Some(held)
         }
         Answer::Job { log, .. } => bytes(log),
+        Answer::File { path, bytes: value, .. } => bytes(path)?.checked_add(bytes(value)?),
         Answer::Remarks { remarks, .. } => {
             let mut held = rows(remarks.len(), size_of::<crate::api::Remark>(), limit)?;
             for remark in remarks {

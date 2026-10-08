@@ -78,6 +78,8 @@ pub enum Read {
     Checks { commit: Commit },
     /// Bounded plaintext log for one failed job attempt at its head.
     Job { attempt: JobAttempt, max_bytes: u32 },
+    /// One file at an immutable head, cut to the requested byte budget.
+    File { head: Commit, path: Box<[u8]>, max_bytes: u32 },
     /// Requires admin, including an absent rule.
     Protection { branch: Box<[u8]> },
     /// Read settings.
@@ -145,6 +147,8 @@ pub enum Answer {
     Checks(Box<[Status]>),
     /// Bytes from one pinned job attempt, cut to the requested byte budget.
     Job { attempt: JobAttempt, log: Box<[u8]>, truncated: bool },
+    /// One bounded file from the requested immutable head.
+    File { head: Commit, path: Box<[u8]>, bytes: Box<[u8]>, truncated: bool },
     /// Return protection.
     Protection(Option<Protection>),
     /// Return settings.
@@ -413,6 +417,7 @@ enum Shape {
     Compare,
     Checks,
     Job,
+    File,
     Protection,
     Settings,
     Collaborators,
@@ -438,6 +443,7 @@ fn shape(answer: &Answer) -> Shape {
         Answer::Compare { .. } => Shape::Compare,
         Answer::Checks(_) => Shape::Checks,
         Answer::Job { .. } => Shape::Job,
+        Answer::File { .. } => Shape::File,
         Answer::Protection(_) => Shape::Protection,
         Answer::Settings(_) => Shape::Settings,
         Answer::Collaborators { .. } => Shape::Collaborators,
@@ -465,6 +471,7 @@ pub(crate) fn accepts(op: &Op, answer: &Answer) -> bool {
             Read::Compare { .. } => Shape::Compare,
             Read::Checks { .. } => Shape::Checks,
             Read::Job { .. } => Shape::Job,
+            Read::File { .. } => Shape::File,
             Read::Protection { .. } => Shape::Protection,
             Read::Settings => Shape::Settings,
             Read::Collaborators { .. } => Shape::Collaborators,
@@ -505,6 +512,7 @@ pub(crate) fn accepts(op: &Op, answer: &Answer) -> bool {
                 | Answer::Branches(_)
                 | Answer::PullFiles { .. }
                 | Answer::Compare { .. }
+                | Answer::File { .. }
                 | Answer::Checks(_)
                 | Answer::Protection(_)
                 | Answer::Settings(_)
@@ -517,6 +525,7 @@ pub(crate) fn accepts(op: &Op, answer: &Answer) -> bool {
                 | Answer::Branch(_)
                 | Answer::Done => false,
             },
+            Read::File { head, path, max_bytes } => file_matches(answer, *head, path, *max_bytes),
             Read::Checks { commit } => checks_at_head(answer, *commit),
             Read::PullFiles { head, .. } => observed_head(answer) == Some(*head),
             Read::Compare { before, after } => compared(answer, *before, *after),
@@ -563,6 +572,7 @@ fn checks_at_head(answer: &Answer, head: Commit) -> bool {
         | Answer::Branches(_)
         | Answer::PullFiles { .. }
         | Answer::Compare { .. }
+        | Answer::File { .. }
         | Answer::Job { .. }
         | Answer::Protection(_)
         | Answer::Settings(_)
@@ -609,6 +619,7 @@ fn items_ordered(answer: &Answer, kind: Option<Kind>) -> bool {
         | Answer::PullFiles { .. }
         | Answer::Compare { .. }
         | Answer::Checks(_)
+        | Answer::File { .. }
         | Answer::Job { .. }
         | Answer::Protection(_)
         | Answer::Settings(_)
@@ -644,6 +655,7 @@ fn reviews_ordered(answer: &Answer) -> bool {
         | Answer::PullFiles { .. }
         | Answer::Compare { .. }
         | Answer::Checks(_)
+        | Answer::File { .. }
         | Answer::Job { .. }
         | Answer::Protection(_)
         | Answer::Settings(_)
@@ -682,6 +694,7 @@ fn item_matches(answer: &Answer, number: u64, after: u64) -> bool {
         | Answer::PullFiles { .. }
         | Answer::Compare { .. }
         | Answer::Checks(_)
+        | Answer::File { .. }
         | Answer::Job { .. }
         | Answer::Protection(_)
         | Answer::Settings(_)
@@ -708,6 +721,7 @@ fn pull_answer(answer: &Answer) -> Option<&Pull> {
         | Answer::PullFiles { .. }
         | Answer::Compare { .. }
         | Answer::Checks(_)
+        | Answer::File { .. }
         | Answer::Job { .. }
         | Answer::Protection(_)
         | Answer::Settings(_)
@@ -734,6 +748,7 @@ fn observed_head(answer: &Answer) -> Option<Commit> {
         | Answer::Branches(_)
         | Answer::Compare { .. }
         | Answer::Checks(_)
+        | Answer::File { .. }
         | Answer::Job { .. }
         | Answer::Protection(_)
         | Answer::Settings(_)
@@ -761,6 +776,39 @@ fn compared(answer: &Answer, before: Commit, after: Commit) -> bool {
         | Answer::Commit(_)
         | Answer::Branches(_)
         | Answer::PullFiles { .. }
+        | Answer::Checks(_)
+        | Answer::File { .. }
+        | Answer::Job { .. }
+        | Answer::Protection(_)
+        | Answer::Settings(_)
+        | Answer::Collaborators { .. }
+        | Answer::Permission(_)
+        | Answer::Created(_)
+        | Answer::Commented(_)
+        | Answer::Reviewed(_)
+        | Answer::Merged(_)
+        | Answer::Branch(_)
+        | Answer::Done => false,
+    }
+}
+
+fn file_matches(answer: &Answer, head: Commit, path: &[u8], max_bytes: u32) -> bool {
+    match answer {
+        Answer::File { head: received, path: received_path, bytes, .. } => {
+            *received == head
+                && received_path.as_ref() == path
+                && bytes.len() <= usize::try_from(max_bytes).expect("u32 fits usize")
+        }
+        Answer::Items { .. }
+        | Answer::Item { .. }
+        | Answer::Pull(_)
+        | Answer::Reviews { .. }
+        | Answer::Statuses { .. }
+        | Answer::Remarks { .. }
+        | Answer::Commit(_)
+        | Answer::Branches(_)
+        | Answer::PullFiles { .. }
+        | Answer::Compare { .. }
         | Answer::Checks(_)
         | Answer::Job { .. }
         | Answer::Protection(_)

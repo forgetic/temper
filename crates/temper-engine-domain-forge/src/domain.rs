@@ -93,13 +93,13 @@ struct StepInput {
 /// The bounded forge connector subtree.
 #[derive(Debug)]
 pub struct Domain {
-    repositories: Map<client::api::Repository, Repository>,
+    pub(crate) repositories: Map<client::api::Repository, Repository>,
     names: Map<u64, Box<[Name]>>,
     holds: Map<Name, Hold>,
     pub(crate) subscriptions: Map<(u64, Topic), Subscriber>,
     pub(crate) goal_files: Map<u64, topics::Files>,
     pub(crate) goal_file_reads: Map<Token, topics::Pending>,
-    heads: Map<Name, BranchHead>,
+    pub(crate) heads: Map<Name, BranchHead>,
     pulls: Map<Name, PullState>,
     ci: Map<(client::api::Repository, client::api::Commit), CiState>,
     entries: Map<u64, client::Entry>,
@@ -1229,7 +1229,13 @@ fn answered(
 ) {
     let mut freed = List::with_capacity(env.limits.holds);
     for (name, row) in &d.holds {
-        if row.writer == Some(Writer::Run { task, attempt }) {
+        let mut reported = false;
+        for (pushed_name, _) in pushed {
+            if pushed_name == name {
+                reported = true;
+            }
+        }
+        if row.writer == Some(Writer::Run { task, attempt }) && reported {
             freed.push(name.clone()).expect("list sized to holds");
         }
     }
@@ -1241,6 +1247,9 @@ fn answered(
         if let Some(resource) = to_client(name, &env.limits) {
             for (pushed_name, commit) in pushed {
                 if pushed_name == name {
+                    let head = BranchHead { name: name.clone(), commit: *commit };
+                    d.heads.insert(name.clone(), head.clone()).expect("reported head was a live resource");
+                    emit(out, Request::Save { record: Stored::BranchHead(head) });
                     child(d, env, client::Event::Pushed { resource: resource.clone(), commit: *commit }, out);
                 }
             }
@@ -2722,6 +2731,7 @@ fn changed(
             | client::api::Answer::PullFiles { .. }
             | client::api::Answer::Compare { .. }
             | client::api::Answer::Checks(_)
+            | client::api::Answer::File { .. }
             | client::api::Answer::Job { .. }
             | client::api::Answer::Protection(_)
             | client::api::Answer::Settings(_)

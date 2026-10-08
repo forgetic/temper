@@ -666,3 +666,34 @@ fn projection_history_keys_keep_task_position_and_history_family() {
     assert_eq!(first.len(), 45);
     assert!(crate::effect_key(&[1; 16], &purpose, 44).is_none());
 }
+
+#[test]
+fn file_reads_are_pinned_bounded_and_charged_to_the_fresh_lane() {
+    for (head, path, bytes, accepted) in [
+        ([3; 32], b"file".as_slice(), b"abc".as_slice(), true),
+        ([4; 32], b"file", b"abc", false),
+        ([3; 32], b"other", b"abc", false),
+        ([3; 32], b"file", b"abcd", false),
+    ] {
+        let mut h = Harness::new(LIMITS);
+        h.step(Event::Read {
+            owner: Token::new(7),
+            repository: REPO,
+            read: Read::File { head: [3; 32], path: Box::from(&b"file"[..]), max_bytes: 3 },
+        });
+        let sent = h.send().expect("fresh read admitted");
+        let answer = Answer::File { head, path: Box::from(path), bytes: Box::from(bytes), truncated: true };
+        let out = h.answer(&sent, 1, Ok(answer.clone()));
+        let result = if accepted { Ok(answer) } else { Err(Error::InvalidAnswer) };
+        assert_eq!(out.as_ref(), &[Request::Read { owner: Token::new(7), result }]);
+        assert!(h.facts().contains(&Fact::Sent { priority: Priority::Fresh }));
+    }
+    let mut h = Harness::new(LIMITS);
+    let refused = h.step(Event::Read {
+        owner: Token::new(1),
+        repository: REPO,
+        read: Read::File { head: [3; 32], path: Box::from(&b"file"[..]), max_bytes: LIMITS.answer_bytes + 1 },
+    });
+    assert_eq!(refused.as_ref(), &[Request::Read { owner: Token::new(1), result: Err(Error::TooLarge) }]);
+    assert!(h.send().is_none());
+}

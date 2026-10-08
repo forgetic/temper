@@ -870,6 +870,7 @@ fn durable_start_turn_and_answer_callbacks_survive_full_journal_pressure() {
         2
     );
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: assignment.task,
@@ -1260,6 +1261,7 @@ fn a_person_stops_a_run_and_releases_it() {
     };
     assert!(matches!(row.phase, tasks::Phase::Held { why: tasks::Hold::StoppedBy { party: 1 }, .. }));
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: assignment.task,
         attempt: assignment.attempt,
@@ -1404,6 +1406,7 @@ fn refused_terminal_clears_fleet_handoff_without_charging_rejected_spend() {
     driver.settle();
     let assignment = assigned(&driver);
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: assignment.task,
@@ -2512,6 +2515,7 @@ fn a_recurring_procedure_uses_the_root_period_route() {
     ));
     let run = assigned_task(&driver, child);
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: child,
@@ -2757,6 +2761,7 @@ fn a_narrowing_stops_the_old_run_and_offers_the_amendment_to_the_next() {
     assert!(driver.delivered.iter().any(|item| matches!(item, Delivery::Cancel { task, attempt, .. }
         if *task == child && *attempt == first.attempt)));
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: child,
@@ -2812,6 +2817,7 @@ fn a_cancel_closes_three_levels_with_runs_live_deepest_first() {
             if *call == Token::new(92))));
     for run in [&grandchild_run, &child_run] {
         driver.send(engine::Event::Answer {
+            pushed: Box::new([]),
             saved: None,
             channel: Token::new(7),
             task: run.task,
@@ -2842,6 +2848,7 @@ fn release_tool_resets_a_delegates_exhausted_tries() {
     let child = call_batch(&mut driver, &parent, 90, Box::new([report_delegate(b"child", Box::new([]))]))[0];
     let first = assigned_task(&driver, child);
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: child,
@@ -2859,6 +2866,7 @@ fn release_tool_resets_a_delegates_exhausted_tries() {
     let second = assigned_from_last(&driver.delivered);
     assert_eq!(second.task, child);
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: child,
@@ -2978,6 +2986,7 @@ fn task_subscriptions_are_named_by_the_root_and_unsubscribe_removes_them() {
 
 fn park_task(driver: &mut Driver, assignment: &engine::Assignment) {
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: assignment.task,
@@ -2992,6 +3001,7 @@ fn park_task(driver: &mut Driver, assignment: &engine::Assignment) {
 
 fn finish_task(driver: &mut Driver, assignment: &engine::Assignment, result: tasks::TaskResult) {
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: assignment.task,
@@ -3126,6 +3136,7 @@ fn a_delegate_result_enters_its_requesters_inbox_with_the_end() {
         })
         .expect("one child was made");
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: parent.task,
@@ -3145,6 +3156,7 @@ fn a_delegate_result_enters_its_requesters_inbox_with_the_end() {
         })
         .expect("child starts after parent parks");
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: child,
@@ -3556,6 +3568,7 @@ fn bounded_invalid_typed_terminal_preserves_original_root_evidence_and_charges_o
         cancel_delegates: false,
     };
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: assignment.task,
@@ -3584,6 +3597,7 @@ fn bounded_invalid_typed_terminal_preserves_original_root_evidence_and_charges_o
     assert_eq!(task.tries.invalid, 1);
     let rows = driver.store.rows.clone();
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: assignment.task,
@@ -4398,6 +4412,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
     driver.settle();
     let assignment = assigned(&driver);
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: assignment.task,
@@ -4850,6 +4865,7 @@ fn a_read_fence_takes_only_what_the_run_read() {
 fn words_to_a_parked_chat_wake_it() {
     let (mut driver, assignment) = chat_driver();
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: assignment.task,
@@ -4877,6 +4893,7 @@ fn a_chat_parks_and_resumes_from_its_transcript() {
     });
     driver.settle();
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: first.task,
@@ -4897,6 +4914,7 @@ fn a_chat_parks_and_resumes_from_its_transcript() {
     });
     driver.settle();
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: second.task,
@@ -4926,6 +4944,7 @@ fn a_chat_past_the_resume_limit_starts_fresh_with_the_tail_in_its_brief() {
     });
     driver.settle();
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         saved: None,
         channel: Token::new(7),
         task: first.task,
@@ -4955,6 +4974,7 @@ fn a_chat_past_the_resume_limit_starts_fresh_with_the_tail_in_its_brief() {
 fn a_run_failing_transiently_is_retried_then_held_past_its_tries() {
     let (mut driver, first) = chat_driver();
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: first.task,
         attempt: first.attempt,
@@ -4979,6 +4999,7 @@ fn a_run_failing_transiently_is_retried_then_held_past_its_tries() {
     let second = assigned_from_last(&driver.delivered);
     assert!(second.attempt > first.attempt);
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: second.task,
         attempt: second.attempt,
@@ -5014,6 +5035,7 @@ fn a_delegate_held_past_its_tries_is_escalated_two_levels_to_a_person_released_a
     let leaf = call_batch(&mut driver, &middle_run, 602, Box::new([report_delegate(b"leaf", Box::new([]))]))[0];
     let first = assigned_task(&driver, leaf);
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: leaf,
         attempt: first.attempt,
@@ -5031,6 +5053,7 @@ fn a_delegate_held_past_its_tries_is_escalated_two_levels_to_a_person_released_a
     let second = assigned_from_last(&driver.delivered);
     assert_eq!(second.task, leaf);
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: leaf,
         attempt: second.attempt,
@@ -5114,6 +5137,7 @@ fn a_delegate_held_past_its_tries_is_escalated_two_levels_to_a_person_released_a
     assert_eq!(third.task, leaf);
     assert!(third.attempt > second.attempt);
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: leaf,
         attempt: third.attempt,
@@ -5182,6 +5206,7 @@ fn a_moved_task_is_funded_anew_by_its_new_requester() {
     assert!(old.references.contains(&child));
     assert_eq!((old.numbers.reserved, old.numbers.spent_below), (5, 5));
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: root.task,
         attempt: root.attempt,
@@ -5263,6 +5288,7 @@ fn moving_a_held_delegate_rechecks_its_escalation_recipient() {
     let child = call_batch(&mut driver, &root, 650, Box::new([report_delegate(b"held goal", Box::new([]))]))[0];
     let first = assigned_task(&driver, child);
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: child,
         attempt: first.attempt,
@@ -5279,6 +5305,7 @@ fn moving_a_held_delegate_rechecks_its_escalation_recipient() {
     driver.settle();
     let second = assigned_from_last(&driver.delivered);
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: child,
         attempt: second.attempt,
@@ -5340,6 +5367,7 @@ fn moving_a_proposer_rechecks_its_decision_holder() {
 fn saved_work_reaches_the_next_attempt() {
     let (mut driver, first) = chat_driver();
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: first.task,
         attempt: first.attempt,
@@ -5540,6 +5568,7 @@ fn typed_calls_keep_their_opaque_answers_for_resumed_assignments() {
         matches!(driver.store.rows.get(&Key::Call(key)), Some(Record::Call(record)) if record.settled.as_ref()==Some(&settled))
     );
     driver.send(engine::Event::Answer {
+        pushed: Box::new([]),
         channel: Token::new(7),
         task: first.task,
         attempt: first.attempt,
