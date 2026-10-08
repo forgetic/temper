@@ -4210,6 +4210,7 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
             | tasks::Request::Relay { .. }
             | tasks::Request::Notify { .. }
             | tasks::Request::Timer { .. }
+            | tasks::Request::EndTopic { .. }
             | tasks::Request::RecurringDue { .. }
             | tasks::Request::RestoreRefused { .. }
             | tasks::Request::Taken { .. }
@@ -4257,6 +4258,7 @@ fn read_only_role_stages_have_one_not_ready_terminal_and_empty_projects_need_no_
         | tasks::Request::Relay { .. }
         | tasks::Request::Notify { .. }
         | tasks::Request::Timer { .. }
+        | tasks::Request::EndTopic { .. }
         | tasks::Request::RecurringDue { .. }
         | tasks::Request::RestoreRefused { .. }
         | tasks::Request::Taken { .. }

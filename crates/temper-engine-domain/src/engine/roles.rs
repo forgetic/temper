@@ -85,6 +85,7 @@ fn inspected(
             | tasks::Request::Relay { .. }
             | tasks::Request::Notify { .. }
             | tasks::Request::Timer { .. }
+            | tasks::Request::EndTopic { .. }
             | tasks::Request::RecurringDue { .. }
             | tasks::Request::WriterWaiting { .. }
             | tasks::Request::PersonProposed { .. }
@@ -274,6 +275,7 @@ fn recheck(domain: &mut Domain, env: &Env<Limits>, request: Token, project: u32)
             | tasks::Request::PersonProposalDecided { .. }
             | tasks::Request::Notify { .. }
             | tasks::Request::Timer { .. }
+            | tasks::Request::EndTopic { .. }
             | tasks::Request::RecurringDue { .. }
             | tasks::Request::WriterWaiting { .. } => {
                 unreachable!("recheck emits waiting contexts and terminal")

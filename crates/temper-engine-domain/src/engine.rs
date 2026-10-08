@@ -4522,6 +4522,13 @@ fn tasks_outputs(
                     },
                 }));
             }
+            tasks::Request::EndTopic { task, subscription, connector } => {
+                if connector == domain.config.forge_connector
+                    && let Some(topic) = domain.forge.subscription(task, subscription)
+                {
+                    domain.work.push(Work::Forge(forge::Event::Unsubscribe { task, topic }));
+                }
+            }
             tasks::Request::Sent { reply_to, task, word } => {
                 let request = reply_to.into_token();
                 if let Some(context) = domain.contexts.get_mut(&task) {
