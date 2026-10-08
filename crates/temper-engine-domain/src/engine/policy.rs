@@ -32,7 +32,7 @@ pub(super) fn change(
     {
         return refused(domain, request, people::Refusal::Busy);
     }
-    let Some(mut policy) = domain.config.authority.policy(project).cloned() else {
+    let Some(mut policy) = domain.core.authority.policy(project).cloned() else {
         return refused(domain, request, people::Refusal::Unknown);
     };
     let mut permissions = match domain.config.permission_roles.get(&project) {
@@ -63,7 +63,7 @@ pub(super) fn change(
         return refused(domain, request, people::Refusal::Limit);
     }
     let mut facts = Queue::with_capacity(authority::POLICY_MAX_OUT);
-    authority::step(&mut domain.config.authority, authority::Event::Policy { project, policy }, &mut facts);
+    authority::step(&mut domain.core.authority, authority::Event::Policy { project, policy }, &mut facts);
     match facts.pop().expect("policy update terminal") {
         authority::PolicyFact::Changed { .. } => {
             assert!(domain.config.permission_roles.insert(project, permissions).is_ok(), "admitted permission policy");
@@ -94,7 +94,7 @@ pub(super) fn restore(domain: &mut Domain, project: u32, value: people::PolicyVa
             return;
         }
     }
-    let Some(mut policy) = domain.config.authority.policy(project).cloned() else {
+    let Some(mut policy) = domain.core.authority.policy(project).cloned() else {
         domain.startup = super::Startup::Failed;
         return;
     };
@@ -107,7 +107,7 @@ pub(super) fn restore(domain: &mut Domain, project: u32, value: people::PolicyVa
         return;
     }
     let mut facts = Queue::with_capacity(authority::POLICY_MAX_OUT);
-    authority::step(&mut domain.config.authority, authority::Event::Policy { project, policy }, &mut facts);
+    authority::step(&mut domain.core.authority, authority::Event::Policy { project, policy }, &mut facts);
     if facts.pop() != Some(authority::PolicyFact::Changed { project })
         || domain.config.permission_roles.insert(project, permissions).is_err()
     {
@@ -129,55 +129,55 @@ pub(super) fn pool(
     if let Err(why) = roles::allowed(domain, owner, project) {
         return refused(domain, request, why);
     }
-    if domain.person_tasks.len() >= domain.limits.tasks.tasks
+    if domain.core.person_tasks.len() >= domain.limits.tasks.tasks
         || domain.work.room() < 2
         || !decision.room_for(4, env.limits.people.waiters)
     {
         return refused(domain, request, people::Refusal::Busy);
     }
-    let Some(role) = domain.people.role(person, project) else {
+    let Some(role) = domain.core.people.role(person, project) else {
         return refused(domain, request, people::Refusal::Unknown);
     };
-    let Some(allowed) = domain.config.authority.role(project, super::escalation::role_number(role)) else {
+    let Some(allowed) = domain.core.authority.role(project, super::escalation::role_number(role)) else {
         return refused(domain, request, people::Refusal::Unknown);
     };
     if budget > allowed.period_spend {
         return refused(domain, request, people::Refusal::Authority);
     }
-    let Some(project_policy) = domain.config.authority.policy(project) else {
+    let Some(project_policy) = domain.core.authority.policy(project) else {
         return refused(domain, request, people::Refusal::Unknown);
     };
-    if domain.config.period_budget > project_policy.period_spend {
+    if domain.core.settings.period_budget > project_policy.period_spend {
         return refused(domain, request, people::Refusal::Authority);
     }
-    let period = tasks::Funder::Period { project, period: domain.config.period };
-    let funder = tasks::Funder::Pool { project, person, period: domain.config.period };
-    let needed = u32::from(domain.tasks.funding(period).is_none())
-        .saturating_add(u32::from(domain.tasks.funding(funder).is_none()));
-    if domain.tasks.funding_room() < needed {
+    let period = tasks::Funder::Period { project, period: domain.core.settings.period };
+    let funder = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
+    let needed = u32::from(domain.core.tasks.funding(period).is_none())
+        .saturating_add(u32::from(domain.core.tasks.funding(funder).is_none()));
+    if domain.core.tasks.funding_room() < needed {
         return refused(domain, request, people::Refusal::Busy);
     }
-    if domain.tasks.funding(period).is_none() && budget > domain.config.period_budget {
+    if domain.core.tasks.funding(period).is_none() && budget > domain.core.settings.period_budget {
         return refused(domain, request, people::Refusal::Authority);
     }
-    if domain.tasks.funding(period).is_none() {
+    if domain.core.tasks.funding(period).is_none() {
         domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
             reply_to: super::internal(0),
             project,
-            period: domain.config.period,
-            budget: domain.config.period_budget,
+            period: domain.core.settings.period,
+            budget: domain.core.settings.period_budget,
         }));
     }
     assert!(
-        domain.person_tasks.insert(request, PersonTaskRoute::PoolSet { project, person }) == Ok(None),
+        domain.core.person_tasks.insert(request, PersonTaskRoute::PoolSet { project, person }) == Ok(None),
         "one admitted pool route"
     );
-    if domain.tasks.funding(funder).is_some() {
+    if domain.core.tasks.funding(funder).is_some() {
         domain.work.push(Work::Tasks(tasks::Event::ResizePool {
             reply_to: super::internal(request.raw()),
             project,
             person,
-            period: domain.config.period,
+            period: domain.core.settings.period,
             budget,
         }));
     } else {
@@ -185,7 +185,7 @@ pub(super) fn pool(
             reply_to: super::internal(request.raw()),
             project,
             person,
-            period: domain.config.period,
+            period: domain.core.settings.period,
             budget,
         }));
     }

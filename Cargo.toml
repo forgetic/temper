@@ -91,6 +91,7 @@ jig-ops-domain-infrastructure = { path = "jig/examples/ops/domain-infrastructure
 temper-engine-domain = { path = "crates/temper-engine-domain" }
 temper-engine-smith = { path = "crates/temper-engine-smith" }
 jig-core-authority = { path = "jig/crates/jig-core-authority" }
+jig-core = { path = "jig/crates/jig-core" }
 jig-core-notes = { path = "jig/crates/jig-core-notes" }
 jig-core-people = { path = "jig/crates/jig-core-people" }
 jig-core-tasks = { path = "jig/crates/jig-core-tasks" }

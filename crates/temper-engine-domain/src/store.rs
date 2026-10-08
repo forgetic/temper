@@ -9,71 +9,10 @@
 //! Range membership and deep-byte accounting are only parts of admission;
 //! [`crate::loads`] also checks whole-page row bounds, order and continuation.
 use alloc::boxed::Box;
-use skein_lib::Wall;
-
-/// Root to store, then store to root at startup: one fixed-size deployment
-/// header with allocated high-water marks. Every writing decision saves it
-/// atomically with its other rows (domain/engine.md, 5.1 and 5.4).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Deployment {
-    /// Shell-supplied identity committed on the deployment's first start and restored thereafter;
-    /// exactly sixteen bytes.
-    pub id: [u8; 16],
-    /// Last task number allocated by the root; zero before its first allocation, never reset or
-    /// reused.
-    pub tasks: u64,
-    /// Last candidate person number allocated for sign-in; refused or existing identities may leave
-    /// gaps.
-    pub people: u64,
-    /// Last sign-in candidate allocated by the root; persisted gaps are allowed and no secret
-    /// session bytes are held here.
-    pub sign_ins: u64,
-    /// Last root-issued result position in commit order.
-    pub messages: u64,
-    /// Last activation number allocated for a claim; the candidate may leave a gap if preparation
-    /// fails.
-    pub runs: u64,
-    /// Last root-allocated call number; current 06a routes no tool calls.
-    pub calls: u64,
-    /// Last allocated stable store identity for a forge connector row.
-    pub forge_rows: u64,
-    /// Last issued ordered commit. A restored header is already durable; a live journal may await
-    /// this number's store terminal.
-    pub commits: u64,
-}
-
-/// Root-selected counter for `fresh`; each is a separate checked `u64` high-water
-/// mark, not a channel token or child-owned handle (domain/engine.md, 5.4).
-/// Selecting a family is pure; allocating it dirties the journal header.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Family {
-    /// Task identities saved with the task row.
-    Task,
-    /// Person candidates supplied to people sign-in admission.
-    Person,
-    /// Secret-free sign-in candidates supplied to people.
-    SignIn,
-    /// Result positions issued as tasks end.
-    Message,
-    /// Fresh attempt identities saved at claims.
-    Run,
-    /// Count of distinct named calls newly decided by the engine.
-    Call,
-    /// Stable connector row identity, allocated once per live connector key.
-    ForgeRow,
-}
-
-/// Stable call identity supplied by a run and scoped by the root's task and
-/// claim (domain/engine.md, sections 5.4 and 7.3).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct CallKey {
-    pub task: u64,
-    pub attempt: u64,
-    /// One-based assistant completion.
-    pub completion: u32,
-    /// Zero-based assistant block position.
-    pub position: u32,
-}
+pub use jig_core::{
+    CallKey, Deployment, EscalationDecisionRecord, Family, ProposalDecisionRecord, RunProof, TerminalRecord, TurnProof,
+    TurnRecord,
+};
 
 /// Exact typed answer kept for replay across a lost channel or root restart.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -124,6 +63,82 @@ pub enum CallAnswer {
     DelegationRefused(jig_core_tasks::Problem),
     /// The named tool is deferred to a later engine route.
     Unavailable,
+}
+
+impl CallAnswer {
+    /// Retain the core's part of a named answer. The forge alone retains
+    /// connector payloads; authority findings belong to the core.
+    #[must_use]
+    pub fn core_part(&self, connector: u16) -> jig_core::CallPart {
+        match self {
+            CallAnswer::ForgeEffect { .. } | CallAnswer::ForgeEffectRefused(_) | CallAnswer::ForgeRead(_) => {
+                jig_core::CallPart::Connector { connector }
+            }
+            CallAnswer::ForgeEffectDenied { answer, findings } => {
+                jig_core::CallPart::EffectDenied { answer: *answer, findings: findings.clone() }
+            }
+            CallAnswer::EscalationDecided { task, revision, outcome } => {
+                jig_core::CallPart::EscalationDecided { task: *task, revision: *revision, outcome: *outcome }
+            }
+            CallAnswer::EscalationRefused(problem) => jig_core::CallPart::EscalationRefused(problem.clone()),
+            CallAnswer::Proposed { proposal } => jig_core::CallPart::Proposed { proposal: *proposal },
+            CallAnswer::ProposalDecided { proposal, outcome } => {
+                jig_core::CallPart::ProposalDecided { proposal: *proposal, outcome: *outcome }
+            }
+            CallAnswer::ProposalRefused(problem) => jig_core::CallPart::ProposalRefused(problem.clone()),
+            CallAnswer::Controlled => jig_core::CallPart::Controlled,
+            CallAnswer::ControlRefused(problem) => jig_core::CallPart::ControlRefused(problem.clone()),
+            CallAnswer::ControlDenied { answer } => jig_core::CallPart::ControlDenied { answer: *answer },
+            CallAnswer::Sent { message } => jig_core::CallPart::Sent { message: *message },
+            CallAnswer::Introduced => jig_core::CallPart::Introduced,
+            CallAnswer::MessageRefused(problem) => jig_core::CallPart::MessageRefused(problem.clone()),
+            CallAnswer::Subscribed { subscription } => jig_core::CallPart::Subscribed { subscription: *subscription },
+            CallAnswer::Unsubscribed => jig_core::CallPart::Unsubscribed,
+            CallAnswer::SubscriptionRefused(problem) => jig_core::CallPart::SubscriptionRefused(problem.clone()),
+            CallAnswer::Delegated(tasks) => jig_core::CallPart::Delegated(tasks.clone()),
+            CallAnswer::DelegationDenied { answer, findings } => {
+                jig_core::CallPart::DelegationDenied { answer: *answer, findings: findings.clone() }
+            }
+            CallAnswer::DelegationRefused(problem) => jig_core::CallPart::DelegationRefused(problem.clone()),
+            CallAnswer::Unavailable => jig_core::CallPart::Unavailable,
+        }
+    }
+
+    /// Assemble the core's answer when it owns the complete value. A
+    /// connector marker is assembled from that connector's own table.
+    #[must_use]
+    pub fn from_core(part: &jig_core::CallPart) -> Option<CallAnswer> {
+        Some(match part {
+            jig_core::CallPart::Connector { .. } => return None,
+            jig_core::CallPart::EffectDenied { answer, findings } => {
+                CallAnswer::ForgeEffectDenied { answer: *answer, findings: findings.clone() }
+            }
+            jig_core::CallPart::EscalationDecided { task, revision, outcome } => {
+                CallAnswer::EscalationDecided { task: *task, revision: *revision, outcome: *outcome }
+            }
+            jig_core::CallPart::EscalationRefused(problem) => CallAnswer::EscalationRefused(problem.clone()),
+            jig_core::CallPart::Proposed { proposal } => CallAnswer::Proposed { proposal: *proposal },
+            jig_core::CallPart::ProposalDecided { proposal, outcome } => {
+                CallAnswer::ProposalDecided { proposal: *proposal, outcome: *outcome }
+            }
+            jig_core::CallPart::ProposalRefused(problem) => CallAnswer::ProposalRefused(problem.clone()),
+            jig_core::CallPart::Controlled => CallAnswer::Controlled,
+            jig_core::CallPart::ControlRefused(problem) => CallAnswer::ControlRefused(problem.clone()),
+            jig_core::CallPart::ControlDenied { answer } => CallAnswer::ControlDenied { answer: *answer },
+            jig_core::CallPart::Sent { message } => CallAnswer::Sent { message: *message },
+            jig_core::CallPart::Introduced => CallAnswer::Introduced,
+            jig_core::CallPart::MessageRefused(problem) => CallAnswer::MessageRefused(problem.clone()),
+            jig_core::CallPart::Subscribed { subscription } => CallAnswer::Subscribed { subscription: *subscription },
+            jig_core::CallPart::Unsubscribed => CallAnswer::Unsubscribed,
+            jig_core::CallPart::SubscriptionRefused(problem) => CallAnswer::SubscriptionRefused(problem.clone()),
+            jig_core::CallPart::Delegated(tasks) => CallAnswer::Delegated(tasks.clone()),
+            jig_core::CallPart::DelegationDenied { answer, findings } => {
+                CallAnswer::DelegationDenied { answer: *answer, findings: findings.clone() }
+            }
+            jig_core::CallPart::DelegationRefused(problem) => CallAnswer::DelegationRefused(problem.clone()),
+            jig_core::CallPart::Unavailable => CallAnswer::Unavailable,
+        })
+    }
 }
 
 /// One durable root call decision. The key, rather than a generated receipt,
@@ -404,116 +419,6 @@ impl Range {
             },
         }
     }
-}
-
-/// Root to store: an accepted numbered transcript and cumulative priced spend,
-/// saved atomically with child task/funding and root latest-turn proof before
-/// its worker ACK
-/// (domain/engine.md, 5.1 and 7.2). Loads return the same owned shape.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct TurnRecord {
-    /// Positive durable task number owning this transcript.
-    pub task: u64,
-    /// Positive root-issued activation fence for the transcript.
-    pub attempt: u64,
-    /// Positive accepted turn number; sequence admission belongs to tasks.
-    pub turn: u32,
-    /// Cumulative accepted spend for this attempt, not an additional charge; represented by `u64`.
-    pub spent: u64,
-    /// No message fence is admitted in this current route; tasks refuses `Some` before mutation
-    /// until an actual inbox route joins.
-    pub read: Option<u64>,
-    /// Injected wall time when the root accepted the turn; it survives restart without depending on
-    /// the process clock.
-    pub at: Wall,
-    /// Owned transcript bytes, bounded by journal `transcript_bytes` before writing and by load
-    /// page budgets when read.
-    pub transcript: Box<[u8]>,
-}
-
-/// Root's accepted terminal identity (worker offer or actual root-translated
-/// unpriced terminal), saved atomically with task and
-/// financial writes before ACK; result bytes obey root admission (domain/engine.md, 7.4).
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct TerminalRecord {
-    /// Root-issued positive durable task identity.
-    pub task: u64,
-    /// Root-issued positive attempt identity; unchanged on replay.
-    pub attempt: u64,
-    /// Accepted cumulative expense for a priced worker offer or unchanged expense for an unpriced
-    /// root terminal; child counters change once.
-    pub cumulative: u64,
-    /// Exact bounded worker terminal, even when child lifecycle normalizes it; a refused answer
-    /// archives root's unpriced Invalid normalization. A lost claim is `Failed(Lost)` and spends a
-    /// try, whether or not a turn was kept.
-    pub end: jig_core_tasks::End,
-}
-
-/// Root's latest accepted turn metadata; the full transcript stays only in
-/// the immutable turn archive. Fleet fences earlier bodies (domain/engine.md, 7.2).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct TurnProof {
-    /// Positive consecutive accepted turn, supplied by the worker.
-    pub turn: u32,
-    /// Accepted cumulative priced spend; tasks owns all financial counters.
-    pub cumulative: u64,
-    /// Admitted message fence, taken with the turn and charge.
-    pub read: Option<u64>,
-}
-
-/// Root's current claim evidence, store to root on paged startup. At most
-/// tasks.tasks rows are kept; each has one latest turn and one terminal.
-/// Claim reserves map room before child mutation and replaces this row. Ending
-/// erases it atomically; immutable transcript/terminal archives never enter the
-/// live map. Startup validates every row or stops, dropping none silently
-/// (domain/engine.md, sections 6 and 7.2).
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct RunProof {
-    /// Positive task identity allocated by root; unique in the live proof table.
-    pub task: u64,
-    /// Positive current claim identity allocated by root.
-    pub attempt: u64,
-    /// Highest inbox message offered to this attempt in an assignment or committed relay.
-    pub offered: Option<u64>,
-    /// Latest accepted turn, or none before the first turn; no historical body is retained.
-    pub turn: Option<TurnProof>,
-    /// Typed accepted worker offer or actual root-translated unpriced terminal; present iff the
-    /// child answered this current attempt. At most twice task result bytes before normalization;
-    /// cleared on replacement/end.
-    pub terminal: Option<TerminalRecord>,
-}
-
-/// Root-owned immutable first accepted decision for one held-chat revision.
-/// Saved atomically with semantic task change and keyed people outcome; bounded
-/// reason is never restored into a live archive map.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct EscalationDecisionRecord {
-    /// Actual child's project, used to authenticate historical reads rather
-    /// than trust the caller's project.
-    pub project: u32,
-    /// Actual person requester from the accepted bounded semantic context;
-    /// current requester/policy-role standing controls replay privacy
-    pub requester: u64,
-    /// Positive task identity.
-    pub task: u64,
-    /// Positive checked semantic revision.
-    pub revision: u64,
-    /// Positive authenticated winning person.
-    pub by: u64,
-    /// Exact accepted bounded choice; rejection reason fits journal `result_bytes`/`transcript_bytes`
-    /// and both child bounds before mutation.
-    pub decision: jig_core_people::EscalationDecision,
-}
-
-/// Immutable decision evidence for a person-facing proposal race.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct ProposalDecisionRecord {
-    pub project: u32,
-    pub proposer: jig_core_tasks::Party,
-    pub proposal: u64,
-    pub kind: jig_core_tasks::ProposalKind,
-    pub by: u64,
-    pub choice: jig_core_people::ProposalChoice,
 }
 
 /// Owned typed row sent root to store in a commit or returned store to root in

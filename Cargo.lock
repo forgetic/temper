@@ -105,6 +105,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-core"
+version = "0.0.0"
+dependencies = [
+ "jig-core-accounts",
+ "jig-core-authority",
+ "jig-core-brief",
+ "jig-core-fleet",
+ "jig-core-notes",
+ "jig-core-people",
+ "jig-core-tasks",
+ "jig-core-views",
+ "skein-lib",
+]
+
+[[package]]
 name = "jig-core-accounts"
 version = "0.0.0"
 dependencies = [
@@ -544,10 +559,12 @@ dependencies = [
 name = "temper-engine-domain"
 version = "0.0.0"
 dependencies = [
+ "jig-core",
  "jig-core-accounts",
  "jig-core-authority",
  "jig-core-brief",
  "jig-core-fleet",
+ "jig-core-notes",
  "jig-core-people",
  "jig-core-tasks",
  "jig-core-views",
@@ -598,6 +615,7 @@ dependencies = [
  "jig-core-authority",
  "jig-core-brief",
  "jig-core-fleet",
+ "jig-core-notes",
  "jig-core-people",
  "jig-core-tasks",
  "jig-core-views",

@@ -139,14 +139,14 @@ pub(super) fn begin(
     task: u64,
     amendment: people::Amendment,
 ) {
-    let Some(context) = domain.tasks.delegation(task) else {
+    let Some(context) = domain.core.tasks.delegation(task) else {
         return person_control_refused(domain, request, people::Refusal::Ended);
     };
     let Some(role) = role else { return person_control_refused(domain, request, people::Refusal::Role) };
     let any_task = match role {
         people::Role::Owner | people::Role::Maintainer => true,
         people::Role::Member | people::Role::Observer => false,
-        people::Role::Policy { .. } => match domain.config.authority.role(project, role.number()) {
+        people::Role::Policy { .. } => match domain.core.authority.role(project, role.number()) {
             Some(policy) => policy.requests.allows(authority::RequestKind::Amend),
             None => false,
         },
@@ -156,7 +156,7 @@ pub(super) fn begin(
         return person_control_refused(domain, request, people::Refusal::Standing);
     }
     let role_number = escalation::role_number(role);
-    let Some(role_policy) = domain.config.authority.role(project, role_number) else {
+    let Some(role_policy) = domain.core.authority.role(project, role_number) else {
         return person_control_refused(domain, request, people::Refusal::Authority);
     };
     if !role_policy.requests.allows(authority::RequestKind::Amend) && !standing {
@@ -172,18 +172,18 @@ pub(super) fn begin(
         }
         let before = authority_value(&context.authority);
         let after = authority_value(after);
-        let implies = &domain.config.authority.rules().implies;
+        let implies = &domain.core.authority.rules().implies;
         stop_run = !authority::at_most(&before, &after, implies);
         if !authority::at_most(&after, &before, implies) {
-            let pool = tasks::Funder::Pool { project, person, period: domain.config.period };
-            let numbers = match domain.tasks.funding(pool) {
+            let pool = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
+            let numbers = match domain.core.tasks.funding(pool) {
                 Some(row) => row.numbers,
                 None => tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
             };
             let mut findings =
-                Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority bound"));
+                Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority bound"));
             let checked = authority::check_request_with_standing(
-                &domain.config.authority,
+                &domain.core.authority,
                 &authority::PersonAsk {
                     project,
                     role: role_number,
@@ -210,11 +210,11 @@ pub(super) fn begin(
             match answer {
                 authority::Answer::Allow => {}
                 authority::Answer::Propose => {
-                    let Some(proposal) = crate::fresh(&mut domain.counters, super::Family::Message) else {
+                    let Some(proposal) = crate::fresh(&mut domain.core.counters, super::Family::Message) else {
                         return person_control_refused(domain, request, people::Refusal::Limit);
                     };
                     assert!(
-                        domain.person_tasks.insert(request, PersonTaskRoute::AmendProposed { task, proposal })
+                        domain.core.person_tasks.insert(request, PersonTaskRoute::AmendProposed { task, proposal })
                             == Ok(None),
                         "one amendment proposal"
                     );
@@ -241,10 +241,13 @@ pub(super) fn begin(
             }
         }
     }
-    let Some(message) = crate::fresh(&mut domain.counters, super::Family::Message) else {
+    let Some(message) = crate::fresh(&mut domain.core.counters, super::Family::Message) else {
         return person_control_refused(domain, request, people::Refusal::Limit);
     };
-    assert!(domain.person_tasks.insert(request, PersonTaskRoute::Amended(task)) == Ok(None), "one person amendment");
+    assert!(
+        domain.core.person_tasks.insert(request, PersonTaskRoute::Amended(task)) == Ok(None),
+        "one person amendment"
+    );
     domain.work.push(Work::Tasks(tasks::Event::Amend {
         reply_to: ReplyTo::new(request),
         by: tasks::Party::Person(person),

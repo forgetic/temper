@@ -10,9 +10,10 @@
 //! [`uncommitted`]; [`resume`] releases at most one ready delivery. Refused
 //! admission returns ownership, successful admission may emit one commit, and
 //! failed storage emits one stop notice. No helper waits for its own effect.
-use crate::{Deployment, Family, Key, Record, Write};
+use crate::{Key, Record, Write};
 use alloc::boxed::Box;
 use core::mem::size_of;
+pub use jig_core::{Counters, fresh};
 use jig_core_people as people;
 use skein_lib::{
     Decision as SkeinDecision, Journal as SkeinJournal, JournalLimits, JournalRoom, List, Queue, ReplyTo, Token, Wall,
@@ -297,13 +298,6 @@ pub struct Decision {
 /// skein-lib's bounded commit barrier, over the root's wrapped writes and outputs.
 pub type Journal = SkeinJournal<Write, Output>;
 
-/// Deployment numbers retained by the root until the core owns them.
-#[derive(Debug)]
-pub struct Counters {
-    deployment: Deployment,
-    dirty: bool,
-}
-
 impl Decision {
     /// Root-only preflight of unused write/delivery slots before a synchronous
     /// role replacement; no reservation can interleave with another mutation
@@ -549,49 +543,6 @@ impl Decision {
     }
 }
 
-impl Counters {
-    /// An empty store needs the deployment identity committed even before its first task. The id is
-    /// a root input, drawn once by the shell at startup. Validated limits size the fixed held
-    /// queue; the next accepted decision emits the dirty header's commit.
-    #[must_use]
-    pub fn bootstrap(id: [u8; 16]) -> Counters {
-        let deployment = Deployment {
-            id,
-            tasks: 0,
-            people: 0,
-            sign_ins: 0,
-            messages: 0,
-            runs: 0,
-            calls: 0,
-            forge_rows: 0,
-            commits: 0,
-        };
-        Counters { deployment, dirty: true }
-    }
-
-    /// A loaded header names the last fully applied commit. It is durable; outstanding answers from
-    /// a previous process need not be reconstructed. The root supplies the decoded store header and
-    /// validated startup bounds; construction emits no effect.
-    #[must_use]
-    pub const fn new(deployment: Deployment) -> Counters {
-        Counters { deployment, dirty: false }
-    }
-
-    /// Pure snapshot of allocated counters, which may run ahead of the durable store until its
-    /// issued commits answer.
-    #[must_use]
-    pub const fn deployment(&self) -> Deployment {
-        self.deployment
-    }
-
-    /// Pure shell idle query: no dirty header, held delivery or unanswered issued commit remains. A
-    /// stopped journal is not complete.
-    #[must_use]
-    pub fn quiescent(&self, journal: &Journal) -> bool {
-        !self.dirty && journal.idle()
-    }
-}
-
 /// Translate temper's limits to skein-lib's generic journal capacities.
 #[must_use]
 pub const fn journal_limits(limits: &Limits) -> JournalLimits {
@@ -616,26 +567,6 @@ pub const fn room(limits: &Limits) -> JournalRoom {
 #[must_use]
 pub fn takes(journal: &Journal, limits: &Limits) -> bool {
     journal.takes(&room(limits))
-}
-
-/// Root numbers are never reused. Allocation is part of the admitted decision, even if its
-/// candidate is unused; the next commit saves the gap. The root chooses the counter family after
-/// admission. Returns its next positive `u64`, or `None` when stopped/exhausted, with no effect on
-/// refusal; emits no request itself.
-pub fn fresh(counters: &mut Counters, family: Family) -> Option<u64> {
-    let counter = match family {
-        Family::Task => &mut counters.deployment.tasks,
-        Family::Person => &mut counters.deployment.people,
-        Family::SignIn => &mut counters.deployment.sign_ins,
-        Family::Message => &mut counters.deployment.messages,
-        Family::Run => &mut counters.deployment.runs,
-        Family::Call => &mut counters.deployment.calls,
-        Family::ForgeRow => &mut counters.deployment.forge_rows,
-    };
-    let next = counter.checked_add(1)?;
-    *counter = next;
-    counters.dirty = true;
-    Some(next)
 }
 
 /// Return ownership on refusal. The root must call `takes` before making the decision; this
@@ -671,14 +602,13 @@ pub fn accept_pending(
     {
         return Err(decision);
     }
-    let writing = counters.dirty || !decision.writes.is_empty();
+    let writing = counters.dirty() || !decision.writes.is_empty();
     let mut batch = match decision.batch.take() {
         Some(batch) => batch,
         None => journal.decision(&room(limits)).expect("preflight reserved the whole decision"),
     };
     if writing {
-        counters.deployment.commits = counters.deployment.commits.checked_add(1).expect("admitted commit number");
-        batch.write(Write::Save(Record::Deployment(counters.deployment))).expect("header slot reserved");
+        batch.write(Write::Save(Record::Deployment(counters.next_commit()))).expect("header slot reserved");
         for at in 0..decision.writes.len() {
             let source = decision.writes.get_mut(at).expect("admitted write index");
             let key = source.key();
@@ -687,7 +617,6 @@ pub fn accept_pending(
             let write = core::mem::replace(source, Write::Erase(key));
             batch.write(write).expect("admitted decision writes");
         }
-        counters.dirty = false;
     }
     for _ in 0..decision.deliveries.len() {
         let delivery = decision.deliveries.pop().expect("admitted delivery count");

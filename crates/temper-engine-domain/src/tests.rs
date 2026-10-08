@@ -18,7 +18,7 @@ const DEPLOYMENT: Deployment = Deployment {
     messages: 0,
     runs: 0,
     calls: 0,
-    forge_rows: 0,
+    connector_rows: 0,
     commits: 0,
 };
 

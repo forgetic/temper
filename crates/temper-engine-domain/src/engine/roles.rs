@@ -12,21 +12,21 @@ use alloc::boxed::Box;
 use skein_lib::Queue;
 
 pub(super) fn allowed(domain: &Domain, person: u64, project: u32) -> Result<(), people::Refusal> {
-    if domain.people.role(person, project) != Some(people::Role::Owner) {
+    if domain.core.people.role(person, project) != Some(people::Role::Owner) {
         return Err(people::Refusal::Role);
     }
-    if domain.config.authority.policy(project).is_none() {
+    if domain.core.authority.policy(project).is_none() {
         return Err(people::Refusal::Unknown);
     }
-    let pool = tasks::Funder::Pool { project, person, period: domain.config.period };
-    let numbers = match domain.tasks.funding(pool) {
+    let pool = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
+    let numbers = match domain.core.tasks.funding(pool) {
         Some(record) => record.numbers,
         None => tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
     };
     let mut findings =
-        Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("validated authority bound"));
+        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("validated authority bound"));
     let checked = authority::check_request(
-        &domain.config.authority,
+        &domain.core.authority,
         &authority::PersonAsk {
             project,
             role: escalation::role_number(people::Role::Owner),
@@ -47,7 +47,7 @@ fn inspected(
 ) -> Result<Box<[tasks::EscalationContext]>, people::Refusal> {
     let mut output = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
     tasks::step(
-        &mut domain.tasks,
+        &mut domain.core.tasks,
         &super::environment_tasks(env),
         tasks::Event::InspectEscalations { reply_to: ReplyTo::new(request), project },
         &mut output,
@@ -154,7 +154,7 @@ pub(super) fn begin(
     for holding in &holdings {
         match holding.role {
             people::Role::Policy { role } => {
-                if domain.config.authority.role(project, role).is_none() {
+                if domain.core.authority.role(project, role).is_none() {
                     refused(domain, request, people::Refusal::Unknown);
                     return;
                 }
@@ -197,7 +197,7 @@ pub(super) fn begin(
     }
     let mut output = Queue::with_capacity(people::max_out(&env.limits.people));
     people::step(
-        &mut domain.people,
+        &mut domain.core.people,
         &super::environment_people(env),
         people::Event::ApplyRoles { reply_to: ReplyTo::new(request), request },
         &mut output,
@@ -233,7 +233,7 @@ pub(super) fn begin(
 fn recheck(domain: &mut Domain, env: &Env<Limits>, request: Token, project: u32) {
     let mut output = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
     tasks::step(
-        &mut domain.tasks,
+        &mut domain.core.tasks,
         &super::environment_tasks(env),
         tasks::Event::RecheckEscalations { reply_to: ReplyTo::new(request), project },
         &mut output,

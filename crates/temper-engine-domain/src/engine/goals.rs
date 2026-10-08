@@ -13,32 +13,32 @@ fn refuse(domain: &mut Domain, request: Token, why: people::Refusal) {
 }
 
 fn pool(domain: &Domain, project: u32, person: u64) -> (tasks::Funder, tasks::Numbers) {
-    let source = tasks::Funder::Pool { project, person, period: domain.config.period };
-    let numbers = match domain.tasks.funding(source) {
+    let source = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
+    let numbers = match domain.core.tasks.funding(source) {
         Some(row) => row.numbers,
-        None => tasks::Numbers { budget: domain.config.person_budget, spent: 0, spent_below: 0, reserved: 0 },
+        None => tasks::Numbers { budget: domain.core.settings.person_budget, spent: 0, spent_below: 0, reserved: 0 },
     };
     (source, numbers)
 }
 
 pub(super) fn ensure_pool(domain: &mut Domain, project: u32, person: u64) {
-    let period = tasks::Funder::Period { project, period: domain.config.period };
-    if domain.tasks.funding(period).is_none() {
+    let period = tasks::Funder::Period { project, period: domain.core.settings.period };
+    if domain.core.tasks.funding(period).is_none() {
         domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
             reply_to: super::internal(0),
             project,
-            period: domain.config.period,
-            budget: domain.config.period_budget,
+            period: domain.core.settings.period,
+            budget: domain.core.settings.period_budget,
         }));
     }
     let (source, _) = pool(domain, project, person);
-    if domain.tasks.funding(source).is_none() {
+    if domain.core.tasks.funding(source).is_none() {
         domain.work.push(Work::Tasks(tasks::Event::CarvePool {
             reply_to: super::internal(0),
             project,
             person,
-            period: domain.config.period,
-            budget: domain.config.person_budget,
+            period: domain.core.settings.period,
+            budget: domain.core.settings.person_budget,
         }));
     }
 }
@@ -57,30 +57,30 @@ pub(super) fn start(
     budget: u64,
     priority: u32,
 ) {
-    let Some(policy) = domain.config.authority.policy(project) else {
+    let Some(policy) = domain.core.authority.policy(project) else {
         return refuse(domain, request, people::Refusal::Unknown);
     };
     let role_number = super::escalation::role_number(role);
-    let Some(role_policy) = domain.config.authority.role(project, role_number) else {
+    let Some(role_policy) = domain.core.authority.role(project, role_number) else {
         return refuse(domain, request, people::Refusal::Role);
     };
     if !role_policy.requests.allows(authority::RequestKind::Create) {
         return refuse(domain, request, people::Refusal::Authority);
     }
-    let mut given = domain.config.chat_authority.clone();
+    let mut given = domain.core.settings.chat_authority.clone();
     given.budget.spend = budget;
-    if charter != domain.config.charter
+    if charter != domain.core.settings.charter
         || budget > policy.period_spend
-        || budget > domain.config.authority.rules().period_spend
-        || !authority::at_most(&given, &policy.ceiling, &domain.config.authority.rules().implies)
+        || budget > domain.core.authority.rules().period_spend
+        || !authority::at_most(&given, &policy.ceiling, &domain.core.authority.rules().implies)
     {
         return refuse(domain, request, people::Refusal::Authority);
     }
     let (source, numbers) = pool(domain, project, person);
     let mut findings =
-        Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority room"));
+        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority room"));
     let checked = authority::check_request(
-        &domain.config.authority,
+        &domain.core.authority,
         &authority::PersonAsk {
             project,
             role: role_number,
@@ -102,7 +102,7 @@ pub(super) fn start(
     if checked.answer != authority::Answer::Allow && !beyond {
         return refuse(domain, request, people::Refusal::Authority);
     }
-    let Some(task) = crate::fresh(&mut domain.counters, Family::Task) else {
+    let Some(task) = crate::fresh(&mut domain.core.counters, Family::Task) else {
         return refuse(domain, request, people::Refusal::Limit);
     };
     let spec = tasks::Spec { words: spec, parameters: Box::new([]), inputs: Box::new([]) };
@@ -131,18 +131,18 @@ pub(super) fn start(
     }
     if checked.answer == authority::Answer::Allow {
         ensure_pool(domain, project, person);
-        assert!(domain.made.insert(request, (task, true)) == Ok(None), "one goal make flight");
+        assert!(domain.core.made.insert(request, (task, true)) == Ok(None), "one goal make flight");
         domain.work.push(Work::Tasks(tasks::Event::Make {
             reply_to: ReplyTo::new(request),
             creator: tasks::Party::Person(person),
             batch: Box::new([new]),
         }));
     } else {
-        let Some(proposal) = crate::fresh(&mut domain.counters, Family::Message) else {
+        let Some(proposal) = crate::fresh(&mut domain.core.counters, Family::Message) else {
             return refuse(domain, request, people::Refusal::Limit);
         };
         assert!(
-            domain.goal_routes.insert(request, GoalRoute::Proposing { proposal }) == Ok(None),
+            domain.core.goal_routes.insert(request, GoalRoute::Proposing { proposal }) == Ok(None),
             "one goal proposal flight"
         );
         domain.work.push(Work::Tasks(tasks::Event::ProposePerson {
@@ -171,14 +171,14 @@ pub(super) fn decide(
     number: u64,
     choice: people::ProposalDecision,
 ) {
-    let Some(proposal) = domain.tasks.person_proposal(proposer, number) else {
+    let Some(proposal) = domain.core.tasks.person_proposal(proposer, number) else {
         return refuse(domain, request, people::Refusal::Ended);
     };
     if proposal.project != project || role.is_none() {
         return refuse(domain, request, people::Refusal::Standing);
     }
     let Some(role_policy) =
-        domain.config.authority.role(project, super::escalation::role_number(role.expect("checked role")))
+        domain.core.authority.role(project, super::escalation::role_number(role.expect("checked role")))
     else {
         return refuse(domain, request, people::Refusal::Standing);
     };
@@ -189,9 +189,9 @@ pub(super) fn decide(
         people::ProposalDecision::Accept => {
             let (source, numbers) = pool(domain, project, person);
             let mut findings =
-                Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority room"));
+                Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority room"));
             let checked = authority::check_request(
-                &domain.config.authority,
+                &domain.core.authority,
                 &authority::PersonAsk {
                     project,
                     role: super::escalation::role_number(role.expect("checked role")),
@@ -219,7 +219,7 @@ pub(super) fn decide(
             let mut goal = proposal.goal.clone();
             goal.funder = source;
             assert!(
-                domain.goal_routes.insert(
+                domain.core.goal_routes.insert(
                     request,
                     GoalRoute::Accepting { proposer, proposal: number, by: person, task: goal.number }
                 ) == Ok(None),
@@ -232,11 +232,11 @@ pub(super) fn decide(
             }
         }
         people::ProposalDecision::Reject { reason } => {
-            let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
+            let Some(message) = crate::fresh(&mut domain.core.counters, Family::Message) else {
                 return refuse(domain, request, people::Refusal::Limit);
             };
             assert!(
-                domain.goal_routes.insert(request, GoalRoute::Deciding { proposer, proposal: number, by: person })
+                domain.core.goal_routes.insert(request, GoalRoute::Deciding { proposer, proposal: number, by: person })
                     == Ok(None),
                 "one goal decision"
             );

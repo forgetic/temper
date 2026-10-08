@@ -388,7 +388,7 @@ fn effect_access(repository: &forge::Repository, what: &forge::What, kind: u16) 
 
 fn effect_key(domain: &Domain, key: CallKey) -> Box<[u8]> {
     let mut result = List::with_capacity(80);
-    append_hex(&mut result, &domain.counters.deployment().id);
+    append_hex(&mut result, &domain.core.counters.deployment().id);
     append_hex(&mut result, &key.task.to_be_bytes());
     append_hex(&mut result, &key.attempt.to_be_bytes());
     append_hex(&mut result, &key.completion.to_be_bytes());
@@ -422,7 +422,7 @@ pub(super) fn effect_call(
         );
         return;
     };
-    let Some(context) = domain.tasks.delegation(key.task) else {
+    let Some(context) = domain.core.tasks.delegation(key.task) else {
         decide_call(
             domain,
             &env.limits,
@@ -501,9 +501,9 @@ pub(super) fn effect_call(
         return;
     }
     let mut findings =
-        Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority findings"));
+        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
     let checked = authority::check_effect(
-        &domain.config.authority,
+        &domain.core.authority,
         &authority::EffectAsk {
             project: context.project,
             authority: authority_value(&context.authority),
@@ -525,7 +525,7 @@ pub(super) fn effect_call(
     );
     if checked != authority::Answer::Allow {
         let mut reasons =
-            List::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority findings"));
+            List::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
         for _ in 0..findings.len() {
             reasons.push(findings.pop().expect("counted finding")).expect("reserved finding room");
         }
@@ -539,7 +539,7 @@ pub(super) fn effect_call(
         );
         return;
     }
-    let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow) else {
+    let Some(entry) = crate::fresh(&mut domain.core.counters, Family::ConnectorRow) else {
         decide_call(
             domain,
             &env.limits,
@@ -562,7 +562,7 @@ pub(super) fn effect_call(
         );
         return;
     }
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
     domain.work.push(Work::Forge(forge::Event::Enqueue {
         entry: forge_client::Entry {
             number: entry,
@@ -595,7 +595,7 @@ pub(super) fn read_call(
             CallAnswer::ForgeRead(Box::new(Err(forge_client::api::Error::Missing))),
         );
     };
-    let Some(context) = domain.tasks.delegation(key.task) else {
+    let Some(context) = domain.core.tasks.delegation(key.task) else {
         return decide_call(
             domain,
             &env.limits,
@@ -609,9 +609,9 @@ pub(super) fn read_call(
     let allowed = match name {
         Some(name) if context.project == adopted.project && adopted.kinds.read => {
             let mut findings =
-                Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority findings"));
+                Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
             authority::check_call(
-                &domain.config.authority,
+                &domain.core.authority,
                 &authority::CallAsk {
                     project: context.project,
                     authority: authority_value(&context.authority),
@@ -642,7 +642,7 @@ pub(super) fn read_call(
             CallAnswer::ForgeRead(Box::new(Err(forge_client::api::Error::Forbidden))),
         );
     }
-    let Some(serial) = crate::fresh(&mut domain.counters, Family::Call) else {
+    let Some(serial) = crate::fresh(&mut domain.core.counters, Family::Call) else {
         return decide_call(
             domain,
             &env.limits,
@@ -663,7 +663,7 @@ pub(super) fn read_call(
         );
     }
     let owner = Token::new(serial | (1_u64 << 61_u32));
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
     assert!(domain.forge_reading.insert(owner, (to, key)) == Ok(None), "one fresh read correlation");
     domain.work.push(Work::Forge(forge::Event::Client(forge_client::Event::Read { owner, repository, read })));
 }
@@ -679,7 +679,7 @@ pub(super) fn subscribe_call(
     own_change: Option<u64>,
     paths: Box<[Box<[u8]>]>,
 ) {
-    let Some(number) = crate::fresh(&mut domain.counters, Family::Message) else {
+    let Some(number) = crate::fresh(&mut domain.core.counters, Family::Message) else {
         decide_call(
             domain,
             &env.limits,
@@ -713,9 +713,9 @@ pub(super) fn subscribe_call(
         return;
     }
     let token = to.into_token();
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "call room reserved");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call room reserved");
     assert!(
-        domain.routing_calls.insert(token, RoutedCall::Subscribe { key, subscription: number }) == Ok(None),
+        domain.core.routing_calls.insert(token, RoutedCall::Subscribe { key, subscription: number }) == Ok(None),
         "one routed call"
     );
     assert!(domain.forge_subscribing.insert(token, subscriber) == Ok(None), "one connector interest");
@@ -944,9 +944,9 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks:
         return;
     };
     let mut findings =
-        Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority findings"));
+        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
     let allowed = authority::check_effect(
-        &domain.config.authority,
+        &domain.core.authority,
         &authority::EffectAsk {
             project: goal.project,
             authority: authority_value(&goal.authority),
@@ -976,11 +976,11 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks:
     };
     let title = text.lines().next().unwrap_or(text);
     let mut plan = List::with_capacity(env.limits.forge.issue_policy.plan_items);
-    for view in domain.tasks.view_tasks() {
+    for view in domain.core.tasks.view_tasks() {
         if view.requester != tasks::Party::Task(goal.number) {
             continue;
         }
-        let Some(child) = domain.tasks.task(view.number) else { continue };
+        let Some(child) = domain.core.tasks.task(view.number) else { continue };
         let Some(words) = core::str::from_utf8(&child.spec.words).ok() else { continue };
         if plan
             .push(forge_issues::PlanItem {
@@ -1021,7 +1021,7 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks:
             }
         }
     }
-    let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow) else { return };
+    let Some(entry) = crate::fresh(&mut domain.core.counters, Family::ConnectorRow) else { return };
     domain.work.push(Work::Forge(forge::Event::Project {
         entry,
         repository: provider,
@@ -1041,10 +1041,10 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks:
 }
 
 pub(super) fn subscribe_goal(domain: &mut Domain, env: &Env<Limits>, goal: u64, topic: forge::Topic) {
-    if domain.tasks.task(goal).is_none() {
+    if domain.core.tasks.task(goal).is_none() {
         return;
     }
-    let Some(number) = crate::fresh(&mut domain.counters, Family::Message) else { return };
+    let Some(number) = crate::fresh(&mut domain.core.counters, Family::Message) else { return };
     let subscriber = forge::Subscriber { task: goal, number, topic, own_change: None, paths: Box::new([]) };
     if !domain.forge.can_subscribe(&env.limits.forge, &subscriber)
         || watch_names(domain, &env.limits, &subscriber).is_none()
@@ -1063,7 +1063,7 @@ pub(super) fn subscribe_goal(domain: &mut Domain, env: &Env<Limits>, goal: u64, 
 }
 
 pub(super) fn goal_subscribed(domain: &mut Domain, env: &Env<Limits>, subscriber: forge::Subscriber) {
-    let Some(task) = domain.tasks.task(subscriber.task) else { return };
+    let Some(task) = domain.core.tasks.task(subscriber.task) else { return };
     let mut present = false;
     for subscription in &task.subscriptions {
         if subscription.number == subscriber.number {
@@ -1088,18 +1088,18 @@ fn may_push(
 ) -> bool {
     let Some(what) = branch_what(branch, env.limits.forge.name_bytes) else { return false };
     let Some(name) = resource_name(repository, &what, env.limits.authority.segments) else { return false };
-    let Some(bound) = authority::max_out(domain.config.authority.limits()) else { return false };
+    let Some(bound) = authority::max_out(domain.core.authority.limits()) else { return false };
     let mut findings = Queue::with_capacity(bound);
     authority::check_run(
-        &domain.config.authority,
+        &domain.core.authority,
         &authority::RunAsk {
             project: context.project,
             authority: authority_value(&context.authority),
             numbers: authority_numbers(context.numbers),
             budget: authority::left(authority_numbers(context.numbers))
-                .min(domain.config.authority.rules().maximum_run_spend),
+                .min(domain.core.authority.rules().maximum_run_spend),
             wall: env.wall,
-            accounts: Box::new([domain.accounts.usable(domain.config.account)]),
+            accounts: Box::new([domain.core.accounts.usable(domain.core.settings.account)]),
             writes: Box::new([authority::Write {
                 effect: authority::Effect {
                     connector: domain.config.forge_connector,
@@ -1125,7 +1125,7 @@ fn tracked_ancestor(domain: &Domain, requester: tasks::Party) -> Option<u64> {
             tasks::Party::Task(task) => task,
             tasks::Party::Person(_) | tasks::Party::Deployment { .. } => return None,
         };
-        let row = domain.tasks.task(task)?;
+        let row = domain.core.tasks.task(task)?;
         if row.tracked.is_some() {
             return Some(task);
         }
@@ -1152,7 +1152,7 @@ pub(super) fn run_workspace(
     context: &tasks::RunContext,
     _attempt: u64,
 ) -> Option<RunWorkspace> {
-    let root = domain.tasks.root(context.task)?;
+    let root = domain.core.tasks.root(context.task)?;
     let parent = match context.requester {
         tasks::Party::Task(task) => Some(task),
         tasks::Party::Person(_) | tasks::Party::Deployment { .. } => None,
@@ -1264,7 +1264,7 @@ pub(super) fn run_workspace(
             };
             let held = match holder {
                 Some(owner) => {
-                    if domain.tasks.holder(&hub_name(domain.config.forge_connector, &name, &env.limits.tasks)?)
+                    if domain.core.tasks.holder(&hub_name(domain.config.forge_connector, &name, &env.limits.tasks)?)
                         != Some(owner)
                     {
                         return None;
@@ -1272,7 +1272,7 @@ pub(super) fn run_workspace(
                     authority::Writer::Ancestor
                 }
                 None => {
-                    if domain.tasks.holder(&hub_name(domain.config.forge_connector, &name, &env.limits.tasks)?)
+                    if domain.core.tasks.holder(&hub_name(domain.config.forge_connector, &name, &env.limits.tasks)?)
                         != Some(context.task)
                     {
                         return None;
@@ -1344,7 +1344,7 @@ pub(super) fn claimed_writes(
             repository: repository.provider.repository,
             what: branch_what(push, env.limits.forge.name_bytes)?,
         };
-        let holder = domain.tasks.holder(&hub_name(domain.config.forge_connector, &name, &env.limits.tasks)?)?;
+        let holder = domain.core.tasks.holder(&hub_name(domain.config.forge_connector, &name, &env.limits.tasks)?)?;
         if holder != task {
             holders.push(holder).ok()?;
         }
@@ -1364,12 +1364,12 @@ fn pull_what(number: Option<u64>) -> Option<forge::What> {
 /// Project landing gates are procedure gates before they become effect requirements.
 fn gate_required(domain: &Domain, project: u32, name: &authority::Name, parameters: u32, project_scope: bool) -> bool {
     let requirements = if project_scope {
-        match domain.config.authority.policy(project) {
+        match domain.core.authority.policy(project) {
             Some(policy) => &policy.requirements,
             None => return false,
         }
     } else {
-        &domain.config.authority.rules().requirements
+        &domain.core.authority.rules().requirements
     };
     for requirement in requirements.as_ref() {
         if requirement.connector == domain.config.forge_connector
@@ -1497,7 +1497,7 @@ fn landing_reviewers(
         if superseded {
             continue;
         }
-        let Some((person, role)) = domain.people.role_for_identity(
+        let Some((person, role)) = domain.core.people.role_for_identity(
             people::IdentityKey { provider: 0, subject: review.author.to_be_bytes().into() },
             domain.forge.repository(row.repository)?.project,
         ) else {
@@ -1524,7 +1524,7 @@ fn check_change_effect(
 ) -> authority::Answer {
     let Some(row) = domain.forge.change(task) else { return authority::Answer::Refuse };
     let Some(repository) = domain.forge.repository(row.repository) else { return authority::Answer::Refuse };
-    let Some(context) = domain.tasks.delegation(task) else { return authority::Answer::Refuse };
+    let Some(context) = domain.core.tasks.delegation(task) else { return authority::Answer::Refuse };
     if repository.project != context.project || repository.role == forge::Role::Context {
         return authority::Answer::Refuse;
     }
@@ -1554,7 +1554,7 @@ fn check_change_effect(
         additional: Box::new([]),
         guards: Box::new([]),
     };
-    let Some(judges) = authority::needed_judges(&domain.config.authority, context.project, &effect) else {
+    let Some(judges) = authority::needed_judges(&domain.core.authority, context.project, &effect) else {
         return authority::Answer::Refuse;
     };
     let mut guards = List::with_capacity(env.limits.authority.facts);
@@ -1598,9 +1598,9 @@ fn check_change_effect(
         }
     }
     let mut findings =
-        Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority findings"));
+        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
     authority::check_effect(
-        &domain.config.authority,
+        &domain.core.authority,
         &authority::EffectAsk {
             project: context.project,
             authority: authority_value(&context.authority),
@@ -1666,7 +1666,7 @@ pub(super) fn start_change(domain: &mut Domain, env: &Env<Limits>, context: &tas
     let branch = match branch {
         Some(branch) => branch,
         None => {
-            let Some(root) = domain.tasks.root(task) else { return false };
+            let Some(root) = domain.core.tasks.root(task) else { return false };
             let root = decimal(root);
             let task_bytes = decimal(task);
             let Some(length) = adopted.prefix.len().checked_add(root.len()) else { return false };
@@ -1778,7 +1778,7 @@ pub(super) fn start_change(domain: &mut Domain, env: &Env<Limits>, context: &tas
             }
         }
     }
-    let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow) else { return false };
+    let Some(entry) = crate::fresh(&mut domain.core.counters, Family::ConnectorRow) else { return false };
     domain.work.push(Work::Forge(forge::Event::StepChange {
         task,
         entry,
@@ -1790,7 +1790,7 @@ pub(super) fn start_change(domain: &mut Domain, env: &Env<Limits>, context: &tas
         },
         gates: Box::new([]),
         queue_repair_active: match domain.forge.queue_repair(provider, &base) {
-            Some((_, repair)) => domain.tasks.task(repair).is_some(),
+            Some((_, repair)) => domain.core.tasks.task(repair).is_some(),
             None => false,
         },
     }));
@@ -1822,7 +1822,7 @@ fn change_delegate(
     kind: forge_change::Delegate,
 ) -> Option<super::Delegate> {
     let row = domain.forge.change(task)?;
-    let context = domain.tasks.delegation(task)?;
+    let context = domain.core.tasks.delegation(task)?;
     let authority = child_authority(&context)?;
     let mut parameters = List::with_capacity(env.limits.tasks.parameters);
     parameters
@@ -1836,7 +1836,7 @@ fn change_delegate(
     parameters.push(tasks::Parameter::Bytes { name: 3, value: row.branch.clone() }).ok()?;
     let (executor, words, contract) = match kind {
         forge_change::Delegate::Produce => (
-            tasks::Executor::Agent { charter: domain.config.charter },
+            tasks::Executor::Agent { charter: domain.core.settings.charter },
             row.title.clone(),
             tasks::Contract::Change {
                 connector: domain.config.forge_connector,
@@ -1851,7 +1851,7 @@ fn change_delegate(
                 forge_change::Repair::Gate(_) => b"Repair the requested gate changes",
             };
             (
-                tasks::Executor::Agent { charter: domain.config.charter },
+                tasks::Executor::Agent { charter: domain.core.settings.charter },
                 Box::from(words),
                 tasks::Contract::Change {
                     connector: domain.config.forge_connector,
@@ -1863,7 +1863,7 @@ fn change_delegate(
         forge_change::Delegate::Resolve { base } => {
             parameters.push(tasks::Parameter::Bytes { name: 6, value: Box::from(&base[..]) }).ok()?;
             (
-                tasks::Executor::Agent { charter: domain.config.charter },
+                tasks::Executor::Agent { charter: domain.core.settings.charter },
                 Box::from(&b"Resolve the merge conflict and push the merge commit"[..]),
                 tasks::Contract::Change {
                     connector: domain.config.forge_connector,
@@ -1884,7 +1884,7 @@ fn change_delegate(
             let gate = found?;
             let executor = match gate.kind {
                 forge_change::GateKind::Agent | forge_change::GateKind::Check => {
-                    tasks::Executor::Agent { charter: domain.config.charter }
+                    tasks::Executor::Agent { charter: domain.core.settings.charter }
                 }
                 forge_change::GateKind::Person => tasks::Executor::Person(tasks::PersonAddress::Role(1)),
             };
@@ -1916,7 +1916,7 @@ fn change_delegate(
 fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool {
     let Some(row) = domain.forge.change(task) else { return false };
     if let Some((_, repair)) = domain.forge.queue_repair(row.repository, &row.base)
-        && domain.tasks.task(repair).is_some()
+        && domain.core.tasks.task(repair).is_some()
     {
         return true;
     }
@@ -1925,32 +1925,31 @@ fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool
     }
     let Some(repository) = domain.forge.repository(row.repository) else { return false };
     let project = repository.project;
-    let Some(policy) = domain.config.authority.policy(project) else { return false };
+    let Some(policy) = domain.core.authority.policy(project) else { return false };
     let mut authority = policy.ceiling.clone();
-    let period = domain.config.period;
-    let available = match domain.tasks.funding(tasks::Funder::Period { project, period }) {
+    let period = domain.core.settings.period;
+    let available = match domain.core.tasks.funding(tasks::Funder::Period { project, period }) {
         Some(funding) => funding
             .numbers
             .budget
             .saturating_sub(funding.numbers.spent)
             .saturating_sub(funding.numbers.spent_below)
             .saturating_sub(funding.numbers.reserved),
-        None => domain.config.period_budget,
+        None => domain.core.settings.period_budget,
     };
-    authority.budget.spend =
-        authority.budget.spend.min(available).min(domain.config.authority.rules().maximum_run_spend);
+    authority.budget.spend = authority.budget.spend.min(available).min(domain.core.authority.rules().maximum_run_spend);
     if authority.budget.spend == 0 {
         return false;
     }
     let provider = row.repository;
     let base = row.base.clone();
-    let Some(repair) = crate::fresh(&mut domain.counters, Family::Task) else { return false };
-    if domain.tasks.funding(tasks::Funder::Period { project, period }).is_none() {
+    let Some(repair) = crate::fresh(&mut domain.core.counters, Family::Task) else { return false };
+    if domain.core.tasks.funding(tasks::Funder::Period { project, period }).is_none() {
         domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
             reply_to: super::internal(u64::MAX - 2),
             project,
             period,
-            budget: domain.config.period_budget,
+            budget: domain.core.settings.period_budget,
         }));
     }
     let spec = tasks::Spec {
@@ -2000,7 +1999,7 @@ fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool
 
 #[expect(clippy::too_many_lines, reason = "one procedure decision translates the complete change vocabulary")]
 fn change_decision(domain: &mut Domain, env: &Env<Limits>, task: u64, choice: forge_change::Decision) {
-    let Some((connector, code, step)) = domain.tasks.procedure_due(task) else { return };
+    let Some((connector, code, step)) = domain.core.tasks.procedure_due(task) else { return };
     if connector != domain.config.forge_connector || code != 2 {
         return;
     }
@@ -2144,7 +2143,8 @@ pub(super) fn outputs(
                 let number = match domain.forge_keys.get(&key) {
                     Some(number) => *number,
                     None => {
-                        let number = crate::fresh(&mut domain.counters, Family::ForgeRow).expect("admitted forge row");
+                        let number =
+                            crate::fresh(&mut domain.core.counters, Family::ConnectorRow).expect("admitted forge row");
                         domain.forge_keys.insert(key, number).expect("bounded connector rows");
                         number
                     }
@@ -2207,7 +2207,7 @@ pub(super) fn outputs(
                         for collaborator in &adopted.collaborators {
                             let role = seeded_role(domain, adopted.repository.project, collaborator.permission);
                             if let Some(role) = role {
-                                match crate::fresh(&mut domain.counters, Family::Person) {
+                                match crate::fresh(&mut domain.core.counters, Family::Person) {
                                     Some(candidate) => {
                                         seeds
                                             .push(people::Seed {
@@ -2225,7 +2225,11 @@ pub(super) fn outputs(
                             }
                         }
                         if exhausted
-                            || !domain.people.can_seed(&env.limits.people, adopted.repository.project, seeds.as_slice())
+                            || !domain.core.people.can_seed(
+                                &env.limits.people,
+                                adopted.repository.project,
+                                seeds.as_slice(),
+                            )
                         {
                             domain.work.push(Work::Forge(forge::Event::ForgetAdoption {
                                 repository: adopted.repository.provider,
@@ -2281,7 +2285,7 @@ pub(super) fn outputs(
                     forge::Class::Kept => tasks::NewsClass::Kept,
                     forge::Class::Dropped => continue,
                 };
-                let number = crate::fresh(&mut domain.counters, Family::Message).expect("news number admitted");
+                let number = crate::fresh(&mut domain.core.counters, Family::Message).expect("news number admitted");
                 domain.work.push(Work::Tasks(tasks::Event::Notice {
                     task,
                     word: tasks::Word {
@@ -2296,9 +2300,9 @@ pub(super) fn outputs(
                 }));
             }
             forge::Request::Taken { task, .. } | forge::Request::Refused { task } => {
-                if domain.claiming.remove(&task).is_some() {
+                if domain.core.claiming.remove(&task).is_some() {
                     drop(domain.assignments.remove(&task));
-                    drop(domain.proofs.remove(&task));
+                    drop(domain.core.proofs.remove(&task));
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
                     continue;
                 }
@@ -2325,7 +2329,7 @@ pub(super) fn outputs(
             forge::Request::Outcome { entry, task, outcome } => {
                 if outcome != forge_client::Outcome::Uncertain {
                     let mut named = None;
-                    for (&key, answer) in &domain.calls {
+                    for (&key, answer) in &domain.connector_calls {
                         match answer {
                             CallAnswer::ForgeEffect { entry: number, .. } if *number == entry => {
                                 named = Some(key);
@@ -2357,11 +2361,11 @@ pub(super) fn outputs(
                     }
                     if let Some(key) = named {
                         let answer = CallAnswer::ForgeEffect { entry, outcome: Some(outcome) };
-                        domain.calls.insert(key, answer.clone()).expect("replaces retained named effect");
+                        domain.connector_calls.insert(key, answer.clone()).expect("replaces retained named effect");
                         save(decision, &env.limits, Write::Save(Record::Call(crate::CallRecord { key, answer })));
                     }
                 }
-                let cancelling = match domain.tasks.task(task) {
+                let cancelling = match domain.core.tasks.task(task) {
                     Some(row) => match &row.phase {
                         tasks::Phase::Closing(closing)
                         | tasks::Phase::Held { was: tasks::Was::Closing(closing), .. } => match &closing.ending {
@@ -2395,7 +2399,7 @@ pub(super) fn outputs(
                 }
             }
             forge::Request::ContinueRelease { task } => {
-                if let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow) {
+                if let Some(entry) = crate::fresh(&mut domain.core.counters, Family::ConnectorRow) {
                     domain.work.push(Work::Forge(forge::Event::ContinueRelease { task, entry }));
                 } else {
                     domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
@@ -2483,7 +2487,7 @@ pub(super) fn outputs(
                 } else if match domain.forge.issue(goal) {
                     Some(row) => row.pending.is_none(),
                     None => false,
-                } && let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow)
+                } && let Some(entry) = crate::fresh(&mut domain.core.counters, Family::ConnectorRow)
                 {
                     domain.work.push(Work::Forge(forge::Event::ProjectDesired { entry, goal }));
                 }

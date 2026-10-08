@@ -39,14 +39,20 @@ mod results;
 mod roles;
 
 use crate::{
-    CallAnswer, CallKey, Counters, Decision, Delivery, Family, Journal, JournalLimits, Key, Output, Range, Record,
-    RunProof, TerminalRecord, TurnProof, TurnRecord, Write, loads,
+    CallAnswer, CallKey, Decision, Delivery, Family, Journal, JournalLimits, Key, Output, Range, Record, RunProof,
+    TerminalRecord, TurnProof, TurnRecord, Write, loads,
 };
 use alloc::boxed::Box;
+use jig_core::{
+    Core, GoalRoute, HistoricalResult, PendingRelay, PersonProposalRoute, PersonTaskRoute, RestoringProof, RoutedCall,
+    Transcript,
+};
+pub use jig_core::{Model, RunCharter, RunPolicy};
 use jig_core_accounts as accounts;
 use jig_core_authority as authority;
 use jig_core_brief as brief;
 use jig_core_fleet as fleet;
+use jig_core_notes as notes;
 use jig_core_people as people;
 use jig_core_tasks as tasks;
 use jig_core_views as views;
@@ -85,6 +91,8 @@ pub struct Limits {
     pub accounts: accounts::Limits,
     /// Live watches, backlogs and expendable trace room.
     pub views: views::Limits,
+    /// Bounded notes indexes and pages kept by the core.
+    pub notes: notes::Limits,
     /// Forge connector subtree and its bounded outbox.
     pub forge: forge::Limits,
 }
@@ -165,53 +173,67 @@ pub struct Config {
     pub forge: forge_client::Config,
 }
 
+#[derive(Debug)]
+struct RootConfig {
+    landing: LandingPolicy,
+    permission_roles: Map<u32, Box<[people::PermissionRole]>>,
+    forge_connector: u16,
+}
+
+fn split_config(config: Config, projects: List<u32>) -> (jig_core::Config, RootConfig) {
+    let Config {
+        deployment,
+        seed,
+        owners,
+        deployment_provider,
+        authority,
+        landing,
+        permission_roles,
+        forge_connector,
+        recurring_connector,
+        charter,
+        run,
+        resume_bytes,
+        period,
+        period_budget,
+        person_budget,
+        chat_authority,
+        account,
+        account_generation,
+        account_valid,
+        forge: _,
+    } = config;
+    (
+        jig_core::Config {
+            deployment,
+            seed,
+            owners,
+            authority,
+            projects,
+            settings: jig_core::Settings {
+                deployment_provider,
+                recurring_connector,
+                charter,
+                run,
+                resume_bytes,
+                period,
+                period_budget,
+                person_budget,
+                chat_authority,
+                account,
+                account_generation,
+                account_valid,
+            },
+        },
+        RootConfig { landing, permission_roles, forge_connector },
+    )
+}
+
 /// Typed forge landing policy retained by the application for policy snapshots.
 #[derive(Debug)]
 pub struct LandingPolicy {
     pub deployment: Box<[LandingRule]>,
     pub projects: Map<u32, Box<[LandingRule]>>,
-}
-
-/// One configured model and its deployment-unit prices (domain/agent.md, 4.6).
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Model {
-    pub dialect: u32,
-    pub account: u32,
-    pub endpoint: u32,
-    pub name: Box<[u8]>,
-    pub max_tokens: u32,
-    pub input_price: u64,
-    pub cached_price: u64,
-    pub output_price: u64,
-    pub price_unit: u32,
-}
-
-/// Root-owned charter policy, independent of Smith's run vocabulary.
-#[derive(Clone, PartialEq, Eq, Debug)]
-#[expect(clippy::struct_excessive_bools, reason = "independent charter grants and run behavior")]
-pub struct RunPolicy {
-    pub instructions: Box<[u8]>,
-    pub waiting: skein_lib::Duration,
-    pub resume: bool,
-    pub turns: u32,
-    pub time: skein_lib::Duration,
-    pub model: Model,
-    pub alternatives: Box<[Model]>,
-    pub inspect: bool,
-    pub modify: bool,
-    pub shell: bool,
-    pub agents: bool,
-    pub call_timeout: skein_lib::Duration,
-}
-
-/// The root's complete task-specific charter, kept behind one bounded
-/// assignment cell so delivery queues carry a small fixed-size value.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct RunCharter {
-    pub policy: RunPolicy,
-    pub contract: tasks::Contract,
-    pub authority: tasks::Authority,
-    pub budget: u64,
 }
 
 /// A complete claim's assignment, root to worker after durability; its
@@ -786,13 +808,6 @@ struct InputCheck {
 }
 
 #[derive(Debug)]
-struct HistoricalResult {
-    task: u64,
-    kind: tasks::ResultKind,
-    words: Box<[u8]>,
-}
-
-#[derive(Debug)]
 struct DependencyRead {
     task: u64,
     ids: Box<[u64]>,
@@ -800,68 +815,11 @@ struct DependencyRead {
     results: List<HistoricalResult>,
 }
 
-/// Bounded recent opaque conversation while a due task's store pages are read.
-/// Empty turn bodies need no slot: they add nothing to a resumed conversation.
-#[derive(Debug)]
-struct Transcript {
-    previous_attempt: u64,
-    bytes: u64,
-    kept: u64,
-    turns: Queue<Box<[u8]>>,
-}
-
-#[derive(Debug)]
-struct PendingRelay {
-    previous: Option<u64>,
-    word: tasks::Word,
-}
-
 #[derive(Debug)]
 struct ResultPage {
     waiter: Token,
     rows: Box<[Record]>,
     next: Option<Key>,
-}
-
-#[derive(Debug)]
-struct RestoringProof {
-    attempt: u64,
-    turn: u32,
-    run_spent: u64,
-    last_answer: Option<u64>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum RoutedCall {
-    Escalation { key: CallKey, task: u64, revision: u64 },
-    Propose { key: CallKey, proposal: u64 },
-    Decide { key: CallKey, proposal: u64 },
-    Withdraw { key: CallKey, proposal: u64 },
-    Accepting { key: CallKey, proposer: u64, proposal: u64, message: u64 },
-    Message(CallKey),
-    Introduce(CallKey),
-    Subscribe { key: CallKey, subscription: u64 },
-    Unsubscribe(CallKey),
-    Control(CallKey),
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum PersonProposalRoute {
-    Deciding { request: Token, proposer: u64, proposal: u64, by: u64 },
-    Accepting { request: Token, person: u64, proposer: u64, proposal: u64, message: u64 },
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum PersonTaskRoute {
-    PoolSet { project: u32, person: u64 },
-    Take(u64),
-    HandBack(u64),
-    Answer(u64),
-    Cancel(u64),
-    Release(u64),
-    Prioritised(u32),
-    Amended(u64),
-    AmendProposed { task: u64, proposal: u64 },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -873,13 +831,6 @@ enum Startup {
     Failed,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum GoalRoute {
-    Proposing { proposal: u64 },
-    Accepting { proposer: u64, proposal: u64, by: u64, task: u64 },
-    Deciding { proposer: u64, proposal: u64, by: u64 },
-}
-
 /// Root owns every participating child and all unfinished handoffs; no child
 /// effect bypasses its decision journal. Bounded activation contexts replace
 /// raw task peeks; current proofs are root-owned and authentic financial state
@@ -887,20 +838,14 @@ enum GoalRoute {
 #[derive(Debug)]
 pub struct Domain {
     limits: Limits,
-    config: Config,
+    config: RootConfig,
+    core: Core,
     journal: Journal,
-    counters: Counters,
     stop_pending: bool,
     door_pass: bool,
     door_count: u32,
     startup: Startup,
-    tasks: tasks::Domain,
-    people: people::Domain,
-    fleet: fleet::Domain,
-    brief: brief::GatherDomain,
     brief_connectors: Slab<BriefConnector>,
-    accounts: accounts::Domain,
-    views: views::Domain,
     forge: forge::Domain,
     forge_keys: Map<forge::Key, u64>,
     adoption_restore: Map<Token, Option<forge::Repository>>,
@@ -910,41 +855,15 @@ pub struct Domain {
     forge_effecting: Map<u64, (ReplyTo, CallKey)>,
     forge_projection_due: Map<u64, skein_lib::Wall>,
     forge_change_due: Map<u64, skein_lib::Wall>,
-    watching: Map<Token, u64>,
-    view_phases: Map<u64, (u32, Option<u32>)>,
     loads: loads::Loads,
     assignments: Map<u64, Assignment>,
     payloads: Slab<Option<Payload>>,
     result_reads: Slab<Option<Read>>,
-    reading_results: Map<u64, Token>,
     result_pages: Queue<ResultPage>,
-    dependency_results: Map<u64, Box<[HistoricalResult]>>,
-    made: Map<Token, (u64, bool)>,
-    goal_routes: Map<Token, GoalRoute>,
-    delegating: Map<Token, (CallKey, Box<[tasks::Stub]>)>,
-    routing_calls: Map<Token, RoutedCall>,
-    routing_people_proposals: Map<Token, PersonProposalRoute>,
-    ending_positions: Map<u64, u64>,
-    saying: Map<Token, (u64, Option<u64>)>,
-    moving: Map<Token, u64>,
-    person_tasks: Map<Token, PersonTaskRoute>,
-    relaying: Option<PendingRelay>,
-    claiming: Map<u64, u64>,
-    contexts: Map<u64, Box<tasks::RunContext>>,
-    transcripts: Map<u64, Transcript>,
-    proofs: Map<u64, RunProof>,
-    calls: Map<CallKey, CallAnswer>,
-    pending_calls: Map<CallKey, bool>,
-    restoring_proofs: Map<u64, RestoringProof>,
-    /// Restored claims that no host has reported since startup.
-    unreported_restored: Map<u64, u64>,
+    connector_calls: Map<CallKey, CallAnswer>,
     work: Queue<Work>,
     before_header: Queue<Work>,
     cold_channels: Map<Token, bool>,
-    adopted: Queue<fleet::Event>,
-    due: Queue<Box<tasks::RunContext>>,
-    signing_in: Option<u64>,
-    projects: List<u32>,
 }
 
 impl Domain {
@@ -1018,24 +937,6 @@ impl Domain {
                 projects.push(owner.project).expect("configured projects bounded");
             }
         }
-        let owners = core::mem::replace(&mut config.owners, Box::new([]));
-        let mut tasks = tasks::Domain::new(&limits.tasks, config.seed, Box::new([config.charter]));
-        let task_env = Env { now: skein_lib::Time::ZERO, wall: skein_lib::Wall::EPOCH, limits: limits.tasks };
-        let mut config_out = Queue::with_capacity(tasks::max_out(&limits.tasks));
-        tasks::step(
-            &mut tasks,
-            &task_env,
-            tasks::Event::Kinds {
-                connector: config.forge_connector,
-                kinds: Box::new([tasks::Kind {
-                    connector: config.forge_connector,
-                    kind: 1,
-                    hold: tasks::HoldKind::Exclusive { taken: tasks::Taken::Waits },
-                }]),
-            },
-            &mut config_out,
-        );
-        let people = people::Domain::new(&limits.people, owners, config.deployment_provider);
         let mut forge = forge::Domain::new(
             &limits.forge,
             config.seed,
@@ -1079,17 +980,44 @@ impl Domain {
             assert_eq!(facts.pop(), Some(authority::PolicyFact::Changed { project }), "landing policy configured");
             assert!(forge.project_judges(project, built.criteria), "project judge table bounded");
         }
+        let (core_config, root_config) = split_config(config, projects);
+        let mut core = Core::new(core_config, &core_limits(limits));
+        let core_env = Env { now: skein_lib::Time::ZERO, wall: skein_lib::Wall::EPOCH, limits: core_limits(limits) };
+        let configured = jig_core::step(
+            &mut core,
+            &core_env,
+            jig_core::Event::Tasks(tasks::Event::Kinds {
+                connector: root_config.forge_connector,
+                kinds: Box::new([tasks::Kind {
+                    connector: root_config.forge_connector,
+                    kind: 1,
+                    hold: tasks::HoldKind::Exclusive { taken: tasks::Taken::Waits },
+                }]),
+            }),
+        );
+        match configured {
+            jig_core::Requests::Out(mut output) => {
+                match output.pop() {
+                    Some(jig_core::Request::Decided) => {}
+                    Some(
+                        jig_core::Request::Write(_)
+                        | jig_core::Request::Ask { .. }
+                        | jig_core::Request::Held(_)
+                        | jig_core::Request::Now(_)
+                        | jig_core::Request::Route(_),
+                    )
+                    | None => unreachable!("configuration decides nothing"),
+                }
+                assert!(output.is_empty(), "configuration emits no request");
+            }
+        }
         Domain {
             journal: Journal::new(&root_journal_limits(limits)),
-            counters: Counters::bootstrap(config.deployment),
             stop_pending: false,
             door_pass: false,
             door_count: 0,
             startup: Startup::Cold,
-            tasks,
-            people,
-            fleet: fleet::Domain::new(&limits.fleet),
-            brief: brief::GatherDomain::new(&brief_limits(&limits.brief)),
+            core,
             brief_connectors: Slab::with_capacity(
                 limits
                     .brief
@@ -1099,8 +1027,6 @@ impl Domain {
                     .checked_mul(2)
                     .expect("validated brief connector room"),
             ),
-            accounts: accounts::Domain::new(&limits.accounts),
-            views: views::Domain::new(&limits.views),
             forge,
             forge_keys: Map::with_capacity(forge_route::rows(limits).expect("forge row capacity")),
             adoption_restore: Map::with_capacity(limits.forge.adoptions),
@@ -1110,41 +1036,16 @@ impl Domain {
             forge_effecting: Map::with_capacity(limits.fleet.calls),
             forge_projection_due: Map::with_capacity(limits.forge.issues),
             forge_change_due: Map::with_capacity(limits.forge.changes),
-            watching: Map::with_capacity(limits.views.watchers),
-            view_phases: Map::with_capacity(limits.tasks.tasks),
             loads: loads::Loads::new(&limits.loads),
             assignments: Map::with_capacity(limits.tasks.tasks),
             payloads: Slab::with_capacity(payload_slots(limits).expect("valid payload room")),
             result_reads: Slab::with_capacity(limits.loads.loads),
-            reading_results: Map::with_capacity(limits.loads.loads),
             result_pages: Queue::with_capacity(limits.loads.loads),
-            dependency_results: Map::with_capacity(limits.tasks.tasks),
-            made: Map::with_capacity(limits.people.pending),
-            goal_routes: Map::with_capacity(limits.people.pending),
-            delegating: Map::with_capacity(limits.fleet.calls),
-            routing_calls: Map::with_capacity(limits.fleet.calls),
-            routing_people_proposals: Map::with_capacity(limits.people.pending),
-            ending_positions: Map::with_capacity(limits.tasks.tasks),
-            saying: Map::with_capacity(limits.people.pending),
-            moving: Map::with_capacity(limits.people.pending),
-            person_tasks: Map::with_capacity(limits.people.pending),
-            relaying: None,
-            claiming: Map::with_capacity(limits.tasks.tasks),
-            contexts: Map::with_capacity(limits.tasks.tasks),
-            transcripts: Map::with_capacity(limits.tasks.tasks),
-            proofs: Map::with_capacity(limits.tasks.tasks),
-            calls: Map::with_capacity(limits.call_records),
-            pending_calls: Map::with_capacity(limits.call_records),
-            restoring_proofs: Map::with_capacity(limits.tasks.tasks),
-            unreported_restored: Map::with_capacity(limits.tasks.tasks),
+            connector_calls: Map::with_capacity(limits.call_records),
             work: Queue::with_capacity(route_bound(limits).expect("valid routes")),
             before_header: Queue::with_capacity(limits.fleet.workers),
             cold_channels: Map::with_capacity(limits.fleet.workers),
-            adopted: Queue::with_capacity(limits.tasks.tasks.checked_mul(2).expect("valid adoption room")),
-            due: Queue::with_capacity(limits.tasks.tasks),
-            signing_in: None,
-            projects,
-            config,
+            config: root_config,
             limits: *limits,
         }
     }
@@ -1165,68 +1066,38 @@ impl Domain {
     #[must_use]
     pub fn quiescent(&self) -> bool {
         self.ready()
-            && self.counters.quiescent(&self.journal)
+            && self.core.quiescent(self.journal.idle())
             && self.loads.quiescent()
             && self.work.is_empty()
             && self.before_header.is_empty()
             && self.cold_channels.is_empty()
-            && self.adopted.is_empty()
-            && self.due.is_empty()
             && self.assignments.is_empty()
             && self.payloads.is_empty()
             && self.result_reads.is_empty()
-            && self.reading_results.is_empty()
             && self.result_pages.is_empty()
-            && self.dependency_results.is_empty()
-            && self.pending_calls.is_empty()
             && self.adoption_restore.is_empty()
             && self.forge_subscribing.is_empty()
             && self.forge_unsubscribing.is_empty()
             && self.forge_reading.is_empty()
             && self.forge.briefs_idle()
             && self.forge_effecting.is_empty()
-            && self.routing_calls.is_empty()
-            && self.routing_people_proposals.is_empty()
-            && self.made.is_empty()
-            && self.goal_routes.is_empty()
-            && self.delegating.is_empty()
-            && self.ending_positions.is_empty()
-            && self.saying.is_empty()
-            && self.moving.is_empty()
-            && self.person_tasks.is_empty()
-            && self.relaying.is_none()
-            && self.claiming.is_empty()
-            && self.contexts.is_empty()
-            && self.transcripts.is_empty()
-            && self.restoring_proofs.is_empty()
-            && self.unreported_restored.is_empty()
-            && self.signing_in.is_none()
-            && self.brief.is_idle()
             && self.brief_connectors.is_empty()
-            && !self.fleet.is_ready()
             && !self.forge.is_ready()
-            && self.fleet.turns() == 0
-            && self.fleet.calls() == 0
-            && self.fleet.next_deadline().is_none()
-            && !self.accounts.waiting()
     }
 
     /// Pure snapshot query for the latest allocated deployment counters; these may run ahead of
     /// store durability. Exposes neither children nor owned handoff bodies and emits no effect.
     #[must_use]
     pub fn deployment(&self) -> crate::Deployment {
-        self.counters.deployment()
+        self.core.counters.deployment()
     }
 
     /// Retired IO/body/child slots are reclaimed at iteration end, after every event and ready
     /// pass. Bounded child/slab bookkeeping releases only retired entries; issued loads still
     /// awaiting a terminal remain owned. Emits no request or terminal.
     pub fn reclaim(&mut self) {
-        self.tasks.reclaim();
-        self.people.reclaim();
-        self.fleet.reclaim();
+        self.core.reclaim();
         self.brief_connectors.reclaim();
-        self.views.reclaim();
         self.forge.reclaim();
         self.payloads.reclaim();
         self.result_reads.reclaim();
@@ -1236,21 +1107,7 @@ impl Domain {
     /// Shell/root caller discards every currently queued child observation, scanning at most each
     /// child's configured fact capacity. Emits no effect or terminal and changes no decision state.
     pub fn drain_facts(&mut self) {
-        for _ in 0..self.limits.tasks.facts {
-            let _fact = self.tasks.pop_fact();
-        }
-        for _ in 0..self.limits.people.facts {
-            let _fact = self.people.pop_fact();
-        }
-        for _ in 0..self.limits.fleet.facts {
-            let _fact = self.fleet.pop_fact();
-        }
-        for _ in 0..self.limits.accounts.facts {
-            let _fact = self.accounts.pop_fact();
-        }
-        for _ in 0..self.limits.views.facts {
-            let _fact = self.views.pop_fact();
-        }
+        self.core.drain_facts(&core_limits(&self.limits));
     }
 }
 
@@ -1273,20 +1130,30 @@ fn environment_views(env: &Env<Limits>) -> Env<views::Limits> {
     Env { now: env.now, wall: env.wall, limits: env.limits.views }
 }
 
+fn environment_core(env: &Env<Limits>) -> Env<jig_core::Limits> {
+    Env { now: env.now, wall: env.wall, limits: core_limits(&env.limits) }
+}
+
+fn core_limits(limits: &Limits) -> jig_core::Limits {
+    jig_core::Limits {
+        tasks: limits.tasks,
+        load_slots: limits.loads.loads,
+        call_records: limits.call_records,
+        people: limits.people,
+        fleet: limits.fleet,
+        brief: brief_limits(&limits.brief),
+        accounts: limits.accounts,
+        notes: limits.notes,
+        views: limits.views,
+    }
+}
+
 fn view_outputs(domain: &mut Domain, env: &Env<Limits>, output: &mut Queue<views::Request>, out: &mut Queue<Request>) {
     for _ in 0..output.len() {
         let request = output.pop().expect("view output count");
         match request {
             views::Request::Ended { watcher, .. } | views::Request::Refused { watcher, .. } => {
-                domain.watching.remove(&watcher);
-                let mut people_out = Queue::with_capacity(people::max_out(&env.limits.people));
-                people::step(
-                    &mut domain.people,
-                    &environment_people(env),
-                    people::Event::WatchClosed { watcher },
-                    &mut people_out,
-                );
-                assert!(people_out.is_empty(), "closing a live watch writes nothing");
+                domain.core.watch_closed(&environment_core(env), watcher);
             }
             views::Request::Watching { .. } | views::Request::Deliver { .. } => {}
         }
@@ -1294,9 +1161,31 @@ fn view_outputs(domain: &mut Domain, env: &Env<Limits>, output: &mut Queue<views
     }
 }
 
+fn view_requests(routed: jig_core::Requests, room: u32) -> Queue<views::Request> {
+    let mut child = Queue::with_capacity(room);
+    let jig_core::Requests::Out(mut marked) = routed;
+    for _ in 0..marked.len() {
+        match marked.pop().expect("view mark count") {
+            jig_core::Request::Now(value) => match *value {
+                jig_core::Now::View(request) => child.push(request),
+                jig_core::Now::Account(_) => unreachable!("view route does not own account output"),
+                jig_core::Now::NotesIndexed { .. }
+                | jig_core::Now::NotesRecalled { .. }
+                | jig_core::Now::NotesRefused { .. } => unreachable!("view route owns its now output"),
+            },
+            jig_core::Request::Decided => {}
+            jig_core::Request::Write(_)
+            | jig_core::Request::Ask { .. }
+            | jig_core::Request::Held(_)
+            | jig_core::Request::Route(_) => unreachable!("view route changes no decision"),
+        }
+    }
+    child
+}
+
 fn view_step(domain: &mut Domain, env: &Env<Limits>, event: views::Event, out: &mut Queue<Request>) {
-    let mut child = Queue::with_capacity(views::max_out(&env.limits.views));
-    views::step(&mut domain.views, &environment_views(env), event, &mut child);
+    let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::View(event));
+    let mut child = view_requests(routed, views::max_out(&env.limits.views));
     view_outputs(domain, env, &mut child, out);
 }
 
@@ -1311,10 +1200,12 @@ fn watch_subject(subject: views::Subject) -> people::WatchSubject {
 
 fn watched_project(domain: &Domain, subject: views::Subject) -> u32 {
     match subject {
-        views::Subject::Run { task, .. } | views::Subject::Tree { task } => match domain.tasks.delegation(task.raw()) {
-            Some(context) => context.project,
-            None => 0,
-        },
+        views::Subject::Run { task, .. } | views::Subject::Tree { task } => {
+            match domain.core.tasks.delegation(task.raw()) {
+                Some(context) => context.project,
+                None => 0,
+            }
+        }
         views::Subject::Goals { project } => project,
         views::Subject::Inbox { .. } => 0,
     }
@@ -1333,7 +1224,7 @@ fn watch_views(subject: people::WatchSubject, project: u32) -> views::Subject {
 
 fn watch_authorized(domain: &Domain, project: u32, role: Option<people::Role>) -> bool {
     let Some(role) = role else { return false };
-    match domain.config.authority.role(project, role.number()) {
+    match domain.core.authority.role(project, role.number()) {
         Some(policy) => policy.requests.allows(authority::RequestKind::Watch),
         None => false,
     }
@@ -1341,7 +1232,7 @@ fn watch_authorized(domain: &Domain, project: u32, role: Option<people::Role>) -
 
 fn note_authorized(domain: &Domain, project: u32, role: Option<people::Role>, scope: &people::NoteScope) -> bool {
     let Some(role) = role else { return false };
-    let Some(policy) = domain.config.authority.role(project, role.number()) else { return false };
+    let Some(policy) = domain.core.authority.role(project, role.number()) else { return false };
     match scope {
         people::NoteScope::Deployment => policy.authority.notes.0 & 4 != 0,
         people::NoteScope::Project => policy.authority.notes.0 & 2 != 0,
@@ -1372,14 +1263,14 @@ fn open_watch(
     subject: people::WatchSubject,
     out: &mut Queue<Request>,
 ) {
-    if !domain.ready() || !domain.counters.quiescent(&domain.journal) || !domain.work.is_empty() {
+    if !domain.ready() || !domain.core.counters.quiescent(domain.journal.idle()) || !domain.work.is_empty() {
         out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Busy });
         return;
     }
     let ask = people::Ask::Watch { project, subject };
     let mut admitted = Queue::with_capacity(people::max_out(&env.limits.people));
     people::step(
-        &mut domain.people,
+        &mut domain.core.people,
         &environment_people(env),
         people::Event::Ask { reply_to: ReplyTo::new(watcher), sign_in, key, ask },
         &mut admitted,
@@ -1401,14 +1292,16 @@ fn open_watch(
                     people::Outcome::Refused(people::Refusal::Unknown)
                 } else if project != 0 && !watch_authorized(domain, project, role) {
                     people::Outcome::Refused(people::Refusal::Authority)
-                } else if domain.watching.contains_key(&watcher) || domain.watching.len() >= env.limits.views.watchers {
+                } else if domain.core.watching.contains_key(&watcher)
+                    || domain.core.watching.len() >= env.limits.views.watchers
+                {
                     people::Outcome::Refused(people::Refusal::Busy)
                 } else {
                     match view_snapshot(domain, subject, env.limits.views.snapshot_bytes) {
                         Some(snapshot) => {
                             let mut views_out = Queue::with_capacity(views::max_out(&env.limits.views));
                             views::step(
-                                &mut domain.views,
+                                &mut domain.core.views,
                                 &environment_views(env),
                                 views::Event::Watch { watcher, subject, snapshot },
                                 &mut views_out,
@@ -1443,12 +1336,12 @@ fn open_watch(
                     }
                 };
                 if opened {
-                    let inserted = domain.watching.insert(watcher, person);
+                    let inserted = domain.core.watching.insert(watcher, person);
                     assert!(inserted == Ok(None), "watch slot checked before opening");
                 }
                 let mut decided = Queue::with_capacity(people::max_out(&env.limits.people));
                 people::step(
-                    &mut domain.people,
+                    &mut domain.core.people,
                     &environment_people(env),
                     people::Event::Decided { request, outcome },
                     &mut decided,
@@ -1535,7 +1428,7 @@ fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option
     let mut bytes = List::with_capacity(bound);
     match subject {
         views::Subject::Run { task, attempt } => {
-            let proof = domain.proofs.get(&task.raw())?;
+            let proof = domain.core.proofs.get(&task.raw())?;
             if proof.attempt != attempt.raw() {
                 return None;
             }
@@ -1547,7 +1440,7 @@ fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option
             view_byte(&mut bytes, &turn.to_be_bytes())?;
         }
         views::Subject::Tree { task: ancestor } => {
-            let rows = domain.tasks.view_tasks();
+            let rows = domain.core.tasks.view_tasks();
             for row in &rows {
                 if in_tree(&rows, row.number, ancestor.raw(), domain.limits.tasks.depth) {
                     view_byte(&mut bytes, &row.number.to_be_bytes())?;
@@ -1557,7 +1450,7 @@ fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option
             }
         }
         views::Subject::Goals { project } => {
-            let rows = domain.tasks.view_tasks();
+            let rows = domain.core.tasks.view_tasks();
             for row in &rows {
                 if row.project == project && row.tracked.is_some() {
                     view_byte(&mut bytes, &row.number.to_be_bytes())?;
@@ -1574,16 +1467,16 @@ fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option
 fn view_task_saved(domain: &mut Domain, limits: &Limits, decision: &mut Decision, task: &tasks::TaskRecord) {
     let phase = tasks::view_phase(&task.phase);
     let current = (phase, task.tracked);
-    let changed = match domain.view_phases.get(&task.number) {
+    let changed = match domain.core.view_phases.get(&task.number) {
         Some(previous) => *previous != current,
         None => true,
     };
     if phase == 4 {
-        domain.view_phases.remove(&task.number);
+        domain.core.view_phases.remove(&task.number);
     } else {
-        domain.view_phases.insert(task.number, current).expect("one live phase per task");
+        domain.core.view_phases.insert(task.number, current).expect("one live phase per task");
     }
-    if !changed || domain.watching.is_empty() {
+    if !changed || domain.core.watching.is_empty() {
         return;
     }
     let mut trees = List::with_capacity(limits.tasks.depth.saturating_add(1));
@@ -1593,7 +1486,7 @@ fn view_task_saved(domain: &mut Domain, limits: &Limits, decision: &mut Decision
         requester = match requester {
             tasks::Party::Task(parent) => {
                 trees.push(Token::new(parent)).expect("bounded ancestor depth");
-                match domain.tasks.delegation(parent) {
+                match domain.core.tasks.delegation(parent) {
                     Some(context) => context.requester,
                     None => break,
                 }
@@ -1633,14 +1526,6 @@ fn brief_limits(limits: &BriefLimits) -> brief::Limits {
         read_bytes: limits.read_bytes,
         brief_bytes: limits.brief_bytes,
     }
-}
-
-fn environment_brief(env: &Env<Limits>) -> Env<brief::Limits> {
-    Env { now: env.now, wall: env.wall, limits: brief_limits(&env.limits.brief) }
-}
-
-fn environment_accounts(env: &Env<Limits>) -> Env<accounts::Limits> {
-    Env { now: env.now, wall: env.wall, limits: env.limits.accounts }
 }
 
 fn environment_forge(env: &Env<Limits>) -> Env<forge::Limits> {
@@ -1700,7 +1585,7 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
             return;
         }
         Event::Unwatch { watcher } => {
-            if domain.watching.contains_key(&watcher) {
+            if domain.core.watching.contains_key(&watcher) {
                 view_step(domain, env, views::Event::Unwatch { watcher }, out);
             }
             return;
@@ -1715,15 +1600,19 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
             }
         }
         Event::Period { project, period, budget } => {
-            let allowed = match domain.config.authority.policy(project) {
+            let allowed = match domain.core.authority.policy(project) {
                 Some(policy) => budget <= policy.period_spend,
                 None => false,
             };
-            if domain.ready() && admits(domain, &env.limits) && period > 0 && period >= domain.config.period && allowed
+            if domain.ready()
+                && admits(domain, &env.limits)
+                && period > 0
+                && period >= domain.core.settings.period
+                && allowed
             {
-                domain.config.period = period;
-                domain.config.period_budget = budget;
-                if domain.tasks.funding(tasks::Funder::Period { project, period }).is_none() {
+                domain.core.settings.period = period;
+                domain.core.settings.period_budget = budget;
+                if domain.core.tasks.funding(tasks::Funder::Period { project, period }).is_none() {
                     domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
                         reply_to: internal(u64::MAX - 2),
                         project,
@@ -1731,10 +1620,10 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                         budget,
                     }));
                 }
-                for task in domain.tasks.recurring_tasks(project) {
+                for task in domain.core.tasks.recurring_tasks(project) {
                     domain.work.push(Work::Tasks(tasks::Event::TickRecurring { task, period }));
                 }
-                for task in domain.tasks.standing_tasks(project) {
+                for task in domain.core.tasks.standing_tasks(project) {
                     domain.work.push(Work::Tasks(tasks::Event::RenewStanding { task, period }));
                 }
             }
@@ -1783,9 +1672,9 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 domain,
                 env,
                 accounts::Event::Add {
-                    account: domain.config.account,
-                    generation: domain.config.account_generation,
-                    valid: domain.config.account_valid,
+                    account: domain.core.settings.account,
+                    generation: domain.core.settings.account_generation,
+                    valid: domain.core.settings.account_valid,
                 },
                 out,
             );
@@ -1849,7 +1738,9 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 }));
                 return;
             }
-            if domain.counters.deployment().people == u64::MAX || domain.counters.deployment().sign_ins == u64::MAX {
+            if domain.core.counters.deployment().people == u64::MAX
+                || domain.core.counters.deployment().sign_ins == u64::MAX
+            {
                 out.push(Request::Deliver(Delivery::WebReply {
                     to: reply_to,
                     sign_in: None,
@@ -1857,10 +1748,10 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 }));
                 return;
             }
-            let person = crate::fresh(&mut domain.counters, Family::Person).expect("person counter available");
-            let sign_in = crate::fresh(&mut domain.counters, Family::SignIn).expect("sign-in counter available");
-            domain.signing_in = Some(sign_in);
-            let kind = if identity.key.provider == domain.config.deployment_provider {
+            let person = crate::fresh(&mut domain.core.counters, Family::Person).expect("person counter available");
+            let sign_in = crate::fresh(&mut domain.core.counters, Family::SignIn).expect("sign-in counter available");
+            domain.core.signing_in = Some(sign_in);
+            let kind = if identity.key.provider == domain.core.settings.deployment_provider {
                 people::Kind::Service
             } else {
                 people::Kind::Person
@@ -1889,11 +1780,12 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 || task == 0
                 || attempt == 0
                 || body.completion == 0
-                || domain.fleet.calls() >= env.limits.fleet.calls
-                || domain.pending_calls.contains_key(&key)
+                || domain.core.fleet.calls() >= env.limits.fleet.calls
+                || domain.core.pending_calls.contains_key(&key)
                 || (call_needs_input(&body.tool) && domain.result_reads.len() >= domain.result_reads.capacity())
-                || (!domain.calls.contains_key(&key)
-                    && domain.calls.len().saturating_add(domain.pending_calls.len()) >= env.limits.call_records)
+                || (!domain.core.call_parts.contains_key(&key)
+                    && domain.core.call_parts.len().saturating_add(domain.core.pending_calls.len())
+                        >= env.limits.call_records)
             {
                 out.push(Request::CallBusy { channel, task, attempt, call });
                 return;
@@ -1998,13 +1890,13 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
         return;
     }
     let decision = route(domain, env);
-    domain.signing_in = None;
+    domain.core.signing_in = None;
     close(domain, env, decision, out);
 }
 
 fn admits(domain: &Domain, limits: &Limits) -> bool {
     route_takes(domain, limits)
-        && domain.counters.deployment().messages
+        && domain.core.counters.deployment().messages
             <= u64::MAX.checked_sub(u64::from(limits.tasks.tasks)).expect("task count fits u64")
         && domain.work.is_empty()
         && domain.journal.takes(&skein_lib::JournalRoom {
@@ -2014,22 +1906,20 @@ fn admits(domain: &Domain, limits: &Limits) -> bool {
 }
 
 fn remember_due(domain: &mut Domain, context: Box<tasks::RunContext>) {
-    for task in &domain.due {
+    for task in &domain.core.due {
         if task.task == context.task {
             return;
         }
     }
-    domain.due.push(context);
+    domain.core.due.push(context);
 }
 
 fn lose_channel(domain: &mut Domain, env: &Env<Limits>, channel: Token) {
-    let mut fleet_out = Queue::with_capacity(fleet::max_out(&env.limits.fleet));
-    fleet::step(&mut domain.fleet, &environment_fleet(env), fleet::Event::Lost { channel }, &mut fleet_out);
-    assert!(fleet_out.is_empty(), "loss changes topology and deadlines without child effects");
+    domain.core.lost_channel(&environment_core(env), channel);
 }
 
 fn close(domain: &mut Domain, env: &Env<Limits>, decision: Decision, out: &mut Queue<Request>) {
-    crate::accept_pending(&mut domain.journal, &mut domain.counters, &env.limits.journal, decision)
+    crate::accept_pending(&mut domain.journal, &mut domain.core.counters, &env.limits.journal, decision)
         .expect("root pressure reserved before child mutation");
     if domain.journal.stopped() {
         out.push(Request::Stop);
@@ -2217,7 +2107,7 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
             }
             Output::Deliver(Delivery::Relay { task, attempt, previous, word }) => {
                 let event = Token::new(word.number);
-                assert!(domain.relaying.replace(PendingRelay { previous, word }).is_none(), "one relay at a time");
+                assert!(domain.core.relaying.replace(PendingRelay { previous, word }).is_none(), "one relay at a time");
                 domain.work.push(Work::Fleet(fleet::Event::Inbound {
                     run: Token::new(task),
                     attempt: Token::new(attempt),
@@ -2317,9 +2207,9 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
             close(domain, env, decision, out);
             return;
         }
-        if domain.accounts.usable(domain.config.account) && !domain.due.is_empty() {
-            for _ in 0..domain.due.len() {
-                domain.work.push(Work::Activate(domain.due.pop().expect("waiting activation")));
+        if domain.core.accounts.usable(domain.core.settings.account) && !domain.core.due.is_empty() {
+            for _ in 0..domain.core.due.len() {
+                domain.work.push(Work::Activate(domain.core.due.pop().expect("waiting activation")));
             }
             let decision = route(domain, env);
             close(domain, env, decision, out);
@@ -2327,7 +2217,7 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
         }
         let mut decision = route_decision(domain, &env.limits).expect("journal room checked before fleet continuation");
         let mut fleet_out = Queue::with_capacity(fleet::max_out(&env.limits.fleet));
-        fleet::resume(&mut domain.fleet, &environment_fleet(env), &mut fleet_out);
+        fleet::resume(&mut domain.core.fleet, &environment_fleet(env), &mut fleet_out);
         fleet_outputs(domain, env, &mut decision, &mut fleet_out);
         route_into(domain, env, &mut decision);
         close(domain, env, decision, out);
@@ -2349,9 +2239,9 @@ fn fire_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>)
         return;
     }
     account_fire(domain, env, out);
-    if !domain.watching.is_empty() {
-        let mut view_out = Queue::with_capacity(views::max_out(&env.limits.views));
-        views::fire(&mut domain.views, &environment_views(env), &mut view_out);
+    if !domain.core.watching.is_empty() {
+        let routed = jig_core::fire(&mut domain.core, &environment_core(env), jig_core::Timer::View);
+        let mut view_out = view_requests(routed, views::max_out(&env.limits.views));
         view_outputs(domain, env, &mut view_out, out);
     }
     if !domain.ready() || !admits(domain, &env.limits) {
@@ -2367,7 +2257,7 @@ fn fire_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>)
     for goal in &due {
         domain.forge_projection_due.remove(goal);
         if domain.forge.issue(*goal).is_some()
-            && let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow)
+            && let Some(entry) = crate::fresh(&mut domain.core.counters, Family::ConnectorRow)
         {
             domain.work.push(Work::Forge(forge::Event::ProjectDesired { entry, goal: *goal }));
         }
@@ -2385,15 +2275,12 @@ fn fire_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>)
     let mut forge_out = Queue::with_capacity(forge::max_out(&env.limits.forge));
     forge::fire(&mut domain.forge, &environment_forge(env), &mut forge_out);
     forge_route::outputs(domain, env, &mut decision, &mut forge_out);
-    let mut tasks_out = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
-    tasks::fire(&mut domain.tasks, &environment_tasks(env), &mut tasks_out);
-    tasks_outputs(domain, env, &mut decision, &mut tasks_out, false, false);
-    let mut fleet_out = Queue::with_capacity(fleet::max_out(&env.limits.fleet));
-    fleet::fire(&mut domain.fleet, &environment_fleet(env), &mut fleet_out);
-    fleet_outputs(domain, env, &mut decision, &mut fleet_out);
-    let mut brief_out = Queue::with_capacity(brief::gather_max_out(&brief_limits(&env.limits.brief)));
-    brief::gather_fire(&mut domain.brief, &environment_brief(env), &mut brief_out);
-    brief_outputs(domain, env, &mut decision, &mut brief_out);
+    let routed = jig_core::fire(&mut domain.core, &environment_core(env), jig_core::Timer::Tasks);
+    route_core_requests(domain, env, &mut decision, routed, false, false);
+    let routed = jig_core::fire(&mut domain.core, &environment_core(env), jig_core::Timer::Fleet);
+    route_core_requests(domain, env, &mut decision, routed, false, false);
+    let routed = jig_core::fire(&mut domain.core, &environment_core(env), jig_core::Timer::Brief);
+    route_core_requests(domain, env, &mut decision, routed, false, false);
     route_into(domain, env, &mut decision);
     close(domain, env, decision, out);
 }
@@ -2404,6 +2291,92 @@ fn route(domain: &mut Domain, env: &Env<Limits>) -> Decision {
     decision
 }
 
+fn route_core_requests(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    decision: &mut Decision,
+    requests: jig_core::Requests,
+    person_proposal: bool,
+    task_escalation: bool,
+) {
+    match requests {
+        jig_core::Requests::Out(mut output) => {
+            for _ in 0..output.len() {
+                match output.pop().expect("core output count") {
+                    jig_core::Request::Write(write) => match write {
+                        jig_core::Write::Save(record) => match record {
+                            jig_core::Record::People(row) => {
+                                save(decision, &env.limits, Write::Save(Record::People(row)));
+                            }
+                            jig_core::Record::Core(_) | jig_core::Record::Tasks(_) | jig_core::Record::Notes(_) => {
+                                unreachable!("the core route owns its write family")
+                            }
+                        },
+                        jig_core::Write::Erase(key) => match key {
+                            jig_core::Key::People(key) => save(decision, &env.limits, Write::Erase(Key::People(key))),
+                            jig_core::Key::Tasks(key) => save(decision, &env.limits, Write::Erase(Key::Tasks(key))),
+                            jig_core::Key::Core(_) | jig_core::Key::Notes(_) => {
+                                unreachable!("the core route owns its erase family")
+                            }
+                        },
+                    },
+                    jig_core::Request::Ask { connector, ask } => {
+                        let request = match ask {
+                            jig_core::Ask::Gather { section, budget } => {
+                                brief::GatherRequest::Gather { connector, section, budget }
+                            }
+                            jig_core::Ask::CutTo { section, size } => {
+                                brief::GatherRequest::CutTo { connector, section, size }
+                            }
+                            jig_core::Ask::Drop { section } => brief::GatherRequest::Drop { connector, section },
+                        };
+                        let mut child = Queue::with_capacity(1);
+                        child.push(request);
+                        brief_outputs(domain, env, decision, &mut child);
+                    }
+                    jig_core::Request::Route(route) => match *route {
+                        jig_core::Route::Tasks(request) => {
+                            let mut child = Queue::with_capacity(1);
+                            child.push(*request);
+                            tasks_outputs(domain, env, decision, &mut child, person_proposal, task_escalation);
+                        }
+                        jig_core::Route::People(request) => {
+                            let mut child = Queue::with_capacity(1);
+                            child.push(request);
+                            people_outputs(domain, env, decision, &mut child);
+                        }
+                        jig_core::Route::Brief(request) => {
+                            let mut child = Queue::with_capacity(1);
+                            child.push(*request);
+                            brief_outputs(domain, env, decision, &mut child);
+                        }
+                        jig_core::Route::Fleet(request) => {
+                            let mut child = Queue::with_capacity(1);
+                            child.push(*request);
+                            fleet_outputs(domain, env, decision, &mut child);
+                        }
+                    },
+                    jig_core::Request::Held(held) => match *held {
+                        jig_core::Held::Relay { task, attempt, previous, word } => {
+                            emit(decision, &env.limits, Delivery::Relay { task, attempt, previous, word });
+                        }
+                        jig_core::Held::PeopleReply { to, sign_in, reply } => {
+                            emit(decision, &env.limits, Delivery::WebReply { to, sign_in, reply });
+                        }
+                        jig_core::Held::NotesLoad { .. }
+                        | jig_core::Held::NotesWritten { .. }
+                        | jig_core::Held::NotesDeleted { .. } => {
+                            unreachable!("the current application has no note caller")
+                        }
+                    },
+                    jig_core::Request::Now(_) => unreachable!("the current application has no immediate core route"),
+                    jig_core::Request::Decided => {}
+                }
+            }
+        }
+    }
+}
+
 fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
     for _ in 0..route_bound(&env.limits).expect("valid route bound") {
         let Some(work) = domain.work.pop() else {
@@ -2411,34 +2384,28 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
         };
         match work {
             Work::Tasks(event) => {
-                let mut out = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
-                tasks::step(&mut domain.tasks, &environment_tasks(env), event, &mut out);
-                tasks_outputs(domain, env, decision, &mut out, false, false);
+                let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::Tasks(event));
+                route_core_requests(domain, env, decision, routed, false, false);
             }
             Work::PersonProposal(event) => {
-                let mut out = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
-                tasks::step(&mut domain.tasks, &environment_tasks(env), event, &mut out);
-                tasks_outputs(domain, env, decision, &mut out, true, false);
+                let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::Tasks(event));
+                route_core_requests(domain, env, decision, routed, true, false);
             }
             Work::TaskEscalation(event) => {
-                let mut out = Queue::with_capacity(tasks::max_out(&env.limits.tasks));
-                tasks::step(&mut domain.tasks, &environment_tasks(env), event, &mut out);
-                tasks_outputs(domain, env, decision, &mut out, false, true);
+                let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::Tasks(event));
+                route_core_requests(domain, env, decision, routed, false, true);
             }
             Work::People(event) => {
-                let mut out = Queue::with_capacity(people::max_out(&env.limits.people));
-                people::step(&mut domain.people, &environment_people(env), event, &mut out);
-                people_outputs(domain, env, decision, &mut out);
+                let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::People(event));
+                route_core_requests(domain, env, decision, routed, false, false);
             }
             Work::Fleet(event) => {
-                let mut out = Queue::with_capacity(fleet::max_out(&env.limits.fleet));
-                fleet::step(&mut domain.fleet, &environment_fleet(env), event, &mut out);
-                fleet_outputs(domain, env, decision, &mut out);
+                let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::Fleet(event));
+                route_core_requests(domain, env, decision, routed, false, false);
             }
             Work::Brief(event) => {
-                let mut out = Queue::with_capacity(brief::gather_max_out(&brief_limits(&env.limits.brief)));
-                brief::gather_step(&mut domain.brief, &environment_brief(env), event, &mut out);
-                brief_outputs(domain, env, decision, &mut out);
+                let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::Brief(event));
+                route_core_requests(domain, env, decision, routed, false, false);
             }
             Work::StartBrief { task } => start_brief(domain, env, task),
             Work::Forge(event) => {
@@ -2447,7 +2414,7 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
                 forge_route::outputs(domain, env, decision, &mut out);
             }
             Work::TasksClaim { task, attempt, writes } => {
-                if domain.claiming.get(&task) == Some(&attempt) {
+                if domain.core.claiming.get(&task) == Some(&attempt) {
                     let budget = domain.assignments.get(&task).expect("claim has assignment").run.budget;
                     domain.work.push(Work::Tasks(tasks::Event::Claim {
                         reply_to: internal(task),
@@ -2485,15 +2452,6 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
     assert!(domain.work.is_empty(), "finite synchronous root handoffs finish within the configured route bound");
 }
 
-fn append_word(existing: &[tasks::Word], word: &tasks::Word, capacity: u32) -> Box<[tasks::Word]> {
-    let mut words = List::with_capacity(capacity);
-    for item in existing {
-        words.push(item.clone()).expect("accepted inbox count");
-    }
-    words.push(word.clone()).expect("accepted inbox count");
-    words.into_boxed()
-}
-
 #[expect(clippy::too_many_arguments, reason = "one authenticated message route with optional question identity")]
 fn route_person_message(
     domain: &mut Domain,
@@ -2505,7 +2463,7 @@ fn route_person_message(
     question: Option<u64>,
     words: Box<[u8]>,
 ) {
-    let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
+    let Some(message) = crate::fresh(&mut domain.core.counters, Family::Message) else {
         domain.work.push(Work::People(people::Event::Decided {
             request,
             outcome: people::Outcome::Refused(people::Refusal::Limit),
@@ -2516,7 +2474,7 @@ fn route_person_message(
         Some(number) => tasks::MessageKind::Answer { question: number },
         None => tasks::MessageKind::Words,
     };
-    assert!(domain.saying.insert(request, (task, question)) == Ok(None), "one person message flight");
+    assert!(domain.core.saying.insert(request, (task, question)) == Ok(None), "one person message flight");
     domain.work.push(Work::Tasks(tasks::Event::Message {
         reply_to: ReplyTo::new(request),
         project,
@@ -2543,7 +2501,7 @@ fn route_person_priorities(
 ) {
     let allowed = match role {
         Some(people::Role::Owner | people::Role::Maintainer | people::Role::Policy { .. }) => {
-            match domain.config.authority.role(project, escalation::role_number(role.expect("checked role"))) {
+            match domain.core.authority.role(project, escalation::role_number(role.expect("checked role"))) {
                 Some(policy) => policy.requests.allows(authority::RequestKind::Amend),
                 None => false,
             }
@@ -2557,7 +2515,7 @@ fn route_person_priorities(
         return person_control_refused(domain, request, people::Refusal::Limit);
     }
     assert!(
-        domain.person_tasks.insert(request, PersonTaskRoute::Prioritised(project)) == Ok(None),
+        domain.core.person_tasks.insert(request, PersonTaskRoute::Prioritised(project)) == Ok(None),
         "one priority route"
     );
     domain.work.push(Work::Tasks(tasks::Event::Prioritise {
@@ -2575,10 +2533,8 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
             people::Request::ServiceMade { request, outcome } => {
                 domain.work.push(Work::People(people::Event::Decided { request, outcome }));
             }
-            people::Request::Save { record } => save(decision, &env.limits, Write::Save(Record::People(record))),
-            people::Request::Erase { key } => save(decision, &env.limits, Write::Erase(Key::People(key))),
-            people::Request::Reply { to, reply } => {
-                emit(decision, &env.limits, Delivery::WebReply { to, sign_in: domain.signing_in, reply });
+            people::Request::Save { .. } | people::Request::Erase { .. } | people::Request::Reply { .. } => {
+                unreachable!("the core marks party writes and held replies")
             }
             people::Request::Route { request, person, project, role, ask } => match *ask {
                 people::Ask::Watch { .. } => unreachable!("watch routes before the decision loop"),
@@ -2596,13 +2552,9 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                 people::Ask::MakeService { role: service_role, .. } => {
                     let outcome = match roles::allowed(domain, person, project) {
                         Ok(())
-                            if domain
-                                .config
-                                .authority
-                                .role(project, escalation::role_number(service_role))
-                                .is_some() =>
+                            if domain.core.authority.role(project, escalation::role_number(service_role)).is_some() =>
                         {
-                            match crate::fresh(&mut domain.counters, Family::Person) {
+                            match crate::fresh(&mut domain.core.counters, Family::Person) {
                                 Some(candidate) => {
                                     domain
                                         .work
@@ -2701,9 +2653,9 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
                     escalation::begin(domain, request, person, role, project, task, revision, decision);
                 }
                 people::Ask::DecideProposal { proposer, proposal, decision: choice, .. } => {
-                    if domain.tasks.person_proposal(proposer, proposal).is_some() {
+                    if domain.core.tasks.person_proposal(proposer, proposal).is_some() {
                         goals::decide(domain, env, request, person, role, project, proposer, proposal, choice);
-                    } else if domain.tasks.proposal(proposer, proposal).is_some() {
+                    } else if domain.core.tasks.proposal(proposer, proposal).is_some() {
                         proposals::person_decide(
                             domain, env, decision, request, person, role, project, proposer, proposal, choice,
                         );
@@ -2765,7 +2717,7 @@ fn route_person_task(
         | people::Ask::Release { .. }
         | people::Ask::SetGoal { .. } => unreachable!("person-task route owns its ask"),
     };
-    let Some(context) = domain.tasks.delegation(task) else {
+    let Some(context) = domain.core.tasks.delegation(task) else {
         domain.work.push(Work::People(people::Event::Decided {
             request,
             outcome: people::Outcome::Refused(people::Refusal::Ended),
@@ -2773,7 +2725,7 @@ fn route_person_task(
         return;
     };
     let allowed = context.project == project
-        && match domain.tasks.executor(task).expect("live task has executor") {
+        && match domain.core.tasks.executor(task).expect("live task has executor") {
             tasks::Executor::Person(tasks::PersonAddress::Person(address)) => {
                 address == person
                     && match &ask {
@@ -2871,14 +2823,14 @@ fn route_person_task(
         | people::Ask::Release { .. }
         | people::Ask::SetGoal { .. } => unreachable!("person-task route owns its ask"),
     };
-    assert!(domain.person_tasks.insert(request, route) == Ok(None), "one routed person task per keyed flight");
+    assert!(domain.core.person_tasks.insert(request, route) == Ok(None), "one routed person task per keyed flight");
     domain.work.push(Work::Tasks(event));
 }
 
 fn person_tree(domain: &Domain, person: u64, task: u64) -> bool {
     let mut next = task;
     for _ in 0..=domain.limits.tasks.depth {
-        let Some(context) = domain.tasks.delegation(next) else { return false };
+        let Some(context) = domain.core.tasks.delegation(next) else { return false };
         match context.requester {
             tasks::Party::Person(requester) => return requester == person,
             tasks::Party::Task(parent) => next = parent,
@@ -2889,7 +2841,7 @@ fn person_tree(domain: &Domain, person: u64, task: u64) -> bool {
 }
 
 fn person_escalation_recipient(domain: &Domain, person: u64, role: people::Role, task: u64) -> bool {
-    let Some(context) = domain.tasks.escalation(task) else { return false };
+    let Some(context) = domain.core.tasks.escalation(task) else { return false };
     match context.escalation {
         tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Person(holder), .. } => holder == person,
         tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Role { project, role: holder }, .. } => {
@@ -2943,7 +2895,7 @@ fn route_person_control(
             unreachable!("control route owns its ask")
         }
     };
-    let Some(context) = domain.tasks.delegation(task) else {
+    let Some(context) = domain.core.tasks.delegation(task) else {
         return person_control_refused(domain, request, people::Refusal::Ended);
     };
     let Some(holding) = role else {
@@ -2952,7 +2904,7 @@ fn route_person_control(
     let any_task = match holding {
         people::Role::Owner | people::Role::Maintainer => true,
         people::Role::Member | people::Role::Observer => false,
-        people::Role::Policy { .. } => match domain.config.authority.role(project, holding.number()) {
+        people::Role::Policy { .. } => match domain.core.authority.role(project, holding.number()) {
             Some(policy) => policy.requests.allows(control_kind),
             None => false,
         },
@@ -2961,8 +2913,8 @@ fn route_person_control(
     if context.project != project || !any_task && !standing {
         return person_control_refused(domain, request, people::Refusal::Standing);
     }
-    let pool = tasks::Funder::Pool { project, person, period: domain.config.period };
-    let numbers = match domain.tasks.funding(pool) {
+    let pool = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
+    let numbers = match domain.core.tasks.funding(pool) {
         Some(record) => record.numbers,
         None => tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
     };
@@ -2992,9 +2944,9 @@ fn route_person_control(
         }
     };
     let mut findings =
-        Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("bounded findings"));
+        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("bounded findings"));
     let checked = authority::check_request_with_standing(
-        &domain.config.authority,
+        &domain.core.authority,
         &authority::PersonAsk {
             project,
             role: escalation::role_number(holding),
@@ -3019,7 +2971,10 @@ fn route_person_control(
             if reason.len() > usize::try_from(domain.limits.tasks.result_bytes).expect("u32 fits usize") {
                 return person_control_refused(domain, request, people::Refusal::Limit);
             }
-            assert!(domain.person_tasks.insert(request, PersonTaskRoute::Cancel(task)) == Ok(None), "one cancel route");
+            assert!(
+                domain.core.person_tasks.insert(request, PersonTaskRoute::Cancel(task)) == Ok(None),
+                "one cancel route"
+            );
             domain.work.push(Work::Tasks(tasks::Event::Control {
                 reply_to: ReplyTo::new(request),
                 by: tasks::Party::Person(person),
@@ -3029,7 +2984,7 @@ fn route_person_control(
         }
         people::Ask::Release { .. } => {
             assert!(
-                domain.person_tasks.insert(request, PersonTaskRoute::Release(task)) == Ok(None),
+                domain.core.person_tasks.insert(request, PersonTaskRoute::Release(task)) == Ok(None),
                 "one release route"
             );
             domain.work.push(Work::Tasks(tasks::Event::Control {
@@ -3074,7 +3029,7 @@ fn move_for_person(
     task: u64,
     reason: Box<[u8]>,
 ) {
-    let Some(context) = domain.tasks.delegation(task) else {
+    let Some(context) = domain.core.tasks.delegation(task) else {
         domain.work.push(Work::People(people::Event::Decided {
             request,
             outcome: people::Outcome::Refused(people::Refusal::Ended),
@@ -3090,7 +3045,7 @@ fn move_for_person(
     }
     let role = role.expect("checked member");
     let role_number = escalation::role_number(role);
-    let Some(role_policy) = domain.config.authority.role(project, role_number) else {
+    let Some(role_policy) = domain.core.authority.role(project, role_number) else {
         unreachable!("member belongs to configured policy")
     };
     let standing = person_tree(domain, person, task) || person_escalation_recipient(domain, person, role, task);
@@ -3101,8 +3056,10 @@ fn move_for_person(
         }));
         return;
     }
-    let Some(policy) = domain.config.authority.policy(project) else { unreachable!("configured policy") };
-    if domain.config.period_budget > policy.period_spend || domain.config.person_budget > role_policy.period_spend {
+    let Some(policy) = domain.core.authority.policy(project) else { unreachable!("configured policy") };
+    if domain.core.settings.period_budget > policy.period_spend
+        || domain.core.settings.person_budget > role_policy.period_spend
+    {
         domain.work.push(Work::People(people::Event::Decided {
             request,
             outcome: people::Outcome::Refused(people::Refusal::Authority),
@@ -3123,17 +3080,17 @@ fn move_for_person(
         }));
         return;
     };
-    let pool = tasks::Funder::Pool { project, person, period: domain.config.period };
-    let pool_numbers = match domain.tasks.funding(pool) {
+    let pool = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
+    let pool_numbers = match domain.core.tasks.funding(pool) {
         Some(record) => record.numbers,
-        None => tasks::Numbers { budget: domain.config.person_budget, spent: 0, spent_below: 0, reserved: 0 },
+        None => tasks::Numbers { budget: domain.core.settings.person_budget, spent: 0, spent_below: 0, reserved: 0 },
     };
     let mut giving = authority_value(&context.authority);
     giving.budget.spend = left;
     let mut findings =
-        Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority output"));
+        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority output"));
     let checked = authority::check_request_with_standing(
-        &domain.config.authority,
+        &domain.core.authority,
         &authority::PersonAsk {
             project,
             role: role_number,
@@ -3151,14 +3108,14 @@ fn move_for_person(
         }));
         return;
     }
-    assert!(domain.moving.insert(request, task) == Ok(None), "one move flight per keyed request");
+    assert!(domain.core.moving.insert(request, task) == Ok(None), "one move flight per keyed request");
     domain.work.push(Work::Tasks(tasks::Event::Move {
         reply_to: ReplyTo::new(request),
         task,
         person,
-        period: domain.config.period,
-        pool_budget: domain.config.person_budget,
-        period_budget: domain.config.period_budget,
+        period: domain.core.settings.period,
+        pool_budget: domain.core.settings.person_budget,
+        period_budget: domain.core.settings.period_budget,
         reason,
     }));
 }
@@ -3174,23 +3131,23 @@ fn make_chat(
     ask: people::Ask,
 ) {
     let role_number = escalation::role_number(role);
-    let pool = tasks::Funder::Pool { project, person, period: domain.config.period };
-    let pool_numbers = match domain.tasks.funding(pool) {
+    let pool = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
+    let pool_numbers = match domain.core.tasks.funding(pool) {
         Some(record) => record.numbers,
-        None => tasks::Numbers { budget: domain.config.person_budget, spent: 0, spent_below: 0, reserved: 0 },
+        None => tasks::Numbers { budget: domain.core.settings.person_budget, spent: 0, spent_below: 0, reserved: 0 },
     };
     let mut findings =
-        Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority check bound"));
+        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority check bound"));
     let checked = authority::check_request(
-        &domain.config.authority,
+        &domain.core.authority,
         &authority::PersonAsk {
             project,
             role: role_number,
             pool: authority_numbers(pool_numbers),
             tasks_left: env.limits.tasks.tree_tasks,
             request: authority::PersonRequest::Create(Box::new([authority::Delegate {
-                executor: authority::Executor::Charter(domain.config.charter),
-                authority: domain.config.chat_authority.clone(),
+                executor: authority::Executor::Charter(domain.core.settings.charter),
+                authority: domain.core.settings.chat_authority.clone(),
                 symbolic: Box::new([]),
             }])),
         },
@@ -3203,15 +3160,15 @@ fn make_chat(
         }));
         return;
     }
-    let Some(policy) = domain.config.authority.policy(project) else { unreachable!("checked project policy") };
-    let Some(role_policy) = domain.config.authority.role(project, role_number) else {
+    let Some(policy) = domain.core.authority.policy(project) else { unreachable!("checked project policy") };
+    let Some(role_policy) = domain.core.authority.role(project, role_number) else {
         unreachable!("checked role policy")
     };
     if match policy.escalation_role {
         Some(role) => role > 3,
         None => true,
-    } || domain.config.period_budget > policy.period_spend
-        || domain.config.person_budget > role_policy.period_spend
+    } || domain.core.settings.period_budget > policy.period_spend
+        || domain.core.settings.person_budget > role_policy.period_spend
     {
         domain.work.push(Work::People(people::Event::Decided {
             request,
@@ -3219,32 +3176,32 @@ fn make_chat(
         }));
         return;
     }
-    let period = tasks::Funder::Period { project, period: domain.config.period };
-    if domain.tasks.funding(period).is_none() {
+    let period = tasks::Funder::Period { project, period: domain.core.settings.period };
+    if domain.core.tasks.funding(period).is_none() {
         domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
             reply_to: internal(0),
             project,
-            period: domain.config.period,
-            budget: domain.config.period_budget,
+            period: domain.core.settings.period,
+            budget: domain.core.settings.period_budget,
         }));
     }
-    if domain.tasks.funding(pool).is_none() {
+    if domain.core.tasks.funding(pool).is_none() {
         domain.work.push(Work::Tasks(tasks::Event::CarvePool {
             reply_to: internal(0),
             project,
             person,
-            period: domain.config.period,
-            budget: domain.config.person_budget,
+            period: domain.core.settings.period,
+            budget: domain.core.settings.person_budget,
         }));
     }
-    let Some(number) = crate::fresh(&mut domain.counters, Family::Task) else {
+    let Some(number) = crate::fresh(&mut domain.core.counters, Family::Task) else {
         domain.work.push(Work::People(people::Event::Decided {
             request,
             outcome: people::Outcome::Refused(people::Refusal::Limit),
         }));
         return;
     };
-    assert!(domain.made.insert(request, (number, false)) == Ok(None), "people route has unique pending key");
+    assert!(domain.core.made.insert(request, (number, false)) == Ok(None), "people route has unique pending key");
     let words = match ask {
         people::Ask::StartChat { words, .. } => words,
         people::Ask::DecideEscalation { .. }
@@ -3278,11 +3235,11 @@ fn make_chat(
         project,
         number,
         number,
-        tasks::Executor::Agent { charter: domain.config.charter },
+        tasks::Executor::Agent { charter: domain.core.settings.charter },
         &spec,
         None,
     ) else {
-        let _: Option<(u64, bool)> = domain.made.remove(&request);
+        let _: Option<(u64, bool)> = domain.core.made.remove(&request);
         domain.work.push(Work::People(people::Event::Decided {
             request,
             outcome: people::Outcome::Refused(people::Refusal::Limit),
@@ -3295,12 +3252,12 @@ fn make_chat(
         batch: Box::new([tasks::New {
             number,
             project,
-            executor: tasks::Executor::Agent { charter: domain.config.charter },
+            executor: tasks::Executor::Agent { charter: domain.core.settings.charter },
             spec,
             contract: tasks::Contract::Report { words: env.limits.tasks.result_bytes },
-            authority: task_authority(&domain.config.chat_authority),
+            authority: task_authority(&domain.core.settings.chat_authority),
             numbers: tasks::Numbers {
-                budget: domain.config.chat_authority.budget.spend,
+                budget: domain.core.settings.chat_authority.budget.spend,
                 spent: 0,
                 spent_below: 0,
                 reserved: 0,
@@ -3324,7 +3281,7 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
         remember_due(domain, task);
         return;
     }
-    if domain.tasks.recurring_template(number).is_some() {
+    if domain.core.tasks.recurring_template(number).is_some() {
         return;
     }
     match task.executor {
@@ -3346,17 +3303,17 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
         tasks::Executor::Agent { .. } => {}
     }
     let mut findings =
-        Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority check bound"));
+        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority check bound"));
     let checked = authority::check_run(
-        &domain.config.authority,
+        &domain.core.authority,
         &authority::RunAsk {
             project: task.project,
             authority: authority_value(&task.authority),
             numbers: authority_numbers(task.numbers),
             budget: authority::left(authority_numbers(task.numbers))
-                .min(domain.config.authority.rules().maximum_run_spend),
+                .min(domain.core.authority.rules().maximum_run_spend),
             wall: env.wall,
-            accounts: Box::new([domain.accounts.usable(domain.config.account)]),
+            accounts: Box::new([domain.core.accounts.usable(domain.core.settings.account)]),
             writes: Box::new([]),
         },
         &mut findings,
@@ -3426,9 +3383,10 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
     } else {
         None
     };
-    assert!(domain.contexts.insert(number, task).is_ok(), "bounded activation context");
+    assert!(domain.core.contexts.insert(number, task).is_ok(), "bounded activation context");
     assert!(
         domain
+            .core
             .transcripts
             .insert(
                 number,
@@ -3436,7 +3394,7 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
                     previous_attempt,
                     bytes: 0,
                     kept: 0,
-                    turns: Queue::with_capacity(domain.config.resume_bytes),
+                    turns: Queue::with_capacity(domain.core.settings.resume_bytes),
                 }
             )
             .is_ok(),
@@ -3462,15 +3420,19 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
 }
 
 fn retire_calls(domain: &mut Domain, limits: &Limits, decision: &mut Decision, task: u64, attempt: u64, turn: u32) {
-    let mut retired = List::with_capacity(limits.call_records);
-    for (&key, _) in &domain.calls {
-        if key.task == task && (key.attempt < attempt || (key.attempt == attempt && key.completion < turn)) {
-            retired.push(key).expect("all retained call names fit their configured bound");
-        }
-    }
-    for &key in &retired {
-        let _answer = domain.calls.remove(&key);
+    for key in domain.core.retire_calls(task, attempt, turn, limits.call_records) {
+        let _connector = domain.connector_calls.remove(&key);
         save(decision, limits, Write::Erase(Key::Call(key)));
+    }
+}
+
+fn call_answer(domain: &Domain, key: CallKey) -> Option<CallAnswer> {
+    match domain.core.call_parts.get(&key) {
+        Some(part) => match CallAnswer::from_core(part) {
+            Some(answer) => Some(answer),
+            None => domain.connector_calls.get(&key).cloned(),
+        },
+        None => None,
     }
 }
 
@@ -3656,13 +3618,17 @@ fn decide_call(
     key: CallKey,
     answer: CallAnswer,
 ) {
-    let _pending = domain.pending_calls.remove(&key);
+    let _pending = domain.core.pending_calls.remove(&key);
     if !current_proof(domain, key.task, key.attempt) {
         relay_call(domain, limits, decision, to, answer);
         return;
     }
-    let _number = crate::fresh(&mut domain.counters, Family::Call).expect("admitted call counter");
-    assert!(domain.calls.insert(key, answer.clone()) == Ok(None), "call record room reserved");
+    let _number = crate::fresh(&mut domain.core.counters, Family::Call).expect("admitted call counter");
+    let part = answer.core_part(domain.config.forge_connector);
+    if let jig_core::CallPart::Connector { .. } = part {
+        assert!(domain.connector_calls.insert(key, answer.clone()) == Ok(None), "connector answer room reserved");
+    }
+    domain.core.record_call(key, part);
     save(decision, limits, Write::Save(Record::Call(crate::CallRecord { key, answer: answer.clone() })));
     relay_call(domain, limits, decision, to, answer);
 }
@@ -3678,7 +3644,7 @@ fn message_call(
     form: MessageForm,
     words: Box<[u8]>,
 ) {
-    let Some(context) = domain.tasks.delegation(key.task) else {
+    let Some(context) = domain.core.tasks.delegation(key.task) else {
         decide_call(
             domain,
             &env.limits,
@@ -3693,7 +3659,7 @@ fn message_call(
         );
         return;
     };
-    let Some(number) = crate::fresh(&mut domain.counters, Family::Message) else {
+    let Some(number) = crate::fresh(&mut domain.core.counters, Family::Message) else {
         decide_call(
             domain,
             &env.limits,
@@ -3709,8 +3675,8 @@ fn message_call(
         return;
     };
     let token = to.into_token();
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
-    assert!(domain.routing_calls.insert(token, RoutedCall::Message(key)) == Ok(None), "one live routed call");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(domain.core.routing_calls.insert(token, RoutedCall::Message(key)) == Ok(None), "one live routed call");
     domain.work.push(Work::Tasks(tasks::Event::Message {
         reply_to: ReplyTo::new(token),
         project: context.project,
@@ -3733,8 +3699,8 @@ fn message_call(
 
 fn introduce_call(domain: &mut Domain, to: ReplyTo, key: CallKey, left: u64, right: u64) {
     let token = to.into_token();
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
-    assert!(domain.routing_calls.insert(token, RoutedCall::Introduce(key)) == Ok(None), "one live routed call");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(domain.core.routing_calls.insert(token, RoutedCall::Introduce(key)) == Ok(None), "one live routed call");
     domain.work.push(Work::Tasks(tasks::Event::Introduce { reply_to: ReplyTo::new(token), by: key.task, left, right }));
 }
 
@@ -3746,7 +3712,7 @@ fn subscribe_call(
     key: CallKey,
     kind: tasks::SubscriptionKind,
 ) {
-    let Some(subscription) = crate::fresh(&mut domain.counters, Family::Message) else {
+    let Some(subscription) = crate::fresh(&mut domain.core.counters, Family::Message) else {
         decide_call(
             domain,
             &env.limits,
@@ -3762,9 +3728,9 @@ fn subscribe_call(
         return;
     };
     let token = to.into_token();
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
     assert!(
-        domain.routing_calls.insert(token, RoutedCall::Subscribe { key, subscription }) == Ok(None),
+        domain.core.routing_calls.insert(token, RoutedCall::Subscribe { key, subscription }) == Ok(None),
         "one live routed call"
     );
     domain.work.push(Work::Tasks(tasks::Event::Subscribe {
@@ -3776,8 +3742,8 @@ fn subscribe_call(
 
 fn unsubscribe_call(domain: &mut Domain, to: ReplyTo, key: CallKey, subscription: u64) {
     let token = to.into_token();
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
-    assert!(domain.routing_calls.insert(token, RoutedCall::Unsubscribe(key)) == Ok(None), "one live routed call");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(domain.core.routing_calls.insert(token, RoutedCall::Unsubscribe(key)) == Ok(None), "one live routed call");
     if let Some(topic) = domain.forge.subscription(key.task, subscription) {
         assert!(domain.forge_unsubscribing.insert(token, (key.task, topic)) == Ok(None), "one connector unsubscribe");
     }
@@ -3790,8 +3756,8 @@ fn unsubscribe_call(domain: &mut Domain, to: ReplyTo, key: CallKey, subscription
 
 fn control_call(domain: &mut Domain, to: ReplyTo, key: CallKey, target: u64, control: tasks::Control) {
     let token = to.into_token();
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
-    assert!(domain.routing_calls.insert(token, RoutedCall::Control(key)) == Ok(None), "one live routed call");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(domain.core.routing_calls.insert(token, RoutedCall::Control(key)) == Ok(None), "one live routed call");
     domain.work.push(Work::Tasks(tasks::Event::Control {
         reply_to: ReplyTo::new(token),
         by: tasks::Party::Task(key.task),
@@ -3809,7 +3775,7 @@ fn amend_call(
     target: u64,
     amendment: tasks::Amendment,
 ) {
-    let Some(holder) = domain.tasks.delegation(key.task) else {
+    let Some(holder) = domain.core.tasks.delegation(key.task) else {
         return decide_call(
             domain,
             &env.limits,
@@ -3823,7 +3789,7 @@ fn amend_call(
             }),
         );
     };
-    let Some(current) = domain.tasks.delegation(target) else {
+    let Some(current) = domain.core.tasks.delegation(target) else {
         return decide_call(
             domain,
             &env.limits,
@@ -3839,7 +3805,7 @@ fn amend_call(
     };
     if target == key.task
         || current.project != holder.project
-        || !in_tree(&domain.tasks.view_tasks(), target, key.task, domain.limits.tasks.depth)
+        || !in_tree(&domain.core.tasks.view_tasks(), target, key.task, domain.limits.tasks.depth)
     {
         return decide_call(
             domain,
@@ -3858,14 +3824,14 @@ fn amend_call(
     if let Some(after) = &amendment.authority {
         let before = authority_value(&current.authority);
         let after = authority_value(after);
-        let implies = &domain.config.authority.rules().implies;
+        let implies = &domain.core.authority.rules().implies;
         stop_run = !authority::at_most(&before, &after, implies);
         if !authority::at_most(&after, &before, implies) {
-            let ceiling = domain.config.authority.policy(current.project);
+            let ceiling = domain.core.authority.policy(current.project);
             let hard = match ceiling {
                 Some(policy) => {
                     authority::at_most(&after, &policy.ceiling, implies)
-                        && authority::at_most(&after, &domain.config.authority.rules().ceiling, implies)
+                        && authority::at_most(&after, &domain.core.authority.rules().ceiling, implies)
                 }
                 None => false,
             };
@@ -3883,7 +3849,7 @@ fn amend_call(
             }
         }
     }
-    let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
+    let Some(message) = crate::fresh(&mut domain.core.counters, Family::Message) else {
         return decide_call(
             domain,
             &env.limits,
@@ -3898,8 +3864,8 @@ fn amend_call(
         );
     };
     let token = to.into_token();
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "call record room reserved");
-    assert!(domain.routing_calls.insert(token, RoutedCall::Control(key)) == Ok(None), "one amendment route");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(domain.core.routing_calls.insert(token, RoutedCall::Control(key)) == Ok(None), "one amendment route");
     domain.work.push(Work::Tasks(tasks::Event::Amend {
         reply_to: ReplyTo::new(token),
         by: tasks::Party::Task(key.task),
@@ -3922,7 +3888,7 @@ fn delegation_executor(domain: &Domain, project: u32, executor: tasks::Executor)
             }
         }
         tasks::Executor::Person(tasks::PersonAddress::Person(person)) => {
-            let holding = domain.people.role(person, project)?;
+            let holding = domain.core.people.role(person, project)?;
             Some(authority::Executor::Role(escalation::role_number(holding)))
         }
     }
@@ -3958,7 +3924,7 @@ fn delegate_call(
         );
         return;
     }
-    let Some(context) = domain.tasks.delegation(key.task) else {
+    let Some(context) = domain.core.tasks.delegation(key.task) else {
         decide_call(
             domain,
             &env.limits,
@@ -4021,9 +3987,9 @@ fn delegate_call(
             .expect("bounded delegation request");
     }
     let mut findings =
-        Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("findings bound"));
+        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("findings bound"));
     let checked = authority::check_batch(
-        &domain.config.authority,
+        &domain.core.authority,
         &authority::BatchAsk {
             project: context.project,
             creator: authority_value(&context.authority),
@@ -4035,7 +4001,7 @@ fn delegate_call(
     );
     if checked.answer != authority::Answer::Allow {
         let mut found =
-            List::with_capacity(authority::max_out(domain.config.authority.limits()).expect("findings bound"));
+            List::with_capacity(authority::max_out(domain.core.authority.limits()).expect("findings bound"));
         for _ in 0..findings.len() {
             found.push(findings.pop().expect("finding count")).expect("finding bound");
         }
@@ -4097,7 +4063,7 @@ fn delegate_call(
             };
             let waiter =
                 domain.result_reads.insert(Some(Read::InputCheck(read))).expect("preflighted input read slot").token();
-            assert!(domain.pending_calls.insert(key, true).is_ok(), "reserved call record room");
+            assert!(domain.core.pending_calls.insert(key, true).is_ok(), "reserved call record room");
             emit(
                 decision,
                 &env.limits,
@@ -4108,7 +4074,7 @@ fn delegate_call(
     }
     let mut numbers = List::with_capacity(env.limits.tasks.batch);
     for _ in &batch {
-        let Some(number) = crate::fresh(&mut domain.counters, Family::Task) else {
+        let Some(number) = crate::fresh(&mut domain.core.counters, Family::Task) else {
             decide_call(
                 domain,
                 &env.limits,
@@ -4185,7 +4151,7 @@ fn delegate_call(
             );
             return;
         };
-        let root = domain.tasks.root(key.task).expect("delegator live");
+        let root = domain.core.tasks.root(key.task).expect("delegator live");
         let Some(holdings) = forge_route::task_holdings(
             domain,
             env,
@@ -4235,9 +4201,9 @@ fn delegate_call(
     }
     let token = to.into_token();
     if !validated {
-        assert!(domain.pending_calls.insert(key, true).is_ok(), "reserved call record room");
+        assert!(domain.core.pending_calls.insert(key, true).is_ok(), "reserved call record room");
     }
-    assert!(domain.delegating.insert(token, (key, stubs)) == Ok(None), "one pending delegated call");
+    assert!(domain.core.delegating.insert(token, (key, stubs)) == Ok(None), "one pending delegated call");
     domain.work.push(Work::Tasks(tasks::Event::Make {
         reply_to: ReplyTo::new(token),
         creator: tasks::Party::Task(key.task),
@@ -4257,13 +4223,13 @@ fn procedure_step(
     code: u32,
     action: ProcedureAction,
 ) -> Option<Box<[u64]>> {
-    if domain.tasks.procedure_due(task) != Some((connector, code, step)) {
+    if domain.core.tasks.procedure_due(task) != Some((connector, code, step)) {
         return None;
     }
     let mut delegated = None;
     let decision = match action {
         ProcedureAction::Delegate(batch) => {
-            let context = domain.tasks.delegation(task)?;
+            let context = domain.core.tasks.delegation(task)?;
             if batch.is_empty() || batch.len() > usize::try_from(env.limits.tasks.batch).expect("bounded batch") {
                 return None;
             }
@@ -4279,10 +4245,10 @@ fn procedure_step(
                     .expect("bounded procedure batch");
             }
             let mut findings = Queue::with_capacity(
-                authority::max_out(domain.config.authority.limits()).expect("authority finding bound"),
+                authority::max_out(domain.core.authority.limits()).expect("authority finding bound"),
             );
             let checked = authority::check_batch(
-                &domain.config.authority,
+                &domain.core.authority,
                 &authority::BatchAsk {
                     project: context.project,
                     creator: authority_value(&context.authority),
@@ -4297,7 +4263,7 @@ fn procedure_step(
             }
             let mut numbers = List::with_capacity(env.limits.tasks.batch);
             for _ in &batch {
-                let number = crate::fresh(&mut domain.counters, Family::Task)?;
+                let number = crate::fresh(&mut domain.core.counters, Family::Task)?;
                 numbers.push(number).expect("bounded procedure task IDs");
             }
             let mut created = List::with_capacity(env.limits.tasks.batch);
@@ -4320,7 +4286,7 @@ fn procedure_step(
                 let number = *numbers.get(at).expect("one ID per member");
                 let authority =
                     resolved_delegate_authority(&member.authority, &member.symbolic_grants, number, &env.limits)?;
-                let root = domain.tasks.root(task)?;
+                let root = domain.core.tasks.root(task)?;
                 let holdings = forge_route::task_holdings(
                     domain,
                     env,
@@ -4374,34 +4340,34 @@ fn start_recurring(
             tasks::Executor::Agent { .. } | tasks::Executor::Procedure { .. } => {}
         }
     }
-    for task in domain.tasks.recurring_tasks(project) {
-        if domain.tasks.recurring_template(task).expect("identified recurring task").key == template.key {
+    for task in domain.core.tasks.recurring_tasks(project) {
+        if domain.core.tasks.recurring_template(task).expect("identified recurring task").key == template.key {
             return;
         }
     }
-    let Some(policy) = domain.config.authority.policy(project) else { return };
-    if !authority::at_most(&authority_value(&authority), &policy.ceiling, &domain.config.authority.rules().implies)
-        || domain.config.period_budget > policy.period_spend
+    let Some(policy) = domain.core.authority.policy(project) else { return };
+    if !authority::at_most(&authority_value(&authority), &policy.ceiling, &domain.core.authority.rules().implies)
+        || domain.core.settings.period_budget > policy.period_spend
     {
         return;
     }
-    let period = domain.config.period;
-    if domain.tasks.funding(tasks::Funder::Period { project, period }).is_none() {
+    let period = domain.core.settings.period;
+    if domain.core.tasks.funding(tasks::Funder::Period { project, period }).is_none() {
         domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
             reply_to: internal(u64::MAX - 2),
             project,
             period,
-            budget: domain.config.period_budget,
+            budget: domain.core.settings.period_budget,
         }));
     }
-    let Some(number) = crate::fresh(&mut domain.counters, Family::Task) else { return };
+    let Some(number) = crate::fresh(&mut domain.core.counters, Family::Task) else { return };
     domain.work.push(Work::Tasks(tasks::Event::Make {
         reply_to: internal(u64::MAX - 2),
         creator: tasks::Party::Deployment { project },
         batch: Box::new([tasks::New {
             number,
             project,
-            executor: tasks::Executor::Procedure { connector: domain.config.recurring_connector, code: 1 },
+            executor: tasks::Executor::Procedure { connector: domain.core.settings.recurring_connector, code: 1 },
             spec: tasks::Spec { words: b"recurring".as_slice().into(), parameters: Box::new([]), inputs: Box::new([]) },
             contract: tasks::Contract::Report { words: 0 },
             numbers: tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
@@ -4430,38 +4396,15 @@ fn tasks_outputs(
         match out.pop().expect("tasks output count") {
             tasks::Request::PersonProposed { reply_to, proposal } => {
                 let request = reply_to.into_token();
-                let route = domain.goal_routes.remove(&request).expect("person proposal route");
-                assert!(route == GoalRoute::Proposing { proposal }, "exact proposed identity");
-                domain.work.push(Work::People(people::Event::Decided {
-                    request,
-                    outcome: people::Outcome::GoalProposed { proposal },
-                }));
+                domain.work.push(Work::People(domain.core.person_proposed(request, proposal)));
             }
             tasks::Request::PersonProposalDecided { reply_to, proposer, number, outcome } => {
                 let request = reply_to.into_token();
-                let route = domain.goal_routes.remove(&request).expect("goal decision route");
-                let (named, proposal, by) = match route {
-                    GoalRoute::Deciding { proposer, proposal, by } => (proposer, proposal, by),
-                    GoalRoute::Proposing { .. } | GoalRoute::Accepting { .. } => {
-                        unreachable!("goal decision terminal stage")
-                    }
-                };
-                assert!(named == proposer && proposal == number, "exact goal decision");
-                let choice = match outcome {
-                    tasks::ProposalOutcome::Accepted => people::ProposalChoice::Accepted,
-                    tasks::ProposalOutcome::Rejected => people::ProposalChoice::Rejected,
-                    tasks::ProposalOutcome::Passed => people::ProposalChoice::Passed,
-                    tasks::ProposalOutcome::Withdrawn => people::ProposalChoice::Withdrawn,
-                    tasks::ProposalOutcome::Stale => people::ProposalChoice::Stale,
-                };
-                domain.work.push(Work::People(people::Event::Decided {
-                    request,
-                    outcome: people::Outcome::ProposalDecided { proposer, proposal: number, by, choice },
-                }));
+                domain.work.push(Work::People(domain.core.person_proposal_decided(request, proposer, number, outcome)));
             }
             tasks::Request::RecurringDue { task, period, members } => {
-                let Some(context) = domain.tasks.delegation(task) else { continue };
-                let Some(template) = domain.tasks.recurring_template(task) else { continue };
+                let Some(context) = domain.core.tasks.delegation(task) else { continue };
+                let Some(template) = domain.core.tasks.recurring_template(task) else { continue };
                 if members != u32::try_from(template.batch.len()).expect("bounded template") {
                     continue;
                 }
@@ -4481,7 +4424,7 @@ fn tasks_outputs(
                         .expect("bounded template");
                 }
                 let checked = authority::check_batch(
-                    &domain.config.authority,
+                    &domain.core.authority,
                     &authority::BatchAsk {
                         project: context.project,
                         creator: authority_value(&context.authority),
@@ -4495,7 +4438,7 @@ fn tasks_outputs(
                         tasks: asked.into_boxed(),
                     },
                     &mut Queue::with_capacity(
-                        authority::max_out(domain.config.authority.limits()).expect("bounded authority findings"),
+                        authority::max_out(domain.core.authority.limits()).expect("bounded authority findings"),
                     ),
                 );
                 if checked.answer != authority::Answer::Allow {
@@ -4503,7 +4446,7 @@ fn tasks_outputs(
                 }
                 let mut numbers = List::with_capacity(env.limits.tasks.batch);
                 for _ in 0..members {
-                    let Some(number) = crate::fresh(&mut domain.counters, Family::Task) else { break };
+                    let Some(number) = crate::fresh(&mut domain.core.counters, Family::Task) else { break };
                     numbers.push(number).expect("bounded recurring batch");
                 }
                 if numbers.len() == members {
@@ -4518,34 +4461,10 @@ fn tasks_outputs(
                 escalation::stalled(domain, task, revision, holder);
             }
             tasks::Request::Notify { task, subscription, target, state, words } => {
-                let number = crate::fresh(&mut domain.counters, Family::Message).expect("notification number admitted");
-                domain.work.push(Work::Tasks(tasks::Event::Notice {
-                    task,
-                    word: tasks::Word {
-                        number,
-                        from: tasks::Party::Task(target),
-                        kind: tasks::MessageKind::Notice { subscription, target, state },
-                        words,
-                        at: env.wall,
-                        hits: 1,
-                        eligible: false,
-                    },
-                }));
+                domain.work.push(Work::Tasks(domain.core.notice(task, subscription, target, state, words, env.wall)));
             }
             tasks::Request::Timer { task, subscription } => {
-                let number = crate::fresh(&mut domain.counters, Family::Message).expect("timer number admitted");
-                domain.work.push(Work::Tasks(tasks::Event::Notice {
-                    task,
-                    word: tasks::Word {
-                        number,
-                        from: tasks::Party::Task(task),
-                        kind: tasks::MessageKind::Timer { subscription },
-                        words: Box::new([]),
-                        at: env.wall,
-                        hits: 1,
-                        eligible: false,
-                    },
-                }));
+                domain.work.push(Work::Tasks(domain.core.notice_timer(task, subscription, env.wall)));
             }
             tasks::Request::EndTopic { task, subscription, connector } => {
                 if connector == domain.config.forge_connector
@@ -4556,73 +4475,19 @@ fn tasks_outputs(
             }
             tasks::Request::Sent { reply_to, task, word } => {
                 let request = reply_to.into_token();
-                if let Some(context) = domain.contexts.get_mut(&task) {
-                    let capacity = env
-                        .limits
-                        .tasks
-                        .inbox_messages
-                        .checked_add(env.limits.tasks.tasks.checked_mul(2).expect("two decision kinds per task"))
-                        .expect("validated virtual proposal room");
-                    context.inbox = append_word(&context.inbox, &word, capacity);
-                    context.last_message = word.number;
-                }
-                match domain.routing_calls.remove(&request) {
-                    Some(RoutedCall::Message(key)) => decide_call(
+                match domain.core.sent(request, task, &word, env.limits.tasks.inbox_messages, env.limits.tasks.tasks) {
+                    jig_core::SentRoute::Call { key, message } => decide_call(
                         domain,
                         &env.limits,
                         decision,
                         ReplyTo::new(request),
                         key,
-                        CallAnswer::Sent { message: word.number },
+                        CallAnswer::Sent { message },
                     ),
-                    Some(
-                        RoutedCall::Introduce(_)
-                        | RoutedCall::Propose { .. }
-                        | RoutedCall::Decide { .. }
-                        | RoutedCall::Escalation { .. }
-                        | RoutedCall::Withdraw { .. }
-                        | RoutedCall::Accepting { .. }
-                        | RoutedCall::Subscribe { .. }
-                        | RoutedCall::Unsubscribe(_)
-                        | RoutedCall::Control(_),
-                    ) => {
-                        unreachable!("only message calls produce Sent")
-                    }
-                    None => {
-                        let route = domain.saying.remove(&request);
-                        let outcome = match route {
-                            Some((named, None)) if named == task => {
-                                people::Outcome::Said { task, message: word.number }
-                            }
-                            Some((named, Some(question))) if named == task => {
-                                people::Outcome::QuestionAnswered { task, question, message: word.number }
-                            }
-                            Some(_) | None => unreachable!("matching pending person message flight"),
-                        };
-                        domain.work.push(Work::People(people::Event::Decided { request, outcome }));
-                    }
+                    jig_core::SentRoute::Person(event) => domain.work.push(Work::People(*event)),
                 }
             }
-            tasks::Request::Relay { task, attempt, previous, word } => {
-                let previous = match word.kind {
-                    tasks::MessageKind::Proposal { .. } | tasks::MessageKind::Escalation { .. } => {
-                        match domain.proofs.get(&task) {
-                            Some(proof) => proof.offered,
-                            None => None,
-                        }
-                    }
-                    tasks::MessageKind::ProposalDecision { .. }
-                    | tasks::MessageKind::Words
-                    | tasks::MessageKind::Amendment { .. }
-                    | tasks::MessageKind::Question
-                    | tasks::MessageKind::Answer { .. }
-                    | tasks::MessageKind::Notice { .. }
-                    | tasks::MessageKind::Timer { .. }
-                    | tasks::MessageKind::News { .. }
-                    | tasks::MessageKind::Result(_) => previous,
-                };
-                emit(decision, &env.limits, Delivery::Relay { task, attempt, previous, word });
-            }
+            tasks::Request::Relay { .. } => unreachable!("the core marks committed relays held"),
             tasks::Request::EscalationsInspected { .. } | tasks::Request::EscalationsRechecked { .. } => {
                 unreachable!("serialized roles route consumes project terminals")
             }
@@ -4633,7 +4498,7 @@ fn tasks_outputs(
             tasks::Request::EscalationDecided { reply_to, task, revision, outcome } => {
                 if task_escalation {
                     let token = reply_to.into_token();
-                    let route = domain.routing_calls.remove(&token).expect("task escalation decision route");
+                    let route = domain.core.routing_calls.remove(&token).expect("task escalation decision route");
                     let (key, named, current) = match route {
                         RoutedCall::Escalation { key, task, revision } => (key, task, revision),
                         RoutedCall::Propose { .. }
@@ -4661,32 +4526,13 @@ fn tasks_outputs(
             }
             tasks::Request::ProposalDecided { reply_to, proposer, number, outcome } => {
                 let token = reply_to.into_token();
-                let person_route = if person_proposal { domain.routing_people_proposals.remove(&token) } else { None };
-                if let Some(route) = person_route {
-                    let (request, by) = match route {
-                        PersonProposalRoute::Deciding { request, proposer: named, proposal, by }
-                            if named == proposer && proposal == number =>
-                        {
-                            (request, by)
-                        }
-                        PersonProposalRoute::Deciding { .. } | PersonProposalRoute::Accepting { .. } => {
-                            unreachable!("matching person proposal decision")
-                        }
-                    };
-                    let choice = match outcome {
-                        tasks::ProposalOutcome::Accepted => people::ProposalChoice::Accepted,
-                        tasks::ProposalOutcome::Rejected => people::ProposalChoice::Rejected,
-                        tasks::ProposalOutcome::Passed => people::ProposalChoice::Passed,
-                        tasks::ProposalOutcome::Withdrawn => people::ProposalChoice::Withdrawn,
-                        tasks::ProposalOutcome::Stale => people::ProposalChoice::Stale,
-                    };
-                    domain.work.push(Work::People(people::Event::Decided {
-                        request,
-                        outcome: people::Outcome::ProposalDecided { proposer, proposal: number, by, choice },
-                    }));
+                if let Some(event) =
+                    domain.core.task_proposal_decided_for_person(token, proposer, number, outcome, person_proposal)
+                {
+                    domain.work.push(Work::People(event));
                     continue;
                 }
-                let route = domain.routing_calls.remove(&token).expect("pending proposal decision route");
+                let route = domain.core.routing_calls.remove(&token).expect("pending proposal decision route");
                 let key = match route {
                     RoutedCall::Decide { key, proposal } | RoutedCall::Withdraw { key, proposal }
                         if proposal == number =>
@@ -4715,12 +4561,12 @@ fn tasks_outputs(
                 );
             }
             tasks::Request::ProposalStalled { proposer, proposal, holder } => {
-                if let Some(pending) = domain.tasks.proposal(proposer, proposal) {
+                if let Some(pending) = domain.core.tasks.proposal(proposer, proposal) {
                     match pending.state {
                         tasks::ProposalState::Pending { holder: current, .. } if current == holder => {
                             if let Some(next) = proposals::holder(domain, proposer, &pending.action, Some(holder)) {
                                 let revision =
-                                    domain.tasks.task(proposer).expect("pending proposer remains live").revision;
+                                    domain.core.tasks.task(proposer).expect("pending proposer remains live").revision;
                                 domain.work.push(Work::Tasks(tasks::Event::StalledProposal {
                                     proposer,
                                     proposal,
@@ -4738,14 +4584,14 @@ fn tasks_outputs(
                 }
             }
             tasks::Request::ProposalRerouteNeeded { proposer, proposal } => {
-                if let Some(pending) = domain.tasks.proposal(proposer, proposal) {
+                if let Some(pending) = domain.core.tasks.proposal(proposer, proposal) {
                     match pending.state {
                         tasks::ProposalState::Pending { holder: current, .. } => {
                             if let Some(next) = proposals::holder(domain, proposer, &pending.action, None)
                                 && current != next
                             {
                                 let revision =
-                                    domain.tasks.task(proposer).expect("pending proposer remains live").revision;
+                                    domain.core.tasks.task(proposer).expect("pending proposer remains live").revision;
                                 domain.work.push(Work::Tasks(tasks::Event::StalledProposal {
                                     proposer,
                                     proposal,
@@ -4767,7 +4613,7 @@ fn tasks_outputs(
                 }
                 match &record {
                     tasks::Stored::Live(task) | tasks::Stored::Ended(task) => {
-                        let stale = match domain.contexts.get(&task.number) {
+                        let stale = match domain.core.contexts.get(&task.number) {
                             Some(context) => {
                                 task.phase != tasks::Phase::Active(tasks::Active::Preparing)
                                     || task.last_message != context.last_message
@@ -4775,9 +4621,9 @@ fn tasks_outputs(
                             None => false,
                         };
                         if stale {
-                            drop(domain.contexts.remove(&task.number));
-                            drop(domain.dependency_results.remove(&task.number));
-                            drop(domain.transcripts.remove(&task.number));
+                            drop(domain.core.contexts.remove(&task.number));
+                            drop(domain.core.dependency_results.remove(&task.number));
+                            drop(domain.core.transcripts.remove(&task.number));
                             domain
                                 .work
                                 .push(Work::Brief(brief::GatherEvent::Abandon { brief: Token::new(task.number) }));
@@ -4808,16 +4654,16 @@ fn tasks_outputs(
                 }
                 let record = match record {
                     tasks::Stored::Ended(mut task) => {
-                        let position = crate::fresh(&mut domain.counters, Family::Message)
+                        let position = crate::fresh(&mut domain.core.counters, Family::Message)
                             .expect("ending position preflighted before mutation");
                         task.result_position = position;
                         assert!(
-                            domain.ending_positions.insert(task.number, position) == Ok(None),
+                            domain.core.ending_positions.insert(task.number, position) == Ok(None),
                             "one ending position per ended task"
                         );
                         match task.requester {
                             tasks::Party::Person(person) => {
-                                domain.people.remember_result(
+                                domain.core.people.remember_result(
                                     &env.limits.people,
                                     person,
                                     people::ResultRef { task: task.number, position },
@@ -4840,64 +4686,12 @@ fn tasks_outputs(
             tasks::Request::Erase { key } => save(decision, &env.limits, Write::Erase(Key::Tasks(key))),
             tasks::Request::Made { reply_to, tasks } => {
                 let request = reply_to.into_token();
-                if request.raw() >= u64::MAX - 3 {
-                    continue;
-                }
-                if let Some(GoalRoute::Accepting { proposer, proposal, by, task }) =
-                    domain.goal_routes.get(&request).copied()
-                {
-                    assert!(tasks.as_ref() == [task], "accepted goal task made");
-                    let inserted = domain.goal_routes.insert(request, GoalRoute::Deciding { proposer, proposal, by });
-                    assert!(inserted.is_ok(), "goal route replaced");
-                    domain.work.push(Work::Tasks(tasks::Event::DecidePersonProposal {
-                        reply_to: ReplyTo::new(request),
-                        proposer,
-                        proposal,
-                        by: tasks::Party::Person(by),
-                        message: None,
-                        decision: tasks::ProposalDecision::Accept,
-                    }));
-                    continue;
-                }
-                let person_route =
-                    if person_proposal { domain.routing_people_proposals.remove(&request) } else { None };
-                if let Some(PersonProposalRoute::Accepting { request: named, person, proposer, proposal, message }) =
-                    person_route
-                {
-                    assert!(request == named, "person acceptance correlation");
-                    domain
-                        .routing_people_proposals
-                        .insert(request, PersonProposalRoute::Deciding { request, proposer, proposal, by: person })
-                        .expect("person route room");
-                    domain.work.push(Work::PersonProposal(tasks::Event::DecideProposal {
-                        reply_to: ReplyTo::new(request),
-                        proposer,
-                        proposal,
-                        message: Some(message),
-                        by: tasks::Party::Person(person),
-                        decision: tasks::ProposalDecision::Accept,
-                    }));
-                    continue;
-                }
-                if let Some(RoutedCall::Accepting { key, proposer, proposal, message }) =
-                    domain.routing_calls.remove(&request)
-                {
-                    domain
-                        .routing_calls
-                        .insert(request, RoutedCall::Decide { key, proposal })
-                        .expect("acceptance route room");
-                    domain.work.push(Work::Tasks(tasks::Event::DecideProposal {
-                        reply_to: ReplyTo::new(request),
-                        proposer,
-                        proposal,
-                        message: Some(message),
-                        by: tasks::Party::Task(key.task),
-                        decision: tasks::ProposalDecision::Accept,
-                    }));
-                    continue;
-                }
-                match domain.delegating.remove(&request) {
-                    Some((key, stubs)) => {
+                match domain.core.made(request, tasks, person_proposal) {
+                    jig_core::MadeRoute::Internal => {}
+                    jig_core::MadeRoute::Tasks(event) => domain.work.push(Work::Tasks(event)),
+                    jig_core::MadeRoute::PersonProposal(event) => domain.work.push(Work::PersonProposal(event)),
+                    jig_core::MadeRoute::Person(event) => domain.work.push(Work::People(*event)),
+                    jig_core::MadeRoute::Delegated { key, tasks, stubs } => {
                         for stub in stubs {
                             domain.work.push(Work::Tasks(tasks::Event::RememberStub { stub }));
                         }
@@ -4909,18 +4703,6 @@ fn tasks_outputs(
                             key,
                             CallAnswer::Delegated(tasks),
                         );
-                    }
-                    None => {
-                        let (expected, goal) = domain.made.remove(&request).expect("pending make route");
-                        assert!(tasks.as_ref() == [expected], "one exact person task created");
-                        domain.work.push(Work::People(people::Event::Decided {
-                            request,
-                            outcome: if goal {
-                                people::Outcome::GoalStarted { task: expected }
-                            } else {
-                                people::Outcome::Started { task: expected }
-                            },
-                        }));
                     }
                 }
             }
@@ -4943,42 +4725,11 @@ fn tasks_outputs(
                     domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Procedure }));
                     continue;
                 }
-                if domain.goal_routes.remove(&token).is_some() {
-                    domain.work.push(Work::People(people::Event::Decided {
-                        request: token,
-                        outcome: people::Outcome::Refused(match problem.why {
-                            tasks::Refusal::Busy | tasks::Refusal::NotReady => people::Refusal::Busy,
-                            tasks::Refusal::Funding | tasks::Refusal::AuthorityShape => people::Refusal::Authority,
-                            tasks::Refusal::Unknown | tasks::Refusal::State => people::Refusal::Ended,
-                            tasks::Refusal::Duplicate
-                            | tasks::Refusal::Empty
-                            | tasks::Refusal::Batch
-                            | tasks::Refusal::Live
-                            | tasks::Refusal::Project
-                            | tasks::Refusal::Tree
-                            | tasks::Refusal::Depth
-                            | tasks::Refusal::Delegates
-                            | tasks::Refusal::Subscription
-                            | tasks::Refusal::Dependencies
-                            | tasks::Refusal::Cycle
-                            | tasks::Refusal::Executor
-                            | tasks::Refusal::Spec
-                            | tasks::Refusal::Contract
-                            | tasks::Refusal::Inputs
-                            | tasks::Refusal::Attempt
-                            | tasks::Refusal::LiveDelegates
-                            | tasks::Refusal::Restore
-                            | tasks::Refusal::Read
-                            | tasks::Refusal::Turn
-                            | tasks::Refusal::Reference
-                            | tasks::Refusal::HoldKind
-                            | tasks::Refusal::HoldTaken
-                            | tasks::Refusal::Holds => people::Refusal::Limit,
-                        }),
-                    }));
+                if let Some(event) = domain.core.goal_refused(token, problem.why) {
+                    domain.work.push(Work::People(event));
                     continue;
                 }
-                if domain.person_tasks.remove(&token).is_some() {
+                if domain.core.person_tasks.remove(&token).is_some() {
                     let why = match problem.why {
                         tasks::Refusal::Busy | tasks::Refusal::NotReady => people::Refusal::Busy,
                         tasks::Refusal::Unknown => people::Refusal::Ended,
@@ -5015,7 +4766,7 @@ fn tasks_outputs(
                     }));
                     continue;
                 }
-                if domain.moving.remove(&token).is_some() {
+                if domain.core.moving.remove(&token).is_some() {
                     domain.work.push(Work::People(people::Event::Decided {
                         request: token,
                         outcome: people::Outcome::Refused(match problem.why {
@@ -5051,7 +4802,8 @@ fn tasks_outputs(
                     }));
                     continue;
                 }
-                let person_route = if person_proposal { domain.routing_people_proposals.remove(&token) } else { None };
+                let person_route =
+                    if person_proposal { domain.core.routing_people_proposals.remove(&token) } else { None };
                 if let Some(route) = person_route {
                     let request = match route {
                         PersonProposalRoute::Deciding { request, .. }
@@ -5092,7 +4844,7 @@ fn tasks_outputs(
                     }));
                     continue;
                 }
-                if let Some(route) = domain.routing_calls.remove(&token) {
+                if let Some(route) = domain.core.routing_calls.remove(&token) {
                     drop(domain.forge_subscribing.remove(&token));
                     drop(domain.forge_unsubscribing.remove(&token));
                     let (key, answer) = match route {
@@ -5110,7 +4862,7 @@ fn tasks_outputs(
                         | RoutedCall::Accepting { key, .. } => (key, CallAnswer::ProposalRefused(problem)),
                     };
                     decide_call(domain, &env.limits, decision, ReplyTo::new(token), key, answer);
-                } else if let Some((key, _)) = domain.delegating.remove(&token) {
+                } else if let Some((key, _)) = domain.core.delegating.remove(&token) {
                     decide_call(
                         domain,
                         &env.limits,
@@ -5119,12 +4871,12 @@ fn tasks_outputs(
                         key,
                         CallAnswer::DelegationRefused(problem),
                     );
-                } else if domain.made.remove(&token).is_some() {
+                } else if domain.core.made.remove(&token).is_some() {
                     domain.work.push(Work::People(people::Event::Decided {
                         request: token,
                         outcome: people::Outcome::Refused(people::Refusal::Limit),
                     }));
-                } else if domain.saying.remove(&token).is_some() {
+                } else if domain.core.saying.remove(&token).is_some() {
                     domain.work.push(Work::People(people::Event::Decided {
                         request: token,
                         outcome: people::Outcome::Refused(match problem.why {
@@ -5159,9 +4911,9 @@ fn tasks_outputs(
                             | tasks::Refusal::Holds => people::Refusal::Limit,
                         }),
                     }));
-                } else if domain.claiming.remove(&token.raw()).is_some() {
+                } else if domain.core.claiming.remove(&token.raw()).is_some() {
                     drop(domain.assignments.remove(&token.raw()));
-                    drop(domain.proofs.remove(&token.raw()));
+                    drop(domain.core.proofs.remove(&token.raw()));
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task: token.raw() }));
                 } else if let Some(payload) = take_payload(domain, token) {
                     match payload {
@@ -5176,7 +4928,7 @@ fn tasks_outputs(
                         }
                         Payload::Answer { task, attempt, .. } => {
                             if problem.task == Some(task) {
-                                let proof = domain.proofs.get_mut(&task).expect("answer proof reserved");
+                                let proof = domain.core.proofs.get_mut(&task).expect("answer proof reserved");
                                 proof.terminal = Some(TerminalRecord {
                                     task,
                                     attempt,
@@ -5211,7 +4963,7 @@ fn tasks_outputs(
                         unreachable!("turn family")
                     }
                 };
-                let proof = domain.proofs.get_mut(&task).expect("turn proof reserved before child mutation");
+                let proof = domain.core.proofs.get_mut(&task).expect("turn proof reserved before child mutation");
                 assert!(proof.attempt == attempt, "turn callback retains its actual claim");
                 proof.turn = Some(TurnProof { turn, cumulative: body.cumulative, read: body.read });
                 save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
@@ -5258,7 +5010,7 @@ fn tasks_outputs(
                 if token.raw() != u64::MAX {
                     drop(take_payload(domain, token));
                 }
-                if let Some(proof) = domain.proofs.get(&task) {
+                if let Some(proof) = domain.core.proofs.get(&task) {
                     if let Some(terminal) = &proof.terminal {
                         save(decision, &env.limits, Write::Save(Record::Terminal(terminal.clone())));
                     }
@@ -5273,31 +5025,13 @@ fn tasks_outputs(
             }
             tasks::Request::Activate { context } => domain.work.push(Work::Activate(context)),
             tasks::Request::Adopt { task, attempt, kept } => {
-                assert!(domain.unreported_restored.insert(task, attempt) == Ok(None), "one restored claim per task");
-                let mut view_out = Queue::with_capacity(views::max_out(&env.limits.views));
-                views::step(
-                    &mut domain.views,
-                    &environment_views(env),
-                    views::Event::Started { task: Token::new(task), attempt: Token::new(attempt) },
-                    &mut view_out,
-                );
-                assert!(view_out.is_empty(), "restored run following has no external effect");
-                domain.adopted.push(fleet::Event::Adopt {
-                    kind: fleet::HostKind::Worker,
-                    worked: kept > 0,
-                    reply_to: internal(task),
-                    run: Token::new(task),
-                    attempt: Token::new(attempt),
-                    kept,
-                });
+                domain.core.adopt(&environment_core(env), task, attempt, kept);
             }
-            tasks::Request::Stop { task, attempt } => emit(
-                decision,
-                &env.limits,
-                Delivery::Fleet(fleet::Event::Cancel { run: Token::new(task), attempt: Token::new(attempt) }),
-            ),
+            tasks::Request::Stop { task, attempt } => {
+                emit(decision, &env.limits, Delivery::Fleet(Core::stop_run(task, attempt)));
+            }
             tasks::Request::Close { task, ending } => {
-                let root = domain.tasks.root(task).unwrap_or(task);
+                let root = domain.core.tasks.root(task).unwrap_or(task);
                 let ending = match ending {
                     tasks::Ending::Done(_) => forge::ReleaseEnding::Done,
                     tasks::Ending::Failed { .. } => forge::ReleaseEnding::Failed,
@@ -5306,27 +5040,28 @@ fn tasks_outputs(
                 domain.work.push(Work::Forge(forge::Event::SettleEffects { task, root, ending }));
             }
             tasks::Request::Release { task, ending } => {
-                let root = domain.tasks.root(task).unwrap_or(task);
+                let root = domain.core.tasks.root(task).unwrap_or(task);
                 let ending = match ending {
                     tasks::Ending::Done(_) => forge::ReleaseEnding::Done,
                     tasks::Ending::Failed { .. } => forge::ReleaseEnding::Failed,
                     tasks::Ending::Cancelled { .. } => forge::ReleaseEnding::Cancelled,
                 };
-                if let Some(entry) = crate::fresh(&mut domain.counters, Family::ForgeRow) {
+                if let Some(entry) = crate::fresh(&mut domain.core.counters, Family::ConnectorRow) {
                     domain.work.push(Work::Forge(forge::Event::Release { task, root, ending, entry }));
                 } else {
                     domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Budget }));
                 }
             }
             tasks::Request::Ended { task, requester, ending } => {
-                let position = domain.ending_positions.remove(&task).expect("ended row assigned its result position");
+                let position =
+                    domain.core.ending_positions.remove(&task).expect("ended row assigned its result position");
                 emit(
                     decision,
                     &env.limits,
                     Delivery::View(Box::new(views::Event::Finished { task: Token::new(task) })),
                 );
                 retire_calls(domain, &env.limits, decision, task, u64::MAX, u32::MAX);
-                drop(domain.proofs.remove(&task));
+                drop(domain.core.proofs.remove(&task));
                 save(decision, &env.limits, Write::Erase(Key::RunProof { task }));
                 match requester {
                     tasks::Party::Person(person) => {
@@ -5350,7 +5085,7 @@ fn tasks_outputs(
             }
             tasks::Request::Done { reply_to } => {
                 let task = reply_to.into_token().raw();
-                if let Some(route) = domain.person_tasks.remove(&Token::new(task)) {
+                if let Some(route) = domain.core.person_tasks.remove(&Token::new(task)) {
                     let outcome = match route {
                         PersonTaskRoute::Take(task) => people::Outcome::PersonTaken { task },
                         PersonTaskRoute::PoolSet { project, person } => people::Outcome::PoolSet { project, person },
@@ -5367,7 +5102,7 @@ fn tasks_outputs(
                     domain.work.push(Work::People(people::Event::Decided { request: Token::new(task), outcome }));
                     continue;
                 }
-                if let Some(moved) = domain.moving.remove(&Token::new(task)) {
+                if let Some(moved) = domain.core.moving.remove(&Token::new(task)) {
                     domain.work.push(Work::People(people::Event::Decided {
                         request: Token::new(task),
                         outcome: people::Outcome::Moved { task: moved },
@@ -5375,11 +5110,12 @@ fn tasks_outputs(
                     continue;
                 }
                 let person_route =
-                    if person_proposal { domain.routing_people_proposals.remove(&Token::new(task)) } else { None };
+                    if person_proposal { domain.core.routing_people_proposals.remove(&Token::new(task)) } else { None };
                 if let Some(PersonProposalRoute::Accepting { request, person, proposer, proposal, message }) =
                     person_route
                 {
                     domain
+                        .core
                         .routing_people_proposals
                         .insert(request, PersonProposalRoute::Deciding { request, proposer, proposal, by: person })
                         .expect("person acceptance route room");
@@ -5393,7 +5129,7 @@ fn tasks_outputs(
                     }));
                     continue;
                 }
-                if let Some(route) = domain.routing_calls.remove(&Token::new(task)) {
+                if let Some(route) = domain.core.routing_calls.remove(&Token::new(task)) {
                     if let Some(subscription) = domain.forge_subscribing.remove(&Token::new(task)) {
                         let names = forge_route::watch_names(domain, &env.limits, &subscription)
                             .expect("connector names preflighted at subscription");
@@ -5408,6 +5144,7 @@ fn tasks_outputs(
                         RoutedCall::Propose { key, proposal } => (key, CallAnswer::Proposed { proposal }),
                         RoutedCall::Accepting { key, proposer, proposal, message } => {
                             domain
+                                .core
                                 .routing_calls
                                 .insert(Token::new(task), RoutedCall::Decide { key, proposal })
                                 .expect("acceptance route room");
@@ -5431,13 +5168,13 @@ fn tasks_outputs(
                         }
                     };
                     decide_call(domain, &env.limits, decision, ReplyTo::new(Token::new(task)), key, answer);
-                } else if let Some(attempt) = domain.claiming.remove(&task) {
+                } else if let Some(attempt) = domain.core.claiming.remove(&task) {
                     let (writes, holders) = forge_route::claimed_writes(domain, env, task)
                         .expect("the admitted assignment retains its bounded held forge writes");
                     if !writes.is_empty() {
                         domain.work.push(Work::Forge(forge::Event::Claim { task, attempt, writes, holders }));
                     }
-                    let proof = domain.proofs.get(&task).expect("claim proof pre-reserved");
+                    let proof = domain.core.proofs.get(&task).expect("claim proof pre-reserved");
                     save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
                     let key = &domain.assignments.get(&task).expect("claimed assignment").workspace.key;
                     let workstream = u64::from_be_bytes(key.as_ref().try_into().expect("task-number workstream"));
@@ -5455,9 +5192,9 @@ fn tasks_outputs(
                 }
             }
             tasks::Request::WriterWaiting { task: Some(task), .. } => {
-                if domain.claiming.remove(&task).is_some() {
+                if domain.core.claiming.remove(&task).is_some() {
                     drop(domain.assignments.remove(&task));
-                    drop(domain.proofs.remove(&task));
+                    drop(domain.core.proofs.remove(&task));
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
                 }
             }
@@ -5527,8 +5264,8 @@ fn brief_outputs(
             | brief::GatherRequest::Drop { .. } => unreachable!("temper's sole connector is numbered zero"),
             brief::GatherRequest::Complete { brief, order } => {
                 let task = brief.raw();
-                let current = match domain.contexts.get(&task) {
-                    Some(context) => match domain.tasks.task(task) {
+                let current = match domain.core.contexts.get(&task) {
+                    Some(context) => match domain.core.tasks.task(task) {
                         Some(row) => {
                             row.phase == tasks::Phase::Active(tasks::Active::Preparing)
                                 && row.last_message == context.last_message
@@ -5586,17 +5323,17 @@ fn brief_outputs(
                     sections.push(section).expect("bounded brief sections");
                 }
                 if missing_owner {
-                    drop(domain.contexts.remove(&task));
-                    drop(domain.dependency_results.remove(&task));
-                    drop(domain.transcripts.remove(&task));
+                    drop(domain.core.contexts.remove(&task));
+                    drop(domain.core.dependency_results.remove(&task));
+                    drop(domain.core.transcripts.remove(&task));
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
                     continue;
                 }
                 let sections = sections.into_boxed();
-                let context = domain.contexts.remove(&task).expect("rendered task owns context");
-                drop(domain.dependency_results.remove(&task));
-                let transcript = domain.transcripts.remove(&task).expect("rendered task owns loaded transcript");
-                let Some(attempt) = crate::fresh(&mut domain.counters, Family::Run) else {
+                let context = domain.core.contexts.remove(&task).expect("rendered task owns context");
+                drop(domain.core.dependency_results.remove(&task));
+                let transcript = domain.core.transcripts.remove(&task).expect("rendered task owns loaded transcript");
+                let Some(attempt) = crate::fresh(&mut domain.core.counters, Family::Run) else {
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
                     continue;
                 };
@@ -5609,18 +5346,18 @@ fn brief_outputs(
                     continue;
                 };
                 let mut findings = Queue::with_capacity(
-                    authority::max_out(domain.config.authority.limits()).expect("authority check bound"),
+                    authority::max_out(domain.core.authority.limits()).expect("authority check bound"),
                 );
                 if authority::check_run(
-                    &domain.config.authority,
+                    &domain.core.authority,
                     &authority::RunAsk {
                         project: context.project,
                         authority: authority_value(&context.authority),
                         numbers: authority_numbers(context.numbers),
                         budget: authority::left(authority_numbers(context.numbers))
-                            .min(domain.config.authority.rules().maximum_run_spend),
+                            .min(domain.core.authority.rules().maximum_run_spend),
                         wall: env.wall,
-                        accounts: Box::new([domain.accounts.usable(domain.config.account)]),
+                        accounts: Box::new([domain.core.accounts.usable(domain.core.settings.account)]),
                         writes: workspace.writes.clone(),
                     },
                     &mut findings,
@@ -5629,21 +5366,26 @@ fn brief_outputs(
                     domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
                     continue;
                 }
-                let Some(grant) = domain.accounts.grant(domain.config.account, env.now) else {
+                let Some(grant) = domain.core.accounts.grant(domain.core.settings.account, env.now) else {
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
                     continue;
                 };
-                if !domain.proofs.contains_key(&task) && domain.proofs.len() == domain.proofs.capacity() {
+                if !domain.core.proofs.contains_key(&task) && domain.core.proofs.len() == domain.core.proofs.capacity()
+                {
                     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
                     continue;
                 }
                 let offered = if context.last_message == 0 { None } else { Some(context.last_message) };
                 assert!(
-                    domain.proofs.insert(task, RunProof { task, attempt, offered, turn: None, terminal: None }).is_ok(),
+                    domain
+                        .core
+                        .proofs
+                        .insert(task, RunProof { task, attempt, offered, turn: None, terminal: None })
+                        .is_ok(),
                     "claim proof reserved before child mutation"
                 );
                 let mut turns = List::with_capacity(transcript.turns.len());
-                if transcript.bytes <= u64::from(domain.config.resume_bytes) {
+                if transcript.bytes <= u64::from(domain.core.settings.resume_bytes) {
                     let mut kept = transcript.turns;
                     for _ in 0..kept.len() {
                         turns.push(kept.pop().expect("counted transcript turn")).expect("bounded transcript turns");
@@ -5652,13 +5394,13 @@ fn brief_outputs(
                 let assignment = Assignment {
                     task,
                     attempt,
-                    charter: domain.config.charter,
+                    charter: domain.core.settings.charter,
                     run: Box::new(RunCharter {
-                        policy: domain.config.run.clone(),
+                        policy: domain.core.settings.run.clone(),
                         contract: context.contract,
                         authority: context.authority,
                         budget: authority::left(authority_numbers(context.numbers))
-                            .min(domain.config.authority.rules().maximum_run_spend),
+                            .min(domain.core.authority.rules().maximum_run_spend),
                     }),
                     sections,
                     inbox: context.inbox,
@@ -5668,11 +5410,10 @@ fn brief_outputs(
                     transcript: turns.into_boxed(),
                     answered: {
                         let mut answered = List::with_capacity(domain.limits.call_records);
-                        for (&key, answer) in &domain.calls {
+                        for (&key, _) in &domain.core.call_parts {
                             if key.task == task && key.attempt < attempt {
-                                answered
-                                    .push(crate::CallRecord { key, answer: answer.clone() })
-                                    .expect("retained call bound");
+                                let answer = call_answer(domain, key).expect("live call part has its connector answer");
+                                answered.push(crate::CallRecord { key, answer }).expect("retained call bound");
                             }
                         }
                         answered.into_boxed()
@@ -5680,7 +5421,7 @@ fn brief_outputs(
                     grant,
                 };
                 assert!(domain.assignments.insert(task, assignment).is_ok(), "assignment fits live task room");
-                assert!(domain.claiming.insert(task, attempt) == Ok(None), "one pending claim per task");
+                assert!(domain.core.claiming.insert(task, attempt) == Ok(None), "one pending claim per task");
                 if workspace.names.is_empty() {
                     domain.work.push(Work::TasksClaim { task, attempt, writes: Box::new([]) });
                 } else {
@@ -5699,9 +5440,9 @@ fn brief_outputs(
             }
             brief::GatherRequest::Failed { brief, .. } | brief::GatherRequest::Refused { brief } => {
                 let task = brief.raw();
-                drop(domain.contexts.remove(&task));
-                drop(domain.dependency_results.remove(&task));
-                drop(domain.transcripts.remove(&task));
+                drop(domain.core.contexts.remove(&task));
+                drop(domain.core.dependency_results.remove(&task));
+                drop(domain.core.transcripts.remove(&task));
                 domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
             }
         }
@@ -5738,8 +5479,8 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 emit(decision, &env.limits, Delivery::Assigned { channel, assignment });
             }
             fleet::Request::Placed { run, attempt } => {
-                if domain.unreported_restored.get(&run.raw()) == Some(&attempt.raw()) {
-                    let _: Option<u64> = domain.unreported_restored.remove(&run.raw());
+                if domain.core.unreported_restored.get(&run.raw()) == Some(&attempt.raw()) {
+                    let _: Option<u64> = domain.core.unreported_restored.remove(&run.raw());
                 }
                 domain.work.push(Work::Tasks(tasks::Event::Started { task: run.raw(), attempt: attempt.raw() }));
             }
@@ -5761,12 +5502,12 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     attempt: attempt.raw(),
                     turn,
                     read: payload.read,
-                    offered: domain.proofs.get(&run.raw()).expect("current proof").offered,
+                    offered: domain.core.proofs.get(&run.raw()).expect("current proof").offered,
                     cumulative: payload.cumulative,
                 }));
             }
             fleet::Request::Answered { run, attempt, payload, to, .. } => {
-                let _: Option<u64> = domain.unreported_restored.remove(&run.raw());
+                let _: Option<u64> = domain.core.unreported_restored.remove(&run.raw());
                 assert!(
                     current_proof(domain, run.raw(), attempt.raw()),
                     "actual current answer has reserved root proof before child mutation"
@@ -5786,7 +5527,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                     },
                     None => (end, None),
                 };
-                let proof = domain.proofs.get_mut(&run.raw()).expect("terminal proof pre-reserved");
+                let proof = domain.core.proofs.get_mut(&run.raw()).expect("terminal proof pre-reserved");
                 assert!(proof.attempt == attempt.raw(), "terminal callback belongs to current proof");
                 proof.terminal =
                     Some(TerminalRecord { task: run.raw(), attempt: attempt.raw(), cumulative, end: end.clone() });
@@ -5820,11 +5561,11 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             ),
             fleet::Request::Lost { to, run, attempt } => {
                 let _answered = to.into_token();
-                let proof = domain.proofs.get(&run.raw()).expect("lost claim has reserved durable evidence");
+                let proof = domain.core.proofs.get(&run.raw()).expect("lost claim has reserved durable evidence");
                 assert!(proof.attempt == attempt.raw(), "lost callback belongs to current proof");
-                let never_reported = domain.unreported_restored.remove(&run.raw()) == Some(attempt.raw());
+                let never_reported = domain.core.unreported_restored.remove(&run.raw()) == Some(attempt.raw());
                 let mut committed_call = false;
-                for (key, _) in &domain.calls {
+                for (key, _) in &domain.core.call_parts {
                     if key.task == run.raw() && key.attempt == attempt.raw() {
                         committed_call = true;
                         break;
@@ -5850,7 +5591,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
             | fleet::Request::Withdrawn { to, run, attempt, .. }
             | fleet::Request::Refused { to, run, attempt, .. } => {
                 let _answered = to.into_token();
-                let _: Option<u64> = domain.unreported_restored.remove(&run.raw());
+                let _: Option<u64> = domain.core.unreported_restored.remove(&run.raw());
                 drop(domain.assignments.remove(&run.raw()));
                 remember_unpriced_terminal(domain, run, attempt, tasks::End::Refused);
                 domain.work.push(Work::Tasks(tasks::Event::Activation {
@@ -5863,9 +5604,9 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 }));
             }
             fleet::Request::Inbound { channel, run, attempt, event } => {
-                let relay = domain.relaying.take().expect("fleet inbound follows committed word");
+                let relay = domain.core.relaying.take().expect("fleet inbound follows committed word");
                 assert!(event.raw() == relay.word.number, "relay event identifies word");
-                if let Some(proof) = domain.proofs.get_mut(&run.raw())
+                if let Some(proof) = domain.core.proofs.get_mut(&run.raw())
                     && proof.attempt == attempt.raw()
                     && proof.offered == relay.previous
                 {
@@ -5882,7 +5623,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 }
             }
             fleet::Request::Undelivered { .. } => {
-                drop(domain.relaying.take());
+                drop(domain.core.relaying.take());
             }
             fleet::Request::Relay { reply_to, run, attempt, body } => {
                 let Some(Payload::Call { key, body }) = take_payload(domain, body) else {
@@ -5890,7 +5631,7 @@ fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision
                 };
                 assert!(key.task == run.raw() && key.attempt == attempt.raw(), "fleet call envelope is unchanged");
                 assert!(current_proof(domain, key.task, key.attempt), "fleet only relays a current claim");
-                match domain.calls.get(&key).cloned() {
+                match call_answer(domain, key) {
                     Some(answer) => relay_call(domain, &env.limits, decision, reply_to, answer),
                     None => match body.tool {
                         Tool::Unavailable => {
@@ -6379,13 +6120,13 @@ fn load_outputs(
 fn transcript_failed(domain: &mut Domain, waiter: Token) {
     let Some(Read::Transcript { task }) = take_read(domain, waiter) else { return };
     domain.result_reads.retire(Id::from_token(waiter));
-    drop(domain.contexts.remove(&task));
-    drop(domain.transcripts.remove(&task));
+    drop(domain.core.contexts.remove(&task));
+    drop(domain.core.transcripts.remove(&task));
     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
 }
 
 fn begin_dependency_read(domain: &mut Domain, task: u64) -> Option<(Token, u64)> {
-    let context = domain.contexts.get(&task).expect("preparing task context");
+    let context = domain.core.contexts.get(&task).expect("preparing task context");
     let count = context.dependencies.len().checked_add(context.spec.inputs.len()).expect("bounded input count");
     if count == 0 {
         domain.work.push(Work::StartBrief { task });
@@ -6406,8 +6147,8 @@ fn begin_dependency_read(domain: &mut Domain, task: u64) -> Option<(Token, u64)>
         results: List::with_capacity(u32::try_from(count).expect("bounded result count")),
     };
     let Ok(waiter) = domain.result_reads.insert(Some(Read::Dependency(read))) else {
-        drop(domain.contexts.remove(&task));
-        drop(domain.transcripts.remove(&task));
+        drop(domain.core.contexts.remove(&task));
+        drop(domain.core.transcripts.remove(&task));
         domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
         return None;
     };
@@ -6417,8 +6158,8 @@ fn begin_dependency_read(domain: &mut Domain, task: u64) -> Option<(Token, u64)>
 fn dependency_failed(domain: &mut Domain, waiter: Token) {
     let Some(Read::Dependency(read)) = take_read(domain, waiter) else { return };
     domain.result_reads.retire(Id::from_token(waiter));
-    drop(domain.contexts.remove(&read.task));
-    drop(domain.transcripts.remove(&read.task));
+    drop(domain.core.contexts.remove(&read.task));
+    drop(domain.core.transcripts.remove(&read.task));
     domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task: read.task }));
 }
 
@@ -6431,7 +6172,7 @@ fn dependency_loaded(
 ) {
     let Some(Some(Read::Dependency(read))) = domain.result_reads.get(Id::from_token(waiter)) else { return };
     let wanted = *read.ids.get(usize::try_from(read.at).expect("bounded index")).expect("one requested result");
-    let project = domain.contexts.get(&read.task).expect("preparing task context").project;
+    let project = domain.core.contexts.get(&read.task).expect("preparing task context").project;
     if next.is_some() || rows.len() != 1 {
         dependency_failed(domain, waiter);
         return;
@@ -6476,7 +6217,7 @@ fn dependency_loaded(
     let Some(Read::Dependency(read)) = take_read(domain, waiter) else { unreachable!("complete dependency read") };
     domain.result_reads.retire(Id::from_token(waiter));
     assert!(
-        domain.dependency_results.insert(read.task, read.results.into_boxed()).is_ok(),
+        domain.core.dependency_results.insert(read.task, read.results.into_boxed()).is_ok(),
         "one preparation result set"
     );
     domain.work.push(Work::StartBrief { task: read.task });
@@ -6496,8 +6237,8 @@ fn transcript_loaded(
     }
     let Some(Some(Read::Transcript { task })) = domain.result_reads.get(Id::from_token(waiter)) else { return };
     let task = *task;
-    let transcript = domain.transcripts.get_mut(&task).expect("load belongs to prepared task");
-    let bound = u64::from(domain.config.resume_bytes);
+    let transcript = domain.core.transcripts.get_mut(&task).expect("load belongs to prepared task");
+    let bound = u64::from(domain.core.settings.resume_bytes);
     for row in rows {
         let turn = match row {
             Record::Turn(turn) => turn,
@@ -6564,13 +6305,13 @@ fn transcript_loaded(
 
 #[expect(clippy::too_many_lines, reason = "one preparation gathers typed core sections and pinned forge sources")]
 fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
-    let Some(context) = domain.contexts.get(&task) else { return };
-    let Some(current) = domain.tasks.task(task) else { return };
+    let Some(context) = domain.core.contexts.get(&task) else { return };
+    let Some(current) = domain.core.tasks.task(task) else { return };
     if current.phase != tasks::Phase::Active(tasks::Active::Preparing) || current.last_message != context.last_message {
         return;
     }
-    let transcript = domain.transcripts.get(&task).expect("prepared transcript state");
-    let oversized = transcript.bytes > u64::from(domain.config.resume_bytes);
+    let transcript = domain.core.transcripts.get(&task).expect("prepared transcript state");
+    let oversized = transcript.bytes > u64::from(domain.core.settings.resume_bytes);
     let mut wanted = List::with_capacity(domain.limits.brief.sections);
     let Some(task_text) = read_core(domain, task, TaskBriefPart::Spec) else {
         domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
@@ -6861,8 +6602,8 @@ fn startup_page(
         }
     };
     if range == Range::Tasks {
-        for project in &domain.projects {
-            if !domain.people.has_project(*project) {
+        for project in &domain.core.projects {
+            if !domain.core.people.has_project(*project) {
                 domain.work.push(Work::People(people::Event::Roles { project: *project, holdings: Box::new([]) }));
             }
         }
@@ -6879,7 +6620,7 @@ fn startup_page(
         close(domain, env, decision, out);
         return;
     }
-    if !domain.restoring_proofs.is_empty() {
+    if !domain.core.restoring_proofs.is_empty() {
         domain.startup = Startup::Failed;
         out.push(Request::Stop);
         return;
@@ -6892,8 +6633,8 @@ fn startup_page(
         out.push(Request::Stop);
         return;
     }
-    for _ in 0..domain.adopted.len() {
-        domain.work.push(Work::Fleet(domain.adopted.pop().expect("all restored claims")));
+    for _ in 0..domain.core.adopted.len() {
+        domain.work.push(Work::Fleet(domain.core.adopted.pop().expect("all restored claims")));
     }
     domain.work.push(Work::Fleet(fleet::Event::Loaded));
     route_into(domain, env, &mut decision);
@@ -6902,27 +6643,41 @@ fn startup_page(
         return;
     }
     domain.startup = Startup::Running;
-    for _ in 0..domain.due.len() {
-        domain.work.push(Work::Activate(domain.due.pop().expect("restored due tasks")));
+    for _ in 0..domain.core.due.len() {
+        domain.work.push(Work::Activate(domain.core.due.pop().expect("restored due tasks")));
     }
     route_into(domain, env, &mut decision);
     close(domain, env, decision, out);
 }
 
 fn account_event(domain: &mut Domain, env: &Env<Limits>, event: accounts::Event, out: &mut Queue<Request>) {
-    let mut account_out = Queue::with_capacity(accounts::MAX_OUT);
-    accounts::step(&mut domain.accounts, &environment_accounts(env), event, &mut account_out);
-    for _ in 0..account_out.len() {
-        out.push(Request::Account(account_out.pop().expect("account output count")));
+    let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::Account(event));
+    account_outputs(routed, out);
+}
+
+fn account_outputs(routed: jig_core::Requests, out: &mut Queue<Request>) {
+    let jig_core::Requests::Out(mut marked) = routed;
+    for _ in 0..marked.len() {
+        match marked.pop().expect("account mark count") {
+            jig_core::Request::Now(value) => match *value {
+                jig_core::Now::Account(request) => out.push(Request::Account(request)),
+                jig_core::Now::View(_)
+                | jig_core::Now::NotesIndexed { .. }
+                | jig_core::Now::NotesRecalled { .. }
+                | jig_core::Now::NotesRefused { .. } => unreachable!("account route owns its now output"),
+            },
+            jig_core::Request::Decided => {}
+            jig_core::Request::Write(_)
+            | jig_core::Request::Ask { .. }
+            | jig_core::Request::Held(_)
+            | jig_core::Request::Route(_) => unreachable!("account route changes no store decision"),
+        }
     }
 }
 
 fn account_fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
-    let mut account_out = Queue::with_capacity(accounts::MAX_OUT);
-    accounts::fire(&mut domain.accounts, &environment_accounts(env), &mut account_out);
-    for _ in 0..account_out.len() {
-        out.push(Request::Account(account_out.pop().expect("account output count")));
-    }
+    let routed = jig_core::fire(&mut domain.core, &environment_core(env), jig_core::Timer::Account);
+    account_outputs(routed, out);
 }
 
 fn result_words(result: tasks::TaskResult) -> Box<[u8]> {
@@ -7206,6 +6961,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     }
     let account_bytes = accounts::worst_case(&limits.accounts)?;
     let view_bytes = views::worst_case(&limits.views)?;
+    let note_bytes = notes::worst_case(&limits.notes)?;
     let forge_bytes = forge::worst_case(&limits.forge)?;
     let landing_bytes = Map::<u32, Box<[LandingRule]>>::worst_case(limits.authority.projects)?.checked_add(
         u64::from(limits.authority.projects).checked_add(1)?.checked_mul(u64::from(limits.journal.transcript_bytes))?,
@@ -7273,6 +7029,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         account_bytes,
         load_bytes,
         view_bytes,
+        note_bytes,
         forge_bytes,
         landing_bytes,
         permission_bytes,
@@ -7689,23 +7446,23 @@ fn task_section(domain: &Domain, task: u64, part: TaskBriefPart, parts: u32, byt
         return TaskBriefRead::Failed;
     }
     match part {
-        TaskBriefPart::Spec => match domain.contexts.get(&task) {
+        TaskBriefPart::Spec => match domain.core.contexts.get(&task) {
             Some(context) => task_read(context, parts, bytes),
             None => TaskBriefRead::Failed,
         },
-        TaskBriefPart::Delegates => match domain.contexts.get(&task) {
+        TaskBriefPart::Delegates => match domain.core.contexts.get(&task) {
             Some(context) => delegates_read(&context.delegates, bytes),
             None => TaskBriefRead::Failed,
         },
-        TaskBriefPart::Dependencies => match domain.dependency_results.get(&task) {
+        TaskBriefPart::Dependencies => match domain.core.dependency_results.get(&task) {
             Some(results) => dependency_read(results, bytes),
             None => TaskBriefRead::Failed,
         },
-        TaskBriefPart::Attempts => match domain.contexts.get(&task) {
+        TaskBriefPart::Attempts => match domain.core.contexts.get(&task) {
             Some(context) => attempt_read(context.tries, context.invalid_result, bytes),
             None => TaskBriefRead::Failed,
         },
-        TaskBriefPart::TranscriptTail => match domain.transcripts.get(&task) {
+        TaskBriefPart::TranscriptTail => match domain.core.transcripts.get(&task) {
             Some(transcript) => tail_read(transcript, bytes),
             None => TaskBriefRead::Failed,
         },
@@ -8109,101 +7866,14 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
 }
 
 fn current_proof(domain: &Domain, task: u64, attempt: u64) -> bool {
-    match domain.proofs.get(&task) {
+    match domain.core.proofs.get(&task) {
         Some(proof) => proof.attempt == attempt,
         None => false,
     }
 }
 
-fn proof_turn(proof: &RunProof) -> u32 {
-    match proof.turn {
-        Some(turn) => turn.turn,
-        None => 0,
-    }
-}
-
-/// Validate one root row against transient metadata from the owned live-task
-/// startup page. A current answered attempt requires a matching typed terminal;
-/// topology terminals retain unchanged accepted expense.
-fn valid_proof(proof: &RunProof, expected: &RestoringProof, limits: &Limits) -> bool {
-    if proof.task == 0 || proof.attempt == 0 {
-        return false;
-    }
-    let spent = match proof.turn {
-        Some(turn) => {
-            let read_valid = match turn.read {
-                Some(number) => match proof.offered {
-                    Some(high) => number <= high,
-                    None => false,
-                },
-                None => true,
-            };
-            if turn.turn == 0 || !read_valid || turn.cumulative > expected.run_spent {
-                return false;
-            }
-            turn.cumulative
-        }
-        None => 0,
-    };
-    match &proof.terminal {
-        Some(terminal) => {
-            terminal.task == proof.task
-                && terminal.attempt == proof.attempt
-                && terminal.cumulative == expected.run_spent
-                && expected.last_answer == Some(proof.attempt)
-                && end_bytes(&terminal.end)
-                    <= u64::from(limits.tasks.result_bytes).checked_mul(2).expect("bounded terminal proof")
-        }
-        None => spent == expected.run_spent && expected.last_answer != Some(proof.attempt),
-    }
-}
-
-fn supported_task(task: &tasks::TaskRecord, charter: u32) -> bool {
-    let executor = match task.executor {
-        tasks::Executor::Agent { charter: configured } => charter == configured,
-        tasks::Executor::Procedure { code, .. } => code != 0,
-        tasks::Executor::Person(tasks::PersonAddress::Person(person)) => person != 0,
-        tasks::Executor::Person(tasks::PersonAddress::Role(role)) => role <= 3,
-    };
-    task.number != 0 && task.result_position == 0 && executor
-}
-
-fn supported_proposal(task: &tasks::TaskRecord, deployment: &crate::Deployment) -> bool {
-    let Some(proposal) = &task.proposal else { return true };
-    if proposal.number == 0 || proposal.number > deployment.messages || proposal.proposer != task.number {
-        return false;
-    }
-    let holder = match proposal.state {
-        tasks::ProposalState::Pending { holder, .. } => holder,
-        tasks::ProposalState::Accepted { .. }
-        | tasks::ProposalState::Rejected { .. }
-        | tasks::ProposalState::Withdrawn => return false,
-    };
-    let holder_valid = match holder {
-        tasks::ProposalHolder::Task(number) => number != 0 && number <= deployment.tasks,
-        tasks::ProposalHolder::Person(number) => number != 0 && number <= deployment.people,
-        tasks::ProposalHolder::Policy { project, .. } => project == task.project,
-    };
-    if !holder_valid {
-        return false;
-    }
-    match &proposal.action {
-        tasks::ProposalAction::Batch(batch) => {
-            for member in batch {
-                if member.number == 0 || member.number > deployment.tasks {
-                    return false;
-                }
-            }
-            true
-        }
-        tasks::ProposalAction::Amend { task, .. }
-        | tasks::ProposalAction::Widen { task, .. }
-        | tasks::ProposalAction::Release { task } => *task != 0 && *task <= deployment.tasks,
-    }
-}
-
 fn remember_unpriced_terminal(domain: &mut Domain, run: Token, attempt: Token, end: tasks::End) {
-    let proof = domain.proofs.get_mut(&run.raw()).expect("current fleet terminal has pre-reserved proof");
+    let proof = domain.core.proofs.get_mut(&run.raw()).expect("current fleet terminal has pre-reserved proof");
     assert!(proof.attempt == attempt.raw(), "fleet terminal belongs to current proof");
     let cumulative = match proof.turn {
         Some(turn) => turn.cumulative,
@@ -8212,30 +7882,9 @@ fn remember_unpriced_terminal(domain: &mut Domain, run: Token, attempt: Token, e
     proof.terminal = Some(TerminalRecord { task: run.raw(), attempt: attempt.raw(), cumulative, end });
 }
 
-fn supported_requester(requester: tasks::Party, people: u64, tasks: u64) -> bool {
-    match requester {
-        tasks::Party::Person(person) => person != 0 && person <= people,
-        tasks::Party::Task(task) => task != 0 && task <= tasks,
-        tasks::Party::Deployment { .. } => true,
-    }
-}
-
-fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits: &Limits) -> bool {
+fn valid_connector_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits: &Limits) -> bool {
     match answer {
-        CallAnswer::Unavailable
-        | CallAnswer::Introduced
-        | CallAnswer::Unsubscribed
-        | CallAnswer::Controlled
-        | CallAnswer::ControlDenied { .. }
-        | CallAnswer::ForgeEffectRefused(_) => true,
-        CallAnswer::Proposed { proposal } | CallAnswer::ProposalDecided { proposal, .. } => {
-            *proposal != 0 && *proposal <= deployment.messages
-        }
-        CallAnswer::EscalationDecided { task, revision, .. } => {
-            *task != 0 && *task <= deployment.tasks && *revision != 0
-        }
-        CallAnswer::Sent { message } => *message != 0 && *message <= deployment.messages,
-        CallAnswer::ForgeEffect { entry, .. } => *entry != 0 && *entry <= deployment.forge_rows,
+        CallAnswer::ForgeEffect { entry, .. } => *entry != 0 && *entry <= deployment.connector_rows,
         CallAnswer::ForgeRead(result) => match result.as_ref() {
             Ok(answer) => match forge_client::answer_bytes(answer, &limits.forge.client) {
                 Some(bytes) => {
@@ -8246,66 +7895,64 @@ fn valid_call_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits
             },
             Err(_) => true,
         },
-        CallAnswer::Subscribed { subscription } => *subscription != 0 && *subscription <= deployment.messages,
-        CallAnswer::Delegated(numbers) => {
-            if numbers.is_empty() || numbers.len() > usize::try_from(limits.tasks.batch).expect("u32 fits usize") {
-                return false;
-            }
-            for (at, &number) in numbers.iter().enumerate() {
-                if number == 0 || number > deployment.tasks {
-                    return false;
-                }
-                for &earlier in numbers.iter().take(at) {
-                    if number == earlier {
-                        return false;
-                    }
-                }
-            }
-            true
-        }
-        CallAnswer::DelegationDenied { answer, findings } | CallAnswer::ForgeEffectDenied { answer, findings } => {
-            *answer != authority::Answer::Allow
-                && findings.len()
-                    <= usize::try_from(authority::max_out(&limits.authority).expect("valid authority bound"))
-                        .expect("u32 fits usize")
-        }
-        CallAnswer::MessageRefused(problem)
-        | CallAnswer::ProposalRefused(problem)
-        | CallAnswer::EscalationRefused(problem)
-        | CallAnswer::SubscriptionRefused(problem)
-        | CallAnswer::DelegationRefused(problem)
-        | CallAnswer::ControlRefused(problem) => match problem.task {
-            Some(task) => task != 0 && task <= deployment.tasks,
-            None => true,
-        },
+        CallAnswer::ForgeEffectRefused(_)
+        | CallAnswer::ForgeEffectDenied { .. }
+        | CallAnswer::Unavailable
+        | CallAnswer::Introduced
+        | CallAnswer::Unsubscribed
+        | CallAnswer::Controlled
+        | CallAnswer::ControlDenied { .. }
+        | CallAnswer::Proposed { .. }
+        | CallAnswer::ProposalDecided { .. }
+        | CallAnswer::EscalationDecided { .. }
+        | CallAnswer::Sent { .. }
+        | CallAnswer::Subscribed { .. }
+        | CallAnswer::Delegated(_)
+        | CallAnswer::DelegationDenied { .. }
+        | CallAnswer::MessageRefused(_)
+        | CallAnswer::ProposalRefused(_)
+        | CallAnswer::EscalationRefused(_)
+        | CallAnswer::SubscriptionRefused(_)
+        | CallAnswer::DelegationRefused(_)
+        | CallAnswer::ControlRefused(_) => true,
     }
 }
 
 /// Reject unsupported root shapes and identities above durable high-water marks before child
 /// restoration. Proof rows consume exact transient live-row correlations and never load archive
 /// history into the live map.
-#[expect(clippy::too_many_lines, reason = "one startup row matcher validates each stored family")]
 fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
     match row {
         Record::Call(record) => {
             let key = record.key;
-            let valid = key.task != 0
-                && key.attempt != 0
-                && key.completion != 0
-                && key.task <= domain.counters.deployment().tasks
-                && key.attempt <= domain.counters.deployment().runs
-                && valid_call_answer(&record.answer, &domain.counters.deployment(), &env.limits)
-                && match domain.proofs.get(&key.task) {
-                    Some(proof) => proof.attempt >= key.attempt,
-                    None => false,
-                };
-            if !valid || domain.calls.insert(key, record.answer).is_err() {
+            if !valid_connector_answer(&record.answer, &domain.core.counters.deployment(), &env.limits) {
+                domain.startup = Startup::Failed;
+                return;
+            }
+            let part = record.answer.core_part(domain.config.forge_connector);
+            if domain.core.restore_core(
+                jig_core::CoreRecord::Call(jig_core::CallRecord { key, part: part.clone() }),
+                &core_limits(&env.limits),
+            ) != jig_core::Restored::Live
+            {
+                domain.startup = Startup::Failed;
+                return;
+            }
+            if let jig_core::CallPart::Connector { .. } = part
+                && domain.connector_calls.insert(key, record.answer).is_err()
+            {
                 domain.startup = Startup::Failed;
             }
         }
         Record::Deployment(deployment) => {
-            domain.journal = Journal::from_durable(&root_journal_limits(&env.limits), deployment.commits);
-            domain.counters = Counters::new(deployment);
+            match domain.core.restore_core(jig_core::CoreRecord::Deployment(deployment), &core_limits(&env.limits)) {
+                jig_core::Restored::Deployment { commits } => {
+                    domain.journal = Journal::from_durable(&root_journal_limits(&env.limits), commits);
+                }
+                jig_core::Restored::Live | jig_core::Restored::Archive | jig_core::Restored::Rejected => {
+                    unreachable!("deployment restore result")
+                }
+            }
         }
         Record::People(people::Stored::Policy { project, value }) => {
             policy::restore(domain, project, value);
@@ -8313,7 +7960,9 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
         Record::People(record) => domain.work.push(Work::People(people::Event::Restore { record })),
         Record::Forge { id, row } => {
             let key = forge::stored_key(&row);
-            if id == 0 || id > domain.counters.deployment().forge_rows || domain.forge_keys.insert(key, id) != Ok(None)
+            if id == 0
+                || id > domain.core.counters.deployment().connector_rows
+                || domain.forge_keys.insert(key, id) != Ok(None)
             {
                 domain.startup = Startup::Failed;
                 return;
@@ -8322,11 +7971,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
         }
         Record::Tasks(record) => match record {
             tasks::Stored::PersonProposal(ref row) => {
-                if row.number > domain.counters.deployment().messages
-                    || row.proposer > domain.counters.deployment().people
-                    || row.goal.number > domain.counters.deployment().tasks
-                    || domain.config.authority.policy(row.project).is_none()
-                {
+                if !domain.core.restore_task_row(&record) {
                     domain.startup = Startup::Failed;
                     return;
                 }
@@ -8339,8 +7984,8 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             tasks::Stored::Ended(_) => {
                 unreachable!("historical child rows excluded from startup")
             }
-            tasks::Stored::Stub(stub) => {
-                if stub.task > domain.counters.deployment().tasks {
+            tasks::Stored::Stub(_) => {
+                if !domain.core.restore_task_row(&record) {
                     domain.startup = Startup::Failed;
                     return;
                 }
@@ -8348,42 +7993,9 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             }
             tasks::Stored::History(_) => unreachable!("history rows excluded from startup"),
             tasks::Stored::Live(ref task) => {
-                let agent_attempt = match task.executor {
-                    tasks::Executor::Agent { .. } => task.attempt != 0,
-                    tasks::Executor::Procedure { .. } | tasks::Executor::Person(_) => false,
-                };
-                if !supported_task(task, domain.config.charter)
-                    || !supported_proposal(task, &domain.counters.deployment())
-                    || !escalation::supported(domain, task)
-                    || task.number > domain.counters.deployment().tasks
-                    || (agent_attempt && task.attempt > domain.counters.deployment().runs)
-                    || !supported_requester(
-                        task.requester,
-                        domain.counters.deployment().people,
-                        domain.counters.deployment().tasks,
-                    )
-                {
+                if !escalation::supported(domain, task) || !domain.core.restore_task_row(&record) {
                     domain.startup = Startup::Failed;
                     return;
-                }
-                if agent_attempt
-                    && domain
-                        .restoring_proofs
-                        .insert(
-                            task.number,
-                            RestoringProof {
-                                attempt: task.attempt,
-                                turn: task.turn,
-                                run_spent: task.run_spent,
-                                last_answer: task.last_answer,
-                            },
-                        )
-                        .is_err()
-                {
-                    domain.startup = Startup::Failed;
-                }
-                if domain.view_phases.insert(task.number, (tasks::view_phase(&task.phase), task.tracked)).is_err() {
-                    domain.startup = Startup::Failed;
                 }
                 domain.work.push(Work::People(people::Event::Waiting {
                     task: task.number,
@@ -8396,15 +8008,9 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             }
         },
         Record::RunProof(proof) => {
-            let valid = match domain.restoring_proofs.remove(&proof.task) {
-                Some(expected) => {
-                    proof.attempt == expected.attempt
-                        && proof_turn(&proof) == expected.turn
-                        && valid_proof(&proof, &expected, &env.limits)
-                }
-                None => false,
-            };
-            if !valid || domain.proofs.insert(proof.task, proof).is_err() {
+            if domain.core.restore_core(jig_core::CoreRecord::RunProof(proof), &core_limits(&env.limits))
+                != jig_core::Restored::Live
+            {
                 domain.startup = Startup::Failed;
             }
         }

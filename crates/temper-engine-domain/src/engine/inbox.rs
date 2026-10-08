@@ -3,8 +3,8 @@
 //! root rebuilds the cache from restored rows (domain/people.md, section 6).
 
 use super::{
-    Decision, Delivery, Domain, Env, Id, Key, Range, Read as RootRead, Record, ReplyTo, Request, Token, admits,
-    authority, close, emit, ending_words, people, request_load, save, take_read, tasks,
+    Decision, Delivery, Domain, Env, Id, Key, Range, Read as RootRead, Record, ReplyTo, Request, Token, admits, close,
+    emit, ending_words, people, request_load, save, take_read, tasks,
 };
 use crate::Write;
 use alloc::boxed::Box;
@@ -12,40 +12,7 @@ use skein_lib::{List, Queue};
 
 /// Project one durable person-origin goal proposal into policy or proposer inboxes.
 pub(super) fn person_proposal_entries(domain: &Domain, row: &tasks::PersonProposal) -> Box<[people::Entry]> {
-    let mut entries = List::with_capacity(domain.config.authority.limits().roles.max(1));
-    match &row.state {
-        tasks::PersonProposalState::Pending { since } => {
-            if let Some(project) = domain.config.authority.policy(row.project) {
-                for policy in &project.roles {
-                    if !policy.decides.allows(authority::ProposalKind::Batch) {
-                        continue;
-                    }
-                    entries
-                        .push(people::Entry {
-                            task: row.goal.number,
-                            project: row.project,
-                            whom: people::Whom::Role { project: row.project, role: policy.number },
-                            kind: people::EntryKind::Proposal { number: row.number },
-                            at: *since,
-                        })
-                        .expect("one entry per policy role");
-                }
-            }
-        }
-        tasks::PersonProposalState::Rejected { message, at, .. } => {
-            entries
-                .push(people::Entry {
-                    task: row.goal.number,
-                    project: row.project,
-                    whom: people::Whom::Person(row.proposer),
-                    kind: people::EntryKind::Reply { message: *message },
-                    at: *at,
-                })
-                .expect("one rejection reply");
-        }
-        tasks::PersonProposalState::Accepted { .. } => {}
-    }
-    entries.into_boxed()
+    domain.core.person_proposal_entries(row)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -84,23 +51,23 @@ pub(super) fn begin(
     if most == 0
         || env.limits.people.inbox_entries == 0
         || match before {
-            Some(cursor) => cursor.read_high > domain.counters.deployment().messages,
+            Some(cursor) => cursor.read_high > domain.core.counters.deployment().messages,
             None => false,
         }
     {
         return refused(to, people::Refusal::Limit, out);
     }
-    let Some(person) = domain.people.person(sign_in, env.now, env.wall) else {
+    let Some(person) = domain.core.people.person(sign_in, env.now, env.wall) else {
         return refused(to, people::Refusal::SignIn, out);
     };
-    if !domain.ready() || !admits(domain, &env.limits) || domain.reading_results.contains_key(&person) {
+    if !domain.ready() || !admits(domain, &env.limits) || domain.core.reading_results.contains_key(&person) {
         return refused(to, people::Refusal::Busy, out);
     }
     let read = Read {
         to,
         person,
         before,
-        position: domain.people.read_position(person).expect("authenticated person restored"),
+        position: domain.core.people.read_position(person).expect("authenticated person restored"),
         high: match before {
             Some(cursor) => cursor.read_high,
             None => 0,
@@ -115,7 +82,7 @@ pub(super) fn begin(
         Err(Some(RootRead::Inbox(read))) => return refused(read.to, people::Refusal::Busy, out),
         Err(_) => unreachable!("inserted inbox read"),
     };
-    let indexed = domain.reading_results.insert(person, id.token());
+    let indexed = domain.core.reading_results.insert(person, id.token());
     assert!(indexed == Ok(None), "one inbox read per person");
     let mut decision = Decision::new(&env.limits.journal);
     emit(&mut decision, &env.limits, Delivery::BeginInboxView { waiter: id.token() });
@@ -137,7 +104,7 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, o
         }
         None => return,
     };
-    let removed = domain.reading_results.remove(&read.person);
+    let removed = domain.core.reading_results.remove(&read.person);
     assert!(removed == Some(waiter), "inbox reader index names its waiter");
     domain.result_reads.retire(Id::from_token(waiter));
     refused(read.to, why, out);
@@ -146,7 +113,7 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, o
 fn visible(domain: &Domain, person: u64, entry: people::Entry) -> bool {
     match entry.whom {
         people::Whom::Person(named) => named == person,
-        people::Whom::Role { project, role } => match domain.people.role(person, project) {
+        people::Whom::Role { project, role } => match domain.core.people.role(person, project) {
             Some(holding) => super::escalation::role_number(holding) == role,
             None => false,
         },
@@ -228,7 +195,7 @@ pub(super) fn page(
                         }
                         match entry.kind {
                             people::EntryKind::Reply { message } => {
-                                if message == 0 || message > domain.counters.deployment().messages {
+                                if message == 0 || message > domain.core.counters.deployment().messages {
                                     return failed_owned(domain, waiter, read, people::Refusal::Limit, out);
                                 }
                                 if message > read.position && (!read.frozen_high || message <= read.high) {
@@ -252,7 +219,7 @@ pub(super) fn page(
                         if visible(domain, read.person, entry) {
                             match entry.kind {
                                 people::EntryKind::Reply { message } => {
-                                    if message == 0 || message > domain.counters.deployment().messages {
+                                    if message == 0 || message > domain.core.counters.deployment().messages {
                                         return failed_owned(domain, waiter, read, people::Refusal::Limit, out);
                                     }
                                     if message > read.position && (!read.frozen_high || message <= read.high) {
@@ -298,7 +265,7 @@ pub(super) fn page(
                         && task.result_position > read.position
                         && (!read.frozen_high || task.result_position <= read.high)
                     {
-                        if task.result_position > domain.counters.deployment().messages {
+                        if task.result_position > domain.core.counters.deployment().messages {
                             return failed_owned(domain, waiter, read, people::Refusal::Limit, out);
                         }
                         if !read.frozen_high {
@@ -362,7 +329,7 @@ pub(super) fn page(
             request_load(domain, waiter, Range::EndedResults, None, out);
         }
         Stage::Ended => {
-            let removed = domain.reading_results.remove(&read.person);
+            let removed = domain.core.reading_results.remove(&read.person);
             assert!(removed == Some(waiter), "inbox reader index names its waiter");
             domain.result_reads.retire(Id::from_token(waiter));
             let next = if read.more {
@@ -380,6 +347,7 @@ pub(super) fn page(
             let mut decision = Decision::new(&env.limits.journal);
             if next.is_none() && read.high > read.position {
                 let row = domain
+                    .core
                     .people
                     .advance_read_position(read.person, read.high)
                     .expect("newest read position advances after the last page");
@@ -396,170 +364,12 @@ pub(super) fn page(
 }
 
 fn failed_owned(domain: &mut Domain, waiter: Token, read: Read, why: people::Refusal, out: &mut Queue<Request>) {
-    let removed = domain.reading_results.remove(&read.person);
+    let removed = domain.core.reading_results.remove(&read.person);
     assert!(removed == Some(waiter), "inbox reader index names its waiter");
     domain.result_reads.retire(Id::from_token(waiter));
     refused(read.to, why, out);
 }
 
-fn add(
-    entries: &mut List<people::Entry>,
-    row: &tasks::TaskRecord,
-    whom: people::Whom,
-    kind: people::EntryKind,
-    at: skein_lib::Wall,
-) {
-    entries
-        .push(people::Entry { task: row.number, project: row.project, whom, kind, at })
-        .expect("one bounded projection per task state");
-}
-
-fn proposal_kind(kind: tasks::ProposalKind) -> authority::ProposalKind {
-    match kind {
-        tasks::ProposalKind::Batch => authority::ProposalKind::Batch,
-        tasks::ProposalKind::Amend => authority::ProposalKind::Amend,
-        tasks::ProposalKind::Widen => authority::ProposalKind::Widen,
-        tasks::ProposalKind::Release => authority::ProposalKind::Escalation,
-    }
-}
-
-fn question_answered(row: &tasks::TaskRecord, question: u64) -> bool {
-    for word in &row.inbox {
-        match word.kind {
-            tasks::MessageKind::Answer { question: answered } if answered == question => return true,
-            tasks::MessageKind::Answer { .. }
-            | tasks::MessageKind::Question
-            | tasks::MessageKind::Words
-            | tasks::MessageKind::Amendment { .. }
-            | tasks::MessageKind::Proposal { .. }
-            | tasks::MessageKind::ProposalDecision { .. }
-            | tasks::MessageKind::Escalation { .. }
-            | tasks::MessageKind::Notice { .. }
-            | tasks::MessageKind::Timer { .. }
-            | tasks::MessageKind::News { .. }
-            | tasks::MessageKind::Result(_) => {}
-        }
-    }
-    false
-}
-
-/// Project the currently waiting person-facing references of one task.
-#[expect(clippy::too_many_lines, reason = "one exhaustive task projection covers all person-facing waiting kinds")]
 pub(super) fn entries(domain: &Domain, row: &tasks::TaskRecord) -> Box<[people::Entry]> {
-    let capacity = domain
-        .limits
-        .tasks
-        .inbox_messages
-        .checked_add(domain.config.authority.limits().roles)
-        .expect("validated task inbox projection bound")
-        .checked_add(3)
-        .expect("validated task inbox projection bound");
-    let mut entries = List::with_capacity(capacity);
-    match &row.phase {
-        tasks::Phase::Ended(_) | tasks::Phase::Closing(_) => return entries.into_boxed(),
-        tasks::Phase::Waiting | tasks::Phase::Active(_) | tasks::Phase::Held { .. } => {}
-    }
-    match row.requester {
-        tasks::Party::Person(person) => {
-            for word in &row.inbox {
-                match word.kind {
-                    tasks::MessageKind::Question => {
-                        if !question_answered(row, word.number) {
-                            add(
-                                &mut entries,
-                                row,
-                                people::Whom::Person(person),
-                                people::EntryKind::Question { message: word.number },
-                                word.at,
-                            );
-                        }
-                    }
-                    tasks::MessageKind::Answer { .. } => add(
-                        &mut entries,
-                        row,
-                        people::Whom::Person(person),
-                        people::EntryKind::Reply { message: word.number },
-                        word.at,
-                    ),
-                    tasks::MessageKind::ProposalDecision { .. }
-                    | tasks::MessageKind::Proposal { .. }
-                    | tasks::MessageKind::Words
-                    | tasks::MessageKind::Amendment { .. }
-                    | tasks::MessageKind::Notice { .. }
-                    | tasks::MessageKind::Timer { .. }
-                    | tasks::MessageKind::News { .. }
-                    | tasks::MessageKind::Result(_)
-                    | tasks::MessageKind::Escalation { .. } => {}
-                }
-            }
-        }
-        tasks::Party::Task(_) | tasks::Party::Deployment { .. } => {}
-    }
-    if let Some(proposal) = &row.proposal {
-        match proposal.state {
-            tasks::ProposalState::Pending { holder, since } => match holder {
-                tasks::ProposalHolder::Person(person) => add(
-                    &mut entries,
-                    row,
-                    people::Whom::Person(person),
-                    people::EntryKind::Proposal { number: proposal.number },
-                    since,
-                ),
-                tasks::ProposalHolder::Policy { project, kind } => {
-                    if let Some(project_policy) = domain.config.authority.policy(project) {
-                        for policy in &project_policy.roles {
-                            if !policy.decides.allows(proposal_kind(kind)) {
-                                continue;
-                            }
-                            add(
-                                &mut entries,
-                                row,
-                                people::Whom::Role { project, role: policy.number },
-                                people::EntryKind::Proposal { number: proposal.number },
-                                since,
-                            );
-                        }
-                    }
-                }
-                tasks::ProposalHolder::Task(_) => {}
-            },
-            tasks::ProposalState::Accepted { .. }
-            | tasks::ProposalState::Rejected { .. }
-            | tasks::ProposalState::Withdrawn => {}
-        }
-    }
-    match row.escalation {
-        tasks::Escalation::Waiting { holder, revision, since, .. } => match holder {
-            tasks::EscalationHolder::Person(person) => {
-                add(&mut entries, row, people::Whom::Person(person), people::EntryKind::Escalation { revision }, since);
-            }
-            tasks::EscalationHolder::Role { project, role } => {
-                add(
-                    &mut entries,
-                    row,
-                    people::Whom::Role { project, role },
-                    people::EntryKind::Escalation { revision },
-                    since,
-                );
-            }
-            tasks::EscalationHolder::Task(_) => {}
-        },
-        tasks::Escalation::Unheld { .. } | tasks::Escalation::Routing { .. } | tasks::Escalation::Rejected { .. } => {}
-    }
-    match row.executor {
-        tasks::Executor::Person(tasks::PersonAddress::Person(person)) => {
-            if row.taken_by.is_none() {
-                add(&mut entries, row, people::Whom::Person(person), people::EntryKind::PersonTask, row.created_at);
-            }
-        }
-        tasks::Executor::Person(tasks::PersonAddress::Role(role)) => {
-            let whom = match row.taken_by {
-                Some(person) => people::Whom::Person(person),
-                None => people::Whom::Role { project: row.project, role },
-            };
-            add(&mut entries, row, whom, people::EntryKind::PersonTask, row.created_at);
-        }
-        tasks::Executor::Agent { .. } | tasks::Executor::Procedure { .. } => {}
-    }
-    entries.into_boxed()
+    domain.core.waiting_entries(&super::core_limits(&domain.limits), row)
 }

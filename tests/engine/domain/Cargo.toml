@@ -17,6 +17,7 @@ jig-core-brief.workspace = true
 jig-core-accounts.workspace = true
 jig-core-authority.workspace = true
 jig-core-views.workspace = true
+jig-core-notes.workspace = true
 temper-engine-domain-forge.workspace = true
 temper-engine-domain-forge-change.workspace = true
 temper-engine-domain-forge-client.workspace = true

@@ -34,20 +34,20 @@ pub(super) fn role_number(role: people::Role) -> u32 {
 
 fn fallback(domain: &Domain, project: u32) -> Option<tasks::EscalationHolder> {
     // The policy names the escalation role; this slice resolves that role here.
-    let role = domain.config.authority.policy(project)?.escalation_role?;
+    let role = domain.core.authority.policy(project)?.escalation_role?;
     Some(tasks::EscalationHolder::Role { project, role })
 }
 
 fn covers(domain: &Domain, context: &tasks::EscalationContext, person: u64, role: Option<people::Role>) -> bool {
     let Some(role) = role else { return false };
-    let pool = tasks::Funder::Pool { project: context.project, person, period: domain.config.period };
-    let numbers = match domain.tasks.funding(pool) {
+    let pool = tasks::Funder::Pool { project: context.project, person, period: domain.core.settings.period };
+    let numbers = match domain.core.tasks.funding(pool) {
         Some(record) => record.numbers,
         None => tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
     };
     let Some(needed) = authority::needs(&authority::Action::Escalate { release: None }) else { return false };
     authority::covers(
-        &domain.config.authority,
+        &domain.core.authority,
         &needed,
         &authority::Holder::Person {
             project: context.project,
@@ -65,16 +65,16 @@ pub(super) fn supported(domain: &Domain, task: &tasks::TaskRecord) -> bool {
     match &task.escalation {
         tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Role { .. }, entry, .. } => {
             // An old selector can be rechecked, but its project must remain the chat's.
-            *entry <= domain.counters.deployment().messages
+            *entry <= domain.core.counters.deployment().messages
                 && match fallback {
                     tasks::EscalationHolder::Role { project, .. } => project == task.project,
                     tasks::EscalationHolder::Task(_) | tasks::EscalationHolder::Person(_) => false,
                 }
         }
         tasks::Escalation::Rejected { by, .. } => {
-            *by <= domain.counters.deployment().people.max(domain.counters.deployment().tasks)
+            *by <= domain.core.counters.deployment().people.max(domain.core.counters.deployment().tasks)
         }
-        tasks::Escalation::Waiting { entry, .. } => *entry <= domain.counters.deployment().messages,
+        tasks::Escalation::Waiting { entry, .. } => *entry <= domain.core.counters.deployment().messages,
         tasks::Escalation::Unheld { .. } | tasks::Escalation::Routing { .. } => true,
     }
 }
@@ -112,12 +112,14 @@ fn recipient_after(
                     tasks::Party::Task(parent) => parent,
                     tasks::Party::Person(_) | tasks::Party::Deployment { .. } => break,
                 };
-                let Some(holder) = domain.tasks.delegation(parent) else { return fallback(domain, context.project) };
+                let Some(holder) = domain.core.tasks.delegation(parent) else {
+                    return fallback(domain, context.project);
+                };
                 if passed
                     && holder.deciding
                     && holder.project == context.project
                     && authority::covers(
-                        &domain.config.authority,
+                        &domain.core.authority,
                         &needed,
                         &authority::Holder::Task {
                             project: context.project,
@@ -146,7 +148,7 @@ fn recipient_after(
 }
 
 pub(super) fn needed(domain: &mut Domain, context: Box<tasks::EscalationContext>) {
-    let Some(holder) = recipient(domain, &context, domain.people.role(context.requester, context.project)) else {
+    let Some(holder) = recipient(domain, &context, domain.core.people.role(context.requester, context.project)) else {
         domain.startup = super::Startup::Failed;
         return;
     };
@@ -166,7 +168,7 @@ pub(super) fn needed(domain: &mut Domain, context: Box<tasks::EscalationContext>
         task: context.task,
         revision: context.escalation.revision(),
         holder,
-        entry: match crate::fresh(&mut domain.counters, Family::Message) {
+        entry: match crate::fresh(&mut domain.core.counters, Family::Message) {
             Some(entry) => entry,
             None => {
                 domain.startup = super::Startup::Failed;
@@ -177,7 +179,7 @@ pub(super) fn needed(domain: &mut Domain, context: Box<tasks::EscalationContext>
 }
 
 pub(super) fn stalled(domain: &mut Domain, task: u64, revision: u64, old: tasks::EscalationHolder) {
-    let Some(context) = domain.tasks.escalation(task) else { return };
+    let Some(context) = domain.core.tasks.escalation(task) else { return };
     let (current, holder) = match context.escalation {
         tasks::Escalation::Waiting { revision, holder, .. } => (revision, holder),
         tasks::Escalation::Unheld { .. } | tasks::Escalation::Routing { .. } | tasks::Escalation::Rejected { .. } => {
@@ -187,9 +189,9 @@ pub(super) fn stalled(domain: &mut Domain, task: u64, revision: u64, old: tasks:
     if current != revision || holder != old {
         return;
     }
-    let role = domain.people.role(context.requester, context.project);
+    let role = domain.core.people.role(context.requester, context.project);
     if let Some(next) = recipient_after(domain, &context, role, Some(old)) {
-        let Some(entry) = crate::fresh(&mut domain.counters, Family::Message) else {
+        let Some(entry) = crate::fresh(&mut domain.core.counters, Family::Message) else {
             domain.startup = super::Startup::Failed;
             return;
         };
@@ -214,7 +216,7 @@ pub(super) fn task_decide(
     if !super::current_proof(domain, key.task, key.attempt) {
         return refuse_task(domain, env, barrier, to, key, task, tasks::Refusal::Attempt);
     }
-    let Some(context) = domain.tasks.escalation(task) else {
+    let Some(context) = domain.core.tasks.escalation(task) else {
         return refuse_task(domain, env, barrier, to, key, task, tasks::Refusal::Unknown);
     };
     let (current, holder) = match context.escalation {
@@ -226,7 +228,7 @@ pub(super) fn task_decide(
     if current != revision || holder != tasks::EscalationHolder::Task(key.task) {
         return refuse_task(domain, env, barrier, to, key, task, tasks::Refusal::Reference);
     }
-    let role = domain.people.role(context.requester, context.project);
+    let role = domain.core.people.role(context.requester, context.project);
     let semantic = match choice {
         EscalationChoice::Release => {
             if recipient(domain, &context, role) != Some(holder) {
@@ -243,16 +245,16 @@ pub(super) fn task_decide(
         }
     };
     let entry = match semantic {
-        tasks::EscalationDecision::Pass { .. } => match crate::fresh(&mut domain.counters, Family::Message) {
+        tasks::EscalationDecision::Pass { .. } => match crate::fresh(&mut domain.core.counters, Family::Message) {
             Some(entry) => Some(entry),
             None => return refuse_task(domain, env, barrier, to, key, task, tasks::Refusal::Busy),
         },
         tasks::EscalationDecision::Release | tasks::EscalationDecision::Reject { .. } => None,
     };
     let token = to.into_token();
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "task escalation call room reserved");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "task escalation call room reserved");
     assert!(
-        domain.routing_calls.insert(token, RoutedCall::Escalation { key, task, revision }) == Ok(None),
+        domain.core.routing_calls.insert(token, RoutedCall::Escalation { key, task, revision }) == Ok(None),
         "one route"
     );
     domain.work.push(Work::TaskEscalation(tasks::Event::DecideEscalation {
@@ -292,7 +294,7 @@ pub(super) fn read(
     task: u64,
     out: &mut skein_lib::Queue<Request>,
 ) {
-    let Some(person) = domain.people.person(sign_in, env.now, env.wall) else {
+    let Some(person) = domain.core.people.person(sign_in, env.now, env.wall) else {
         refuse_direct(to, people::Refusal::SignIn, out);
         return;
     };
@@ -423,7 +425,7 @@ pub(super) fn inspected(
                 emit(barrier, &env.limits, refusal(to, people::Refusal::Unknown));
                 return;
             };
-            let role = domain.people.role(person, context.project);
+            let role = domain.core.people.role(person, context.project);
             if context.task != task || !visible(domain, &context, person, role) {
                 emit(barrier, &env.limits, refusal(to, people::Refusal::Standing));
                 return;
@@ -485,7 +487,7 @@ pub(super) fn inspected(
                         Some(Read::Escalation(query));
                     let entry = match semantic {
                         tasks::EscalationDecision::Pass { .. } => {
-                            match crate::fresh(&mut domain.counters, Family::Message) {
+                            match crate::fresh(&mut domain.core.counters, Family::Message) {
                                 Some(entry) => Some(entry),
                                 None => {
                                     finish_refused(domain, waiter, request, people::Refusal::Limit);
@@ -517,16 +519,16 @@ fn release_allowed(
     role: Option<people::Role>,
 ) -> bool {
     let Some(role) = role else { return false };
-    let pool = tasks::Funder::Pool { project: context.project, person, period: domain.config.period };
-    let numbers = match domain.tasks.funding(pool) {
+    let pool = tasks::Funder::Pool { project: context.project, person, period: domain.core.settings.period };
+    let numbers = match domain.core.tasks.funding(pool) {
         Some(record) => record.numbers,
         None => tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
     };
     let mut findings = skein_lib::Queue::with_capacity(
-        authority::max_out(domain.config.authority.limits()).expect("checked authority output"),
+        authority::max_out(domain.core.authority.limits()).expect("checked authority output"),
     );
     authority::check_request(
-        &domain.config.authority,
+        &domain.core.authority,
         &authority::PersonAsk {
             project: context.project,
             role: role_number(role),
@@ -632,9 +634,9 @@ pub(super) fn loaded(domain: &mut Domain, env: &Env<Limits>, waiter: Token, rows
                 Record::EscalationDecision(row)
                     if row.task == task
                         && row.revision == revision
-                        && row.task <= domain.counters.deployment().tasks
+                        && row.task <= domain.core.counters.deployment().tasks
                         && row.by != 0
-                        && row.by <= domain.counters.deployment().people =>
+                        && row.by <= domain.core.counters.deployment().people =>
                 {
                     let bounded = match &row.decision {
                         people::EscalationDecision::Release | people::EscalationDecision::Pass => true,
@@ -653,11 +655,11 @@ pub(super) fn loaded(domain: &mut Domain, env: &Env<Limits>, waiter: Token, rows
                     };
                     let private = row.project == project
                         && row.requester != 0
-                        && row.requester <= domain.counters.deployment().people
+                        && row.requester <= domain.core.counters.deployment().people
                         && (row.requester == person
                             || match fallback(domain, project) {
                                 Some(tasks::EscalationHolder::Role { role: selected, .. }) => {
-                                    match domain.people.role(person, project) {
+                                    match domain.core.people.role(person, project) {
                                         Some(role) => role_number(role) == selected,
                                         None => false,
                                     }

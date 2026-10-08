@@ -55,9 +55,9 @@ pub(super) fn historical_loaded(domain: &mut Domain, waiter: Token, rows: Box<[s
                 super::Record::ProposalDecision(row)
                     if row.proposal == query.proposal
                         && row.project == query.project
-                        && row.proposal <= domain.counters.deployment().messages
+                        && row.proposal <= domain.core.counters.deployment().messages
                         && row.by != 0
-                        && row.by <= domain.counters.deployment().people
+                        && row.by <= domain.core.counters.deployment().people
                         && match row.proposer {
                             tasks::Party::Person(number) | tasks::Party::Task(number) => number == query.proposer,
                             tasks::Party::Deployment { .. } => false,
@@ -229,11 +229,11 @@ fn action_for_check(action: &tasks::ProposalAction) -> Option<authority::Action>
 }
 
 fn covers_task(domain: &Domain, needed: &authority::Authority, ancestor: u64, distance: u32, project: u32) -> bool {
-    let Some(holder) = domain.tasks.delegation(ancestor) else { return false };
+    let Some(holder) = domain.core.tasks.delegation(ancestor) else { return false };
     holder.project == project
         && holder.deciding
         && authority::covers(
-            &domain.config.authority,
+            &domain.core.authority,
             needed,
             &authority::Holder::Task {
                 project,
@@ -246,11 +246,11 @@ fn covers_task(domain: &Domain, needed: &authority::Authority, ancestor: u64, di
 }
 
 fn distance(domain: &Domain, proposer: u64, holder: u64) -> Option<u32> {
-    let mut next = domain.tasks.delegation(proposer)?.requester;
+    let mut next = domain.core.tasks.delegation(proposer)?.requester;
     for depth in 1..=domain.limits.tasks.depth.saturating_add(1) {
         match next {
             tasks::Party::Task(task) if task == holder => return Some(depth),
-            tasks::Party::Task(task) => next = domain.tasks.delegation(task)?.requester,
+            tasks::Party::Task(task) => next = domain.core.tasks.delegation(task)?.requester,
             tasks::Party::Person(_) | tasks::Party::Deployment { .. } => return None,
         }
     }
@@ -264,14 +264,14 @@ fn covers_person(
     project: u32,
     kind: authority::ProposalKind,
 ) -> bool {
-    let Some(role) = domain.people.role(person, project) else { return false };
-    let funder = tasks::Funder::Pool { project, person, period: domain.config.period };
-    let numbers = match domain.tasks.funding(funder) {
+    let Some(role) = domain.core.people.role(person, project) else { return false };
+    let funder = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
+    let numbers = match domain.core.tasks.funding(funder) {
         Some(pool) => pool.numbers,
-        None => tasks::Numbers { budget: domain.config.person_budget, spent: 0, spent_below: 0, reserved: 0 },
+        None => tasks::Numbers { budget: domain.core.settings.person_budget, spent: 0, spent_below: 0, reserved: 0 },
     };
     authority::covers(
-        &domain.config.authority,
+        &domain.core.authority,
         needed,
         &authority::Holder::Person {
             project,
@@ -292,7 +292,7 @@ pub(super) fn holder(
     action: &tasks::ProposalAction,
     after: Option<tasks::ProposalHolder>,
 ) -> Option<tasks::ProposalHolder> {
-    let context = domain.tasks.delegation(proposer)?;
+    let context = domain.core.tasks.delegation(proposer)?;
     let checked = action_for_check(action)?;
     let needed = authority::needs(&checked)?;
     let (kind, policy_kind) = kind(action);
@@ -309,7 +309,7 @@ pub(super) fn holder(
                 if after == Some(holder) {
                     passed = true;
                 }
-                next = match domain.tasks.delegation(task) {
+                next = match domain.core.tasks.delegation(task) {
                     Some(context) => context.requester,
                     None => return Some(tasks::ProposalHolder::Policy { project: context.project, kind }),
                 };
@@ -337,11 +337,11 @@ pub(super) fn holder(
 /// A queued reroute carries the exact holder and task revision it inspected, so
 /// another decision made before it drains cannot redirect a newer proposal.
 pub(super) fn recheck_project(domain: &mut Domain, project: u32) {
-    for view in domain.tasks.view_tasks() {
+    for view in domain.core.tasks.view_tasks() {
         if view.project != project {
             continue;
         }
-        let Some(record) = domain.tasks.task(view.number) else { continue };
+        let Some(record) = domain.core.tasks.task(view.number) else { continue };
         let Some(proposal) = &record.proposal else { continue };
         let current = match proposal.state {
             tasks::ProposalState::Pending { holder, .. } => holder,
@@ -375,7 +375,9 @@ fn materialize(
     }
     let mut ids = List::with_capacity(limits.batch);
     for _ in &batch {
-        let Some(number) = crate::fresh(&mut domain.counters, Family::Task) else { return Err(tasks::Refusal::Live) };
+        let Some(number) = crate::fresh(&mut domain.core.counters, Family::Task) else {
+            return Err(tasks::Refusal::Live);
+        };
         ids.push(number).expect("bounded batch IDs");
     }
     let mut created = List::with_capacity(limits.batch);
@@ -391,7 +393,7 @@ fn materialize(
             }
         }
         let number = *ids.get(u32::try_from(index).expect("batch index")).expect("one ID per member");
-        let root = domain.tasks.root(proposer).ok_or(tasks::Refusal::Unknown)?;
+        let root = domain.core.tasks.root(proposer).ok_or(tasks::Refusal::Unknown)?;
         let holdings = forge_route::task_holdings(
             domain,
             env,
@@ -445,7 +447,7 @@ pub(super) fn propose_call(
     {
         return refused(domain, env, decision, to, key, tasks::Refusal::Read);
     }
-    let Some(context) = domain.tasks.delegation(key.task) else {
+    let Some(context) = domain.core.tasks.delegation(key.task) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::Unknown);
     };
     let action = match action {
@@ -468,24 +470,27 @@ pub(super) fn propose_call(
     let Some(needed) = authority::needs(&checked) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::AuthorityShape);
     };
-    let Some(policy) = domain.config.authority.policy(context.project) else {
+    let Some(policy) = domain.core.authority.policy(context.project) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::Project);
     };
-    let implies = &domain.config.authority.rules().implies;
+    let implies = &domain.core.authority.rules().implies;
     if !authority::at_most(&needed, &policy.ceiling, implies)
-        || !authority::at_most(&needed, &domain.config.authority.rules().ceiling, implies)
+        || !authority::at_most(&needed, &domain.core.authority.rules().ceiling, implies)
     {
         return refused(domain, env, decision, to, key, tasks::Refusal::AuthorityShape);
     }
     let Some(holder) = holder(domain, key.task, &action, None) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::Reference);
     };
-    let Some(number) = crate::fresh(&mut domain.counters, Family::Message) else {
+    let Some(number) = crate::fresh(&mut domain.core.counters, Family::Message) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::Busy);
     };
     let token = to.into_token();
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "proposal call room reserved");
-    assert!(domain.routing_calls.insert(token, RoutedCall::Propose { key, proposal: number }) == Ok(None), "one route");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "proposal call room reserved");
+    assert!(
+        domain.core.routing_calls.insert(token, RoutedCall::Propose { key, proposal: number }) == Ok(None),
+        "one route"
+    );
     domain.work.push(Work::Tasks(tasks::Event::Propose {
         reply_to: ReplyTo::new(token),
         proposal: tasks::Proposal {
@@ -508,12 +513,12 @@ pub(super) fn withdraw_call(
     key: CallKey,
     proposal: u64,
 ) {
-    if domain.tasks.proposal(key.task, proposal).is_none() {
+    if domain.core.tasks.proposal(key.task, proposal).is_none() {
         return refused(domain, env, decision, to, key, tasks::Refusal::Unknown);
     }
     let token = to.into_token();
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "proposal call room reserved");
-    assert!(domain.routing_calls.insert(token, RoutedCall::Withdraw { key, proposal }) == Ok(None), "one route");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "proposal call room reserved");
+    assert!(domain.core.routing_calls.insert(token, RoutedCall::Withdraw { key, proposal }) == Ok(None), "one route");
     domain.work.push(Work::Tasks(tasks::Event::WithdrawProposal {
         reply_to: ReplyTo::new(token),
         proposer: key.task,
@@ -532,7 +537,7 @@ pub(super) fn decide_call(
     proposal: u64,
     choice: ProposalChoice,
 ) {
-    let Some(pending) = domain.tasks.proposal(proposer, proposal) else {
+    let Some(pending) = domain.core.tasks.proposal(proposer, proposal) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::Unknown);
     };
     let current = match pending.state {
@@ -559,7 +564,7 @@ pub(super) fn decide_call(
         }
     };
     let message = match next {
-        tasks::ProposalDecision::Reject { .. } => match crate::fresh(&mut domain.counters, Family::Message) {
+        tasks::ProposalDecision::Reject { .. } => match crate::fresh(&mut domain.core.counters, Family::Message) {
             Some(message) => Some(message),
             None => return refused(domain, env, decision, to, key, tasks::Refusal::Busy),
         },
@@ -567,8 +572,8 @@ pub(super) fn decide_call(
         tasks::ProposalDecision::Accept => unreachable!("accept routed through action"),
     };
     let token = to.into_token();
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "proposal decision room reserved");
-    assert!(domain.routing_calls.insert(token, RoutedCall::Decide { key, proposal }) == Ok(None), "one route");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "proposal decision room reserved");
+    assert!(domain.core.routing_calls.insert(token, RoutedCall::Decide { key, proposal }) == Ok(None), "one route");
     domain.work.push(Work::Tasks(tasks::Event::DecideProposal {
         reply_to: ReplyTo::new(token),
         proposer,
@@ -587,7 +592,7 @@ fn accept(
     key: CallKey,
     proposal: tasks::Proposal,
 ) {
-    let result_followups = domain.tasks.result_proposal(proposal.proposer, proposal.number);
+    let result_followups = domain.core.tasks.result_proposal(proposal.proposer, proposal.number);
     let Some(action) = action_for_check(&proposal.action) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::Executor);
     };
@@ -600,7 +605,7 @@ fn accept(
     if !covers_task(domain, &needed, key.task, depth, proposal.project) {
         return refused(domain, env, decision, to, key, tasks::Refusal::Funding);
     }
-    let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
+    let Some(message) = crate::fresh(&mut domain.core.counters, Family::Message) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::Busy);
     };
     let token = to.into_token();
@@ -623,15 +628,15 @@ fn accept(
             }
         }
         tasks::ProposalAction::Amend { task, amendment } => {
-            let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
+            let Some(message) = crate::fresh(&mut domain.core.counters, Family::Message) else {
                 return refused(domain, env, decision, ReplyTo::new(token), key, tasks::Refusal::Busy);
             };
-            let Some(current) = domain.tasks.delegation(task) else {
+            let Some(current) = domain.core.tasks.delegation(task) else {
                 return refused(domain, env, decision, ReplyTo::new(token), key, tasks::Refusal::Unknown);
             };
             let after = authority_value(amendment.authority.as_ref().expect("proposal amendment authority"));
             let before = authority_value(&current.authority);
-            let stop_run = !authority::at_most(&before, &after, &domain.config.authority.rules().implies);
+            let stop_run = !authority::at_most(&before, &after, &domain.core.authority.rules().implies);
             tasks::Event::Amend {
                 reply_to: ReplyTo::new(token),
                 by: tasks::Party::Task(key.task),
@@ -642,7 +647,7 @@ fn accept(
             }
         }
         tasks::ProposalAction::Widen { task, authority } => {
-            let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
+            let Some(message) = crate::fresh(&mut domain.core.counters, Family::Message) else {
                 return refused(domain, env, decision, ReplyTo::new(token), key, tasks::Refusal::Busy);
             };
             tasks::Event::Amend {
@@ -667,9 +672,9 @@ fn accept(
             control: tasks::Control::Release,
         },
     };
-    assert!(domain.pending_calls.insert(key, true).is_ok(), "proposal acceptance room reserved");
+    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "proposal acceptance room reserved");
     assert!(
-        domain.routing_calls.insert(
+        domain.core.routing_calls.insert(
             token,
             RoutedCall::Accepting { key, proposer: proposal.proposer, proposal: proposal.number, message }
         ) == Ok(None),
@@ -683,8 +688,8 @@ fn person_refused(domain: &mut Domain, request: Token, why: people::Refusal) {
 }
 
 fn policy_standing(domain: &Domain, person: u64, project: u32, kind: authority::ProposalKind) -> bool {
-    let Some(role) = domain.people.role(person, project) else { return false };
-    let Some(policy) = domain.config.authority.role(project, super::escalation::role_number(role)) else {
+    let Some(role) = domain.core.people.role(person, project) else { return false };
+    let Some(policy) = domain.core.authority.role(project, super::escalation::role_number(role)) else {
         return false;
     };
     policy.decides.allows(kind)
@@ -703,7 +708,7 @@ pub(super) fn person_decide(
     number: u64,
     choice: people::ProposalDecision,
 ) {
-    let Some(proposal) = domain.tasks.proposal(proposer, number) else {
+    let Some(proposal) = domain.core.tasks.proposal(proposer, number) else {
         return person_refused(domain, request, people::Refusal::Ended);
     };
     if proposal.project != project {
@@ -754,7 +759,7 @@ pub(super) fn person_decide(
         },
     };
     let message = match next {
-        tasks::ProposalDecision::Reject { .. } => match crate::fresh(&mut domain.counters, Family::Message) {
+        tasks::ProposalDecision::Reject { .. } => match crate::fresh(&mut domain.core.counters, Family::Message) {
             Some(message) => Some(message),
             None => return person_refused(domain, request, people::Refusal::Limit),
         },
@@ -763,6 +768,7 @@ pub(super) fn person_decide(
     };
     assert!(
         domain
+            .core
             .routing_people_proposals
             .insert(request, PersonProposalRoute::Deciding { request, proposer, proposal: number, by: person })
             == Ok(None),
@@ -779,14 +785,15 @@ pub(super) fn person_decide(
 }
 
 fn person_accept(domain: &mut Domain, _env: &Env<Limits>, request: Token, person: u64, proposal: tasks::Proposal) {
-    let result_followups = domain.tasks.result_proposal(proposal.proposer, proposal.number);
+    let result_followups = domain.core.tasks.result_proposal(proposal.proposer, proposal.number);
     let event = match proposal.action {
         tasks::ProposalAction::Batch(mut batch) => {
             let creator =
                 if proposal.as_holder { tasks::Party::Person(person) } else { tasks::Party::Task(proposal.proposer) };
             super::goals::ensure_pool(domain, proposal.project, person);
             for member in &mut batch {
-                member.funder = tasks::Funder::Pool { project: proposal.project, person, period: domain.config.period };
+                member.funder =
+                    tasks::Funder::Pool { project: proposal.project, person, period: domain.core.settings.period };
             }
             if result_followups {
                 tasks::Event::MakeResultFollowups {
@@ -800,15 +807,15 @@ fn person_accept(domain: &mut Domain, _env: &Env<Limits>, request: Token, person
             }
         }
         tasks::ProposalAction::Amend { task, amendment } => {
-            let Some(current) = domain.tasks.delegation(task) else {
+            let Some(current) = domain.core.tasks.delegation(task) else {
                 return person_refused(domain, request, people::Refusal::Ended);
             };
-            let Some(amend_message) = crate::fresh(&mut domain.counters, Family::Message) else {
+            let Some(amend_message) = crate::fresh(&mut domain.core.counters, Family::Message) else {
                 return person_refused(domain, request, people::Refusal::Limit);
             };
             let after = authority_value(amendment.authority.as_ref().expect("admitted amendment authority"));
             let before = authority_value(&current.authority);
-            let stop_run = !authority::at_most(&before, &after, &domain.config.authority.rules().implies);
+            let stop_run = !authority::at_most(&before, &after, &domain.core.authority.rules().implies);
             tasks::Event::Amend {
                 reply_to: ReplyTo::new(request),
                 by: tasks::Party::Person(person),
@@ -819,7 +826,7 @@ fn person_accept(domain: &mut Domain, _env: &Env<Limits>, request: Token, person
             }
         }
         tasks::ProposalAction::Widen { task, authority } => {
-            let Some(amend_message) = crate::fresh(&mut domain.counters, Family::Message) else {
+            let Some(amend_message) = crate::fresh(&mut domain.core.counters, Family::Message) else {
                 return person_refused(domain, request, people::Refusal::Limit);
             };
             tasks::Event::Amend {
@@ -845,11 +852,11 @@ fn person_accept(domain: &mut Domain, _env: &Env<Limits>, request: Token, person
         },
     };
     // The final decision follows the accepted amendment's own message in the same task inbox.
-    let Some(message) = crate::fresh(&mut domain.counters, Family::Message) else {
+    let Some(message) = crate::fresh(&mut domain.core.counters, Family::Message) else {
         return person_refused(domain, request, people::Refusal::Limit);
     };
     assert!(
-        domain.routing_people_proposals.insert(
+        domain.core.routing_people_proposals.insert(
             request,
             PersonProposalRoute::Accepting {
                 request,

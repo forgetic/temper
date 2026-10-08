@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 skein-lib.workspace = true
+jig-core.workspace = true
 jig-core-people.workspace = true
 jig-core-tasks.workspace = true
 jig-core-fleet.workspace = true
@@ -15,6 +16,7 @@ jig-core-brief.workspace = true
 jig-core-accounts.workspace = true
 jig-core-authority.workspace = true
 jig-core-views.workspace = true
+jig-core-notes.workspace = true
 temper-engine-domain-forge.workspace = true
 temper-engine-domain-forge-client.workspace = true
 temper-engine-domain-forge-change.workspace = true

@@ -44,13 +44,13 @@ pub(super) fn begin(
     if !valid {
         return refuse(to, people::Refusal::Limit, out);
     }
-    let Some(person) = domain.people.person(sign_in, env.now, env.wall) else {
+    let Some(person) = domain.core.people.person(sign_in, env.now, env.wall) else {
         return refuse(to, people::Refusal::SignIn, out);
     };
-    if !domain.ready() || !admits(domain, &env.limits) || domain.reading_results.contains_key(&person) {
+    if !domain.ready() || !admits(domain, &env.limits) || domain.core.reading_results.contains_key(&person) {
         return refuse(to, people::Refusal::Busy, out);
     }
-    let position = domain.people.read_position(person).expect("authenticated person restored");
+    let position = domain.core.people.read_position(person).expect("authenticated person restored");
     let cap = match query {
         Query::Named { .. } => 0,
         Query::Inbox { most } => most.min(env.limits.people.inbox_entries),
@@ -72,7 +72,7 @@ pub(super) fn begin(
             | None,
         ) => unreachable!("inserted result read"),
     };
-    let indexed = domain.reading_results.insert(person, id.token());
+    let indexed = domain.core.reading_results.insert(person, id.token());
     assert!(indexed == Ok(None), "one result read per authenticated person");
     let mut decision = Decision::new(&env.limits.journal);
     emit(&mut decision, &env.limits, Delivery::ReadResult { waiter: id.token() });
@@ -90,7 +90,7 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, o
         | RootRead::Dependency(_)
         | RootRead::InputCheck(_) => unreachable!("result load owns result read"),
     };
-    let removed = domain.reading_results.remove(&read.person);
+    let removed = domain.core.reading_results.remove(&read.person);
     assert!(removed == Some(waiter), "result reader index names its waiter");
     domain.result_reads.retire(Id::from_token(waiter));
     refuse(read.to, why, out);
@@ -131,13 +131,13 @@ pub(super) fn page(
         if task.requester != tasks::Party::Person(read.person) {
             continue;
         }
-        if task.result_position == 0 || task.result_position > domain.counters.deployment().messages {
+        if task.result_position == 0 || task.result_position > domain.core.counters.deployment().messages {
             return failed(domain, waiter, people::Refusal::Limit, out);
         }
         if task.result_position <= read.position {
             continue;
         }
-        domain.people.remember_result(
+        domain.core.people.remember_result(
             &env.limits.people,
             read.person,
             people::ResultRef { task: task.number, position: task.result_position },
@@ -195,7 +195,7 @@ pub(super) fn page(
         return;
     }
     let Some(RootRead::Result(read)) = take_read(domain, waiter) else { unreachable!("complete result read") };
-    let removed = domain.reading_results.remove(&read.person);
+    let removed = domain.core.reading_results.remove(&read.person);
     assert!(removed == Some(waiter), "result reader index names its waiter");
     domain.result_reads.retire(Id::from_token(waiter));
     let mut decision = Decision::new(&env.limits.journal);
@@ -207,7 +207,8 @@ pub(super) fn page(
             if entry.position != read.earliest {
                 return refuse(read.to, people::Refusal::Busy, out);
             }
-            let row = domain.people.advance_read_position(read.person, entry.position).expect("new earliest result");
+            let row =
+                domain.core.people.advance_read_position(read.person, entry.position).expect("new earliest result");
             save(&mut decision, &env.limits, Write::Save(Record::People(row)));
             emit(
                 &mut decision,
@@ -225,7 +226,8 @@ pub(super) fn page(
             let mut entries = read.entries.into_boxed();
             entries.sort_unstable();
             if let Some(last) = entries.last() {
-                let row = domain.people.advance_read_position(read.person, last.position).expect("new page position");
+                let row =
+                    domain.core.people.advance_read_position(read.person, last.position).expect("new page position");
                 save(&mut decision, &env.limits, Write::Save(Record::People(row)));
             }
             emit(&mut decision, &env.limits, Delivery::InboxPage { to: read.to, person: read.person, entries });

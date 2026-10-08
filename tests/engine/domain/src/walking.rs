@@ -149,6 +149,17 @@ pub fn limits() -> engine::Limits {
             snapshot_bytes: 128,
             facts: 8,
         },
+        notes: jig_core_notes::Limits {
+            scopes: 1,
+            entries_per_scope: 1,
+            pattern_bytes: 64,
+            description_bytes: 64,
+            body_bytes: 256,
+            references: 1,
+            load_rows: 1,
+            lines: 1,
+            recalled: 1,
+        },
         forge: temper_engine_forge_world::LIMITS,
     }
 }
