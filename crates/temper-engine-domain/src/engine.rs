@@ -1734,6 +1734,9 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 for task in domain.tasks.recurring_tasks(project) {
                     domain.work.push(Work::Tasks(tasks::Event::TickRecurring { task, period }));
                 }
+                for task in domain.tasks.standing_tasks(project) {
+                    domain.work.push(Work::Tasks(tasks::Event::RenewStanding { task, period }));
+                }
             }
         }
         Event::ProcedureStep { task, step, connector, code, action } => {
