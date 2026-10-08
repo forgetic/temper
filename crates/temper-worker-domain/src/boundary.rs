@@ -60,11 +60,11 @@ use temper_worker_domain_checkout::git;
 )]
 pub enum Event {
     /// The engine's typed conversation state for an attempt.
-    AssignTyped {
-        assignment: wire::AssignmentTyped,
+    Assign {
+        assignment: wire::Assignment,
     },
     /// A named message with its sender label and words.
-    InboundTyped {
+    Inbound {
         run: Token,
         attempt: Token,
         name: Token,
@@ -72,7 +72,7 @@ pub enum Event {
         words: Box<[u8]>,
     },
     /// A typed call's answer, under its opaque name and local delivery token.
-    RelayedTyped {
+    Relayed {
         run: Token,
         attempt: Token,
         call: Box<[u8]>,
@@ -175,7 +175,7 @@ pub enum Event {
 )]
 pub enum Request {
     /// A named host call with the tool, write flag, input and time left.
-    RelayTyped {
+    Relay {
         run: Token,
         attempt: Token,
         call: Box<[u8]>,
@@ -195,10 +195,10 @@ pub enum Request {
         attempt: Token,
         turn: wire::Turn,
     },
-    AnswerV2 {
+    Answer {
         run: Token,
         attempt: Token,
-        answer: wire::AnswerV2,
+        answer: wire::Answer,
     },
     /// Open the channel to the engine. Ended by one `Lost`, after a
     /// `Connected` if it opened.

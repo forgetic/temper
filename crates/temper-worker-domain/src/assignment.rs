@@ -5,10 +5,10 @@
 //! and its parent relies on the workspace fitting the limits.
 
 use crate::Limits;
-use crate::wire::{Access, Assignment, Invalid, Repository, Start};
+use crate::wire::{Access, Invalid, Repository, RunAssignment, Start};
 
 /// Whether `assignment` fits `limits`, and what about it does not.
-pub(crate) fn check(assignment: &Assignment, limits: &Limits, next: bool) -> Result<(), Invalid> {
+pub(crate) fn check(assignment: &RunAssignment, limits: &Limits, next: bool) -> Result<(), Invalid> {
     if len(&assignment.charter) > limits.host.charter_bytes {
         return Err(Invalid::Charter);
     }

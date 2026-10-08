@@ -73,9 +73,9 @@ pub(crate) struct Items {
 pub(crate) fn stage(
     domain: &mut Domain,
     env: &Env<Limits>,
-    assignment: wire::Assignment,
+    assignment: wire::RunAssignment,
     next: bool,
-) -> Result<host::Assignment, wire::Refusal> {
+) -> Result<host::RunAssignment, wire::Refusal> {
     match crate::assignment::check(&assignment, &env.limits, next) {
         Ok(()) => {}
         Err(invalid) => return Err(wire::Refusal::Invalid(invalid)),
@@ -83,7 +83,7 @@ pub(crate) fn stage(
     if domain.items_by_run.contains_key(&assignment.run) {
         return Err(wire::Refusal::Busy);
     }
-    let wire::Assignment { run, attempt, workspace, save, charter, grants } = assignment;
+    let wire::RunAssignment { run, attempt, workspace, save, charter, grants } = assignment;
     let has_items = !workspace.repositories.is_empty();
     let mut merging = false;
     for repository in &workspace.repositories {
@@ -116,7 +116,7 @@ pub(crate) fn stage(
     };
     let old = domain.items_by_run.insert(run, id).expect("room for each staged run");
     assert!(old.is_none(), "the link and host fenced an existing run");
-    Ok(host::Assignment {
+    Ok(host::RunAssignment {
         run,
         attempt,
         workspace: if has_items { Some(host::Workspace { workstream: run.raw(), items: id.token() }) } else { None },
@@ -451,14 +451,14 @@ fn written(hold: Token, directory: Token, owner: Token, event: host::Event, then
     then.host = Some(match event {
         host::Event::Delivered { owner: _, delivery } => host::Event::Delivered { owner, delivery },
         host::Event::Saved { owner: _, at } => host::Event::Saved { owner, at },
-        host::Event::InboundTyped { .. }
-        | host::Event::CalledTyped { .. }
-        | host::Event::WithdrawnTyped { .. }
-        | host::Event::AssignTyped { .. }
+        host::Event::Inbound { .. }
+        | host::Event::Called { .. }
+        | host::Event::Withdrawn { .. }
+        | host::Event::Assign { .. }
         | host::Event::Turn { .. }
         | host::Event::AcknowledgeTurn { .. }
         | host::Event::Facts { .. }
-        | host::Event::FinishedV2 { .. }
+        | host::Event::Finished { .. }
         | host::Event::Cancel { .. }
         | host::Event::Grant { .. }
         | host::Event::Relayed { .. }

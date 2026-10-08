@@ -99,9 +99,9 @@ impl Harness {
         rows.into_boxed()
     }
     fn start(&mut self) -> Token {
-        let rows = self.step(Event::AssignTyped {
-            assignment: wire::AssignmentTyped {
-                assignment: wire::Assignment {
+        let rows = self.step(Event::Assign {
+            assignment: wire::Assignment {
+                assignment: wire::RunAssignment {
                     run: RUN,
                     attempt: ATTEMPT,
                     workspace: wire::Workspace { key: Box::new([]), repositories: Box::new([]) },
@@ -171,7 +171,7 @@ fn the_agent_is_gone_while_the_engine_cannot_acknowledge_turns() {
             turns += 1;
             assert_eq!(turn.turn, turns);
         }
-        if let Request::AnswerV2 { .. } = row {
+        if let Request::Answer { .. } = row {
             answered = true;
         }
     }
@@ -223,9 +223,9 @@ fn host_and_smith_turn_windows_must_fit_the_declared_reserve() {
 #[test]
 fn malformed_resumed_call_names_are_refused_before_starting_smith() {
     let mut h = Harness::new();
-    let rows = h.step(Event::AssignTyped {
-        assignment: wire::AssignmentTyped {
-            assignment: wire::Assignment {
+    let rows = h.step(Event::Assign {
+        assignment: wire::Assignment {
+            assignment: wire::RunAssignment {
                 run: RUN,
                 attempt: ATTEMPT,
                 workspace: wire::Workspace { key: Box::new([]), repositories: Box::new([]) },
@@ -242,11 +242,9 @@ fn malformed_resumed_call_names_are_refused_before_starting_smith() {
         },
     });
     let [
-        Request::AnswerV2 {
+        Request::Answer {
             answer:
-                wire::AnswerV2 {
-                    ending: wire::EndingV2::Refused(wire::Refusal::Invalid(wire::Invalid::Transcript)), ..
-                },
+                wire::Answer { ending: wire::Ending::Refused(wire::Refusal::Invalid(wire::Invalid::Transcript)), .. },
             ..
         },
     ] = &*rows

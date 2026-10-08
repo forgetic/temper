@@ -5442,11 +5442,11 @@ fn a_worker_frozen_past_its_grace_gets_no_next_attempt_until_its_sum_has_passed(
 }
 
 fn typed_unavailable(driver: &mut Driver, assignment: &engine::Assignment, name: &[u8]) -> jig_core::SettledCall {
-    driver.send(engine::Event::CallTyped {
+    driver.send(engine::Event::HostCall {
         channel: Token::new(7),
         task: assignment.task,
         attempt: assignment.attempt,
-        call: fleet::TypedCall {
+        call: fleet::Call {
             name: name.into(),
             tool: b"unknown-tool".as_slice().into(),
             writes: false,
@@ -5470,7 +5470,7 @@ fn typed_unavailable(driver: &mut Driver, assignment: &engine::Assignment, name:
     assert_eq!(call.input.as_ref(), b"opaque-input");
     assert!(!call.writes);
     assert_eq!(call.deadline, Duration::from_secs(2));
-    driver.send(engine::Event::DecodedTypedCall {
+    driver.send(engine::Event::DecodedHostCall {
         to,
         body: engine::Call { completion: 2, position: 0, tool: engine::Tool::Unavailable },
     });
@@ -5487,7 +5487,7 @@ fn typed_unavailable(driver: &mut Driver, assignment: &engine::Assignment, name:
     assert_eq!(tool.as_ref(), b"unknown-tool");
     assert_eq!(answer, temper_engine_domain::CallAnswer::Unavailable);
     assert!(driver.store.rows.contains_key(&Key::Call(key)), "render follows its durable decision");
-    driver.send(engine::Event::RenderedTypedCall {
+    driver.send(engine::Event::RenderedHostCall {
         to,
         answer: jig_core::SettledAnswer::Delivery {
             outcome: jig_core::DeliveryOutcome::Nothing,
@@ -5550,7 +5550,7 @@ fn typed_calls_keep_their_opaque_answers_for_resumed_assignments() {
 fn typed_messages_keep_their_label_and_whole_words() {
     let (mut driver, assignment) = chat_driver();
     let number = say(&mut driver, assignment.task, 94);
-    driver.send(engine::Event::InboundTyped {
+    driver.send(engine::Event::Inbound {
         task: assignment.task,
         attempt: assignment.attempt,
         message: engine::HostMessage {
@@ -5585,11 +5585,11 @@ fn a_typed_call_replay_uses_the_settled_record_without_rendering_again() {
     let before = driver.store.applied;
     let rows = driver.store.rows.clone();
     let delivered = driver.delivered.len();
-    driver.send(engine::Event::CallTyped {
+    driver.send(engine::Event::HostCall {
         channel: Token::new(7),
         task: assignment.task,
         attempt: assignment.attempt,
-        call: fleet::TypedCall {
+        call: fleet::Call {
             name: b"replay".as_slice().into(),
             tool: b"unknown-tool".as_slice().into(),
             writes: false,
@@ -5606,7 +5606,7 @@ fn a_typed_call_replay_uses_the_settled_record_without_rendering_again() {
     let engine::HostRequest::Decode { to, .. } = *driver.host_requests.remove(0) else {
         panic!("typed decode request")
     };
-    driver.send(engine::Event::DecodedTypedCall {
+    driver.send(engine::Event::DecodedHostCall {
         to,
         body: engine::Call { completion: 2, position: 0, tool: engine::Tool::Unavailable },
     });

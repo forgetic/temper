@@ -51,7 +51,7 @@ struct World {
     hold_push: bool,
     held: Option<(Token, Op)>,
     delivered: bool,
-    answer: Option<wire::AnswerV2>,
+    answer: Option<wire::Answer>,
     report: Report,
 }
 
@@ -220,13 +220,13 @@ impl World {
             Request::Wait { owner, process } | Request::Reap { owner, process } => {
                 assert_eq!((Some(owner), process), (self.process, PROCESS));
             }
-            Request::AnswerV2 { run, attempt, answer } => {
+            Request::Answer { run, attempt, answer } => {
                 assert_eq!((run, attempt), (RUN, ATTEMPT));
                 assert!(self.held.is_none(), "delivery settles before the final answer");
                 assert!(self.answer.replace(answer).is_none());
             }
             Request::Turn { .. }
-            | Request::RelayTyped { .. }
+            | Request::Relay { .. }
             | Request::Bounced { .. }
             | Request::Rejected { .. }
             | Request::Exhausted { .. }
@@ -239,9 +239,9 @@ impl World {
     fn start(&mut self) {
         self.fire();
         self.event(Event::ConnectedV2);
-        self.event(Event::AssignTyped {
-            assignment: wire::AssignmentTyped {
-                assignment: wire::Assignment {
+        self.event(Event::Assign {
+            assignment: wire::Assignment {
+                assignment: wire::RunAssignment {
                     run: RUN,
                     attempt: ATTEMPT,
                     workspace: wire::Workspace {
@@ -367,14 +367,14 @@ impl World {
         let branch = if case == Case::ContactPast { b"saved".as_slice() } else { b"topic".as_slice() };
         let commit = self.forge.branch(REMOTE, branch).expect("worker pushed");
         let work = match (case, answer.ending) {
-            (Case::Delivered | Case::ContactWithin, wire::EndingV2::Ended { work, .. })
+            (Case::Delivered | Case::ContactWithin, wire::Ending::Ended { work, .. })
             | (
                 Case::CancelledDelivery,
-                wire::EndingV2::Failed { failure: wire::Failure::Cancelled(wire::Reason::Engine), work, .. },
+                wire::Ending::Failed { failure: wire::Failure::Cancelled(wire::Reason::Engine), work, .. },
             )
             | (
                 Case::ContactPast,
-                wire::EndingV2::Failed { failure: wire::Failure::Cancelled(wire::Reason::Contact), work, .. },
+                wire::Ending::Failed { failure: wire::Failure::Cancelled(wire::Reason::Contact), work, .. },
             ) => work,
             (_, ending) => panic!("ending did not follow the story: {ending:?}"),
         };

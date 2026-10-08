@@ -8,7 +8,7 @@ use std::fmt::{self, Write};
 use skein_lib::{Duration, Env, Queue, Rng, Time, Token, Wall};
 use temper_worker_domain::agent::{self as channel, Answer, Ask, CallName, Down, RunResult, Up};
 use temper_worker_domain::checkout::git::{Commit, Done, Op, Want};
-use temper_worker_domain::wire::{self as host, Access, Assignment, AssignmentTyped, Repository, Start, Workspace};
+use temper_worker_domain::wire::{self as host, Access, Assignment, Repository, RunAssignment, Start, Workspace};
 use temper_worker_domain::{Domain, Event, Limits, Request, fire, max_out, step, worst_case};
 use temper_world::heap::Meter;
 
@@ -275,11 +275,11 @@ impl World {
                 }
                 self.stats.copies += 1;
             }
-            Request::AnswerV2 { run, attempt, answer } => {
+            Request::Answer { run, attempt, answer } => {
                 assert_eq!((run, attempt), (RUN, ATTEMPT));
                 assert_eq!(answer.turns, u32::try_from(self.observed.len()).expect("bounded"));
                 let ending = match &answer.ending {
-                    host::EndingV2::Parked { work } => {
+                    host::Ending::Parked { work } => {
                         if self.settings.merging {
                             assert!(work.saved.is_none());
                         } else {
@@ -287,7 +287,7 @@ impl World {
                         }
                         digest(&answer)
                     }
-                    host::EndingV2::Ended { .. } | host::EndingV2::Failed { .. } | host::EndingV2::Refused(_) => {
+                    host::Ending::Ended { .. } | host::Ending::Failed { .. } | host::Ending::Refused(_) => {
                         panic!("script only parks: {answer:?}")
                     }
                 };
@@ -358,7 +358,7 @@ impl World {
                 assert_eq!(Some(owner), self.agent);
                 assert_eq!(process, PROCESS);
             }
-            Request::RelayTyped { .. }
+            Request::Relay { .. }
             | Request::Bounced { .. }
             | Request::Rejected { .. }
             | Request::Exhausted { .. }
@@ -482,8 +482,8 @@ impl World {
             },
             access: Access::WritableV2 { push: Box::from(&b"topic"[..]), expected: Some(HEAD) },
         };
-        let assignment = AssignmentTyped {
-            assignment: Assignment {
+        let assignment = Assignment {
+            assignment: RunAssignment {
                 run: RUN,
                 attempt: ATTEMPT,
                 workspace: Workspace { key: Box::from(&b"stream"[..]), repositories: Box::new([repository]) },
@@ -494,7 +494,7 @@ impl World {
             turns: Box::new([Box::from(TRANSCRIPT)]),
             answered: Box::new([]),
         };
-        self.send(Event::AssignTyped { assignment });
+        self.send(Event::Assign { assignment });
         self.say(Up::Admitted);
         self.deliver(1);
         if self.settings.merging {

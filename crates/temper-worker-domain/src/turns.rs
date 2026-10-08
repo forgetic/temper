@@ -24,7 +24,7 @@ pub(crate) struct TurnName {
 
 #[derive(Debug)]
 pub(crate) struct Answer {
-    pub(crate) answer: wire::AnswerV2,
+    pub(crate) answer: wire::Answer,
     acknowledged: bool,
 }
 
@@ -99,22 +99,22 @@ impl Turns {
         &mut self,
         run: Token,
         attempt: Token,
-        answer: wire::AnswerV2,
+        answer: wire::Answer,
         up: bool,
         out: &mut Queue<Request>,
     ) {
         let refused = match answer.ending {
-            wire::EndingV2::Refused(_) => true,
-            wire::EndingV2::Ended { .. } | wire::EndingV2::Parked { .. } | wire::EndingV2::Failed { .. } => false,
+            wire::Ending::Refused(_) => true,
+            wire::Ending::Ended { .. } | wire::Ending::Parked { .. } | wire::Ending::Failed { .. } => false,
         };
         if refused {
             if up {
-                out.push(Request::AnswerV2 { run, attempt, answer });
+                out.push(Request::Answer { run, attempt, answer });
             }
             return;
         }
         if up {
-            out.push(Request::AnswerV2 { run, attempt, answer: copy_answer(&answer) });
+            out.push(Request::Answer { run, attempt, answer: copy_answer(&answer) });
         }
         let old = self
             .answers
@@ -152,11 +152,7 @@ impl Turns {
         }
         for (name, answer) in &self.answers {
             if !answer.acknowledged {
-                out.push(Request::AnswerV2 {
-                    run: name.run,
-                    attempt: name.attempt,
-                    answer: copy_answer(&answer.answer),
-                });
+                out.push(Request::Answer { run: name.run, attempt: name.attempt, answer: copy_answer(&answer.answer) });
             }
         }
     }
@@ -185,18 +181,18 @@ fn emit(run: Token, attempt: Token, turn: host::Turn, out: &mut Queue<Request>) 
     });
 }
 
-fn copy_answer(answer: &wire::AnswerV2) -> wire::AnswerV2 {
+fn copy_answer(answer: &wire::Answer) -> wire::Answer {
     let ending = match &answer.ending {
-        wire::EndingV2::Refused(refusal) => wire::EndingV2::Refused(*refusal),
-        wire::EndingV2::Ended { outcome, work } => {
-            wire::EndingV2::Ended { outcome: copy_of(outcome), work: copy_work(work) }
+        wire::Ending::Refused(refusal) => wire::Ending::Refused(*refusal),
+        wire::Ending::Ended { outcome, work } => {
+            wire::Ending::Ended { outcome: copy_of(outcome), work: copy_work(work) }
         }
-        wire::EndingV2::Parked { work } => wire::EndingV2::Parked { work: copy_work(work) },
-        wire::EndingV2::Failed { failure, detail, work } => {
-            wire::EndingV2::Failed { failure: *failure, detail: copy_of(detail), work: copy_work(work) }
+        wire::Ending::Parked { work } => wire::Ending::Parked { work: copy_work(work) },
+        wire::Ending::Failed { failure, detail, work } => {
+            wire::Ending::Failed { failure: *failure, detail: copy_of(detail), work: copy_work(work) }
         }
     };
-    wire::AnswerV2 { turns: answer.turns, spent: answer.spent, ending }
+    wire::Answer { turns: answer.turns, spent: answer.spent, ending }
 }
 
 fn copy_work(work: &wire::Work) -> wire::Work {

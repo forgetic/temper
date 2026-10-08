@@ -130,12 +130,12 @@ fn reason(reason: wire::PushReason) -> smith::DeliveryReason {
     }
 }
 
-pub(crate) fn finish(result: smith::RunResult) -> host::FinishV2 {
+pub(crate) fn finish(result: smith::RunResult) -> host::Finish {
     match result {
-        smith::RunResult::Accepted { outcome } => host::FinishV2::Ended { outcome },
-        smith::RunResult::Parked => host::FinishV2::Parked,
-        smith::RunResult::Failed { failure } => host::FinishV2::Failed { failure: run_failure(failure) },
-        smith::RunResult::Refused { refusal } => host::FinishV2::Failed {
+        smith::RunResult::Accepted { outcome } => host::Finish::Ended { outcome },
+        smith::RunResult::Parked => host::Finish::Parked,
+        smith::RunResult::Failed { failure } => host::Finish::Failed { failure: run_failure(failure) },
+        smith::RunResult::Refused { refusal } => host::Finish::Failed {
             failure: match refusal {
                 smith::Refusal::Busy => host::RunFailure::Model,
                 smith::Refusal::Invalid(_) => host::RunFailure::Policy,

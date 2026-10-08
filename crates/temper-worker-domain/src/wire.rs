@@ -2,12 +2,12 @@
 
 pub use crate::push::{PushDiagnostic, PushFailure, PushReason};
 use alloc::boxed::Box;
-pub use jig_host::{AgentFailure, AnsweredCall, Bounce, FinishV2, Grant, Hosting, Phase, Reason, RunFailure, Turn};
+pub use jig_host::{AgentFailure, AnsweredCall, Bounce, Finish, Grant, Hosting, Phase, Reason, RunFailure, Turn};
 use skein_lib::Token;
 
 /// What the engine gives the worker for one run (worker-domain.md, 4.1).
 #[derive(PartialEq, Eq, Hash, Debug)]
-pub struct Assignment {
+pub struct RunAssignment {
     /// The engine's names for the run and for this attempt at it.
     pub run: Token,
     pub attempt: Token,
@@ -21,21 +21,21 @@ pub struct Assignment {
 
 /// The agent's ordered committed conversation state for a new activation.
 #[derive(PartialEq, Eq, Hash, Debug)]
-pub struct AssignmentTyped {
-    pub assignment: Assignment,
+pub struct Assignment {
+    pub assignment: RunAssignment,
     pub turns: Box<[Box<[u8]>]>,
     pub answered: Box<[AnsweredCall]>,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
-pub struct AnswerV2 {
+pub struct Answer {
     pub turns: u32,
     pub spent: u64,
-    pub ending: EndingV2,
+    pub ending: Ending,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
-pub enum EndingV2 {
+pub enum Ending {
     Refused(Refusal),
     Ended { outcome: Box<[u8]>, work: Work },
     Parked { work: Work },

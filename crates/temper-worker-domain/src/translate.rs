@@ -151,19 +151,19 @@ pub(crate) const fn delivery_outcome(result: &wire::Push) -> host::DeliveryOutco
 }
 
 pub(crate) fn answer_v2(
-    answer: host::AnswerV2,
+    answer: host::Answer,
     work: wire::Work,
     preparation: Option<wire::Preparation>,
-) -> wire::AnswerV2 {
+) -> wire::Answer {
     let ending = match answer.ending {
-        host::EndingV2::Refused(refusal) => wire::EndingV2::Refused(host_refusal(refusal)),
-        host::EndingV2::Ended { outcome, work: _ } => wire::EndingV2::Ended { outcome, work },
-        host::EndingV2::Parked { work: _ } => wire::EndingV2::Parked { work },
-        host::EndingV2::Failed { failure, detail, work: _ } => {
-            wire::EndingV2::Failed { failure: host_failure(failure, preparation), detail, work }
+        host::Ending::Refused(refusal) => wire::Ending::Refused(host_refusal(refusal)),
+        host::Ending::Ended { outcome, work: _ } => wire::Ending::Ended { outcome, work },
+        host::Ending::Parked { work: _ } => wire::Ending::Parked { work },
+        host::Ending::Failed { failure, detail, work: _ } => {
+            wire::Ending::Failed { failure: host_failure(failure, preparation), detail, work }
         }
     };
-    wire::AnswerV2 { turns: answer.turns, spent: answer.spent, ending }
+    wire::Answer { turns: answer.turns, spent: answer.spent, ending }
 }
 
 const fn host_refusal(refusal: host::Refusal) -> wire::Refusal {

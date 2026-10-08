@@ -722,13 +722,13 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
 fn fleet_delivery_within(event: &jig_core_fleet::Event) -> bool {
     use jig_core_fleet::Event;
     match event {
-        Event::StartTyped { .. }
+        Event::Start { .. }
         | Event::TurnKept { .. }
         | Event::Acknowledge { .. }
         | Event::Cancel { .. }
         | Event::Relayed { .. } => true,
-        Event::InboundTyped { .. }
-        | Event::RelayTyped { .. }
+        Event::Inbound { .. }
+        | Event::Relay { .. }
         | Event::Adopt { .. }
         | Event::Loaded
         | Event::Grant { .. }

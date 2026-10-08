@@ -10,10 +10,10 @@ use skein_lib::{ReplyTo, Token};
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum HostRequest {
-    Decode { to: ReplyTo, task: u64, attempt: u64, call: fleet::TypedCall },
+    Decode { to: ReplyTo, task: u64, attempt: u64, call: fleet::Call },
     Busy { channel: Token, task: u64, attempt: u64, name: Box<[u8]> },
-    Dropped { call: fleet::TypedCall },
-    Undelivered { task: u64, attempt: u64, message: fleet::TypedMessage },
+    Dropped { call: fleet::Call },
+    Undelivered { task: u64, attempt: u64, message: fleet::Message },
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -40,18 +40,18 @@ pub(super) struct Flight {
     pub tool: Box<[u8]>,
 }
 
-pub(super) fn decode(domain: &mut Domain, to: ReplyTo, task: u64, attempt: u64, call: fleet::TypedCall) {
+pub(super) fn decode(domain: &mut Domain, to: ReplyTo, task: u64, attempt: u64, call: fleet::Call) {
     let right = to.into_token();
     let to = ReplyTo::new(right);
     let flight = Flight { task, attempt, key: None, name: call.name.clone(), tool: call.tool.clone() };
-    assert!(domain.typed_calls.insert(right, flight).is_ok(), "typed flights fit fleet calls");
+    assert!(domain.host_calls.insert(right, flight).is_ok(), "typed flights fit fleet calls");
     super::now(domain, Request::Host(Box::new(HostRequest::Decode { to, task, attempt, call })));
 }
 
 pub(super) fn decoded(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, to: ReplyTo, body: Call) {
     let right = to.into_token();
     let to = ReplyTo::new(right);
-    let Some(flight) = domain.typed_calls.get_mut(&right) else { return };
+    let Some(flight) = domain.host_calls.get_mut(&right) else { return };
     if flight.key.is_some() {
         return;
     }
@@ -65,10 +65,10 @@ pub(super) fn decoded(domain: &mut Domain, env: &Env<Limits>, decision: &mut Dec
             && domain.core.call_parts.len().saturating_add(domain.core.pending_calls.len()) >= env.limits.call_records)
         || (super::call_needs_input(&body.tool) && domain.result_reads.len() >= domain.result_reads.capacity())
     {
-        let flight = domain.typed_calls.remove(&right).expect("current typed flight");
+        let flight = domain.host_calls.remove(&right).expect("current typed flight");
         let id = domain
             .payloads
-            .insert(Some(Payload::TypedAnswer(SettledCall {
+            .insert(Some(Payload::SettledCall(SettledCall {
                 serial: 0,
                 name: flight.name,
                 tool: flight.tool,
@@ -78,7 +78,7 @@ pub(super) fn decoded(domain: &mut Domain, env: &Env<Limits>, decision: &mut Dec
         domain.work.push(Work::Fleet(fleet::Event::Relayed { to, answer: id.token() }));
         return;
     }
-    domain.typed_calls.get_mut(&right).expect("current typed flight").key = Some(key);
+    domain.host_calls.get_mut(&right).expect("current typed flight").key = Some(key);
     let id = domain.payloads.insert(Some(Payload::Call { key, body })).expect("fleet call reserved payload room");
     relay_payload(domain, env, decision, to, Token::new(key.task), Token::new(key.attempt), id.token());
 }
@@ -92,10 +92,10 @@ pub(super) fn render(
 ) -> Option<(ReplyTo, CallAnswer)> {
     let right = to.into_token();
     let to = ReplyTo::new(right);
-    let Some(flight) = domain.typed_calls.get(&right) else { return Some((to, answer)) };
+    let Some(flight) = domain.host_calls.get(&right) else { return Some((to, answer)) };
     let key = flight.key.expect("decoded typed call");
     if let Some(call) = domain.core.call_settled.get(&key).cloned() {
-        drop(domain.typed_calls.remove(&right));
+        drop(domain.host_calls.remove(&right));
         settled(domain, limits, decision, to, call);
         return None;
     }
@@ -116,7 +116,7 @@ pub(super) fn render(
 pub(super) fn rendered(domain: &mut Domain, to: ReplyTo, answer: SettledAnswer) {
     let right = to.into_token();
     let to = ReplyTo::new(right);
-    let Some(flight) = domain.typed_calls.remove(&right) else { return };
+    let Some(flight) = domain.host_calls.remove(&right) else { return };
     let Some(key) = flight.key else { return };
     let mut call = SettledCall { serial: 0, name: flight.name, tool: flight.tool, answer };
     let recorded = domain.core.call_parts.contains_key(&key);
@@ -141,12 +141,12 @@ pub(super) fn rendered(domain: &mut Domain, to: ReplyTo, answer: SettledAnswer) 
     if fits && recorded {
         domain.work.push(Work::Core(jig_core::Event::SettledCall { to, key, call }));
     } else {
-        let id = domain.payloads.insert(Some(Payload::TypedAnswer(call))).expect("fleet call reserved answer room");
+        let id = domain.payloads.insert(Some(Payload::SettledCall(call))).expect("fleet call reserved answer room");
         domain.work.push(Work::Fleet(fleet::Event::Relayed { to, answer: id.token() }));
     }
 }
 
 pub(super) fn settled(domain: &mut Domain, limits: &Limits, decision: &mut Decision, to: ReplyTo, call: SettledCall) {
-    let id = domain.payloads.insert(Some(Payload::TypedAnswer(call))).expect("fleet call reserved answer room");
+    let id = domain.payloads.insert(Some(Payload::SettledCall(call))).expect("fleet call reserved answer room");
     emit(decision, limits, Delivery::Fleet(fleet::Event::Relayed { to, answer: id.token() }));
 }

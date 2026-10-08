@@ -32,7 +32,7 @@ impl Bindings {
 
 pub(crate) fn to_agent(domain: &mut Domain, env: &Env<Limits>, request: host::ToAgent) {
     let event = match request {
-        host::ToAgent::StartTyped { owner, workspace, charter, activation, turns, answered, grants } => {
+        host::ToAgent::Start { owner, workspace, charter, activation, turns, answered, grants } => {
             let logical_run = domain.host.hosting(owner).expect("a hosted start").run;
             let (workspace, directories, grants) = match workspace {
                 Some(workspace) => {
@@ -74,10 +74,10 @@ pub(crate) fn to_agent(domain: &mut Domain, env: &Env<Limits>, request: host::To
                 },
             }
         }
-        host::ToAgent::MessageTyped { agent, name, sender, words } => {
+        host::ToAgent::Message { agent, name, sender, words } => {
             smith::Event::Message { agent, name, label: sender, text: words }
         }
-        host::ToAgent::AnswerTyped { agent, call, reply } => {
+        host::ToAgent::Answer { agent, call, reply } => {
             let mut found = None;
             for (callback, name) in &domain.bindings.calls {
                 if callback.agent == agent && name.as_slice() == call.as_ref() {
@@ -117,7 +117,7 @@ pub(crate) fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: smith:
             let name = translate::call_name(name);
             domain.bindings.calls.insert(Callback { agent, call }, name).expect("Smith bounded its calls");
             let ask = match ask {
-                smith::Ask::Host { tool, effect, body } => host::Ask::RelayTyped {
+                smith::Ask::Host { tool, effect, body } => host::Ask::Relay {
                     tool,
                     writes: match effect {
                         smith::Effect::Read => false,
@@ -128,7 +128,7 @@ pub(crate) fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: smith:
                 },
                 smith::Ask::Deliver { fields } => {
                     match crate::smith_delivery::fields(&fields, env.limits.checkout.message_bytes) {
-                        Some(crate::smith_delivery::Fields { title, body }) => host::Ask::DeliverV2 { title, body },
+                        Some(crate::smith_delivery::Fields { title, body }) => host::Ask::Deliver { title, body },
                         None => {
                             domain.bindings.calls.remove(&Callback { agent, call });
                             route::agent_step(
@@ -151,12 +151,12 @@ pub(crate) fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: smith:
                     }
                 }
             };
-            host::FromAgent::CalledTyped { owner: client, call: Box::from(name), ask }
+            host::FromAgent::Called { owner: client, call: Box::from(name), ask }
         }
         smith::Request::Withdrawn { client, call } => {
             let agent = *domain.bindings.agents.get(&client).expect("a started process withdraws");
             let name = *domain.bindings.calls.get(&Callback { agent, call }).expect("outstanding callback");
-            host::FromAgent::WithdrawnTyped { owner: client, call: Box::from(name) }
+            host::FromAgent::Withdrawn { owner: client, call: Box::from(name) }
         }
         smith::Request::Turn { client, turn } => host::FromAgent::Turn {
             owner: client,
@@ -164,7 +164,7 @@ pub(crate) fn from_agent(domain: &mut Domain, env: &Env<Limits>, request: smith:
         },
         smith::Request::Waiting { client, read: _ } => host::FromAgent::Yielded { owner: client },
         smith::Request::Told { client, body } => host::FromAgent::Facts { owner: client, fact: body },
-        smith::Request::Answered { client, answer } => host::FromAgent::FinishedV2 {
+        smith::Request::Answered { client, answer } => host::FromAgent::Finished {
             owner: client,
             turns: answer.turns,
             spent: answer.spent,

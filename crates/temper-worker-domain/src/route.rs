@@ -38,14 +38,14 @@ pub(crate) const fn agent_env(env: &Env<Limits>) -> Env<agent::Limits> {
 /// for.
 pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     let event = match event {
-        Event::RelayedTyped { run, attempt, call, delivery, answer } => {
+        Event::Relayed { run, attempt, call, delivery, answer } => {
             domain.link.heard();
-            if domain.host.is_relayed_typed_for(run, attempt, delivery, &call) {
+            if domain.host.is_relayed_for(run, attempt, delivery, &call) {
                 host_step(domain, env, host::Event::Relayed { run, attempt, call: delivery, answer });
             }
             return;
         }
-        Event::AssignTyped { assignment } => {
+        Event::Assign { assignment } => {
             domain.link.heard();
             let run = assignment.assignment.run;
             let attempt = assignment.assignment.attempt;
@@ -57,7 +57,7 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
             }
             let answers = domain.link.held();
             host_step(domain, env, host::Event::Unacknowledged { answers });
-            let wire::AssignmentTyped { assignment, turns, answered } = assignment;
+            let wire::Assignment { assignment, turns, answered } = assignment;
             for call in &answered {
                 if translate::named(&call.name).is_none() {
                     return domain.link.refuse(run, attempt, wire::Refusal::Invalid(wire::Invalid::Transcript), out);
@@ -70,12 +70,12 @@ pub(crate) fn event(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &
                 Ok(assignment) => assignment,
                 Err(refusal) => return domain.link.refuse(run, attempt, refusal, out),
             };
-            let assignment = host::AssignmentTyped { assignment, turns, answered };
-            return host_step(domain, env, host::Event::AssignTyped { reply_to: ReplyTo::new(run), assignment });
+            let assignment = host::Assignment { assignment, turns, answered };
+            return host_step(domain, env, host::Event::Assign { reply_to: ReplyTo::new(run), assignment });
         }
-        Event::InboundTyped { run, attempt, name, sender, words } => {
+        Event::Inbound { run, attempt, name, sender, words } => {
             domain.link.heard();
-            return host_step(domain, env, host::Event::InboundTyped { run, attempt, name, sender, words });
+            return host_step(domain, env, host::Event::Inbound { run, attempt, name, sender, words });
         }
 
         Event::ConnectedV2 => {
@@ -190,7 +190,7 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
         Err(request) => request,
     };
     match request {
-        host::Request::RelayTyped { run, attempt, call, delivery, tool, writes, input, deadline } => {
+        host::Request::Relay { run, attempt, call, delivery, tool, writes, input, deadline } => {
             domain.link.relay(
                 Relay {
                     run,
@@ -202,7 +202,7 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
                 out,
             );
         }
-        host::Request::AnswerV2 { to, run, attempt, answer } => {
+        host::Request::Answer { to, run, attempt, answer } => {
             assert!(to.into_token() == run, "an answer is its assignment's");
             let preparation = workspace::preparation(domain, run);
             let work = workspace::finish(domain, run);
@@ -213,7 +213,7 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
         host::Request::Turn { agent: _, run, attempt, turn } => {
             domain.link.turn(run, attempt, turn, out);
         }
-        host::Request::DeliverV2 { owner, workspace, title, body } => {
+        host::Request::Deliver { owner, workspace, title, body } => {
             workspace::write(domain, env, owner, workspace, Write::PushV2 { title, body });
         }
 
@@ -237,9 +237,9 @@ fn from_host(domain: &mut Domain, env: &Env<Limits>, request: host::Request, out
             workspace::save(domain, env, owner, workspace);
         }
         host::Request::Release { workspace } => workspace::release(domain, env, workspace),
-        host::Request::DeliverTyped { .. }
-        | host::Request::ReplyTyped { .. }
-        | host::Request::StartTyped { .. }
+        host::Request::Message { .. }
+        | host::Request::Reply { .. }
+        | host::Request::Start { .. }
         | host::Request::Grant { .. }
         | host::Request::AcknowledgeAgentTurn { .. }
         | host::Request::Stop { .. } => unreachable!("agent capability was taken above"),

@@ -234,15 +234,15 @@ impl Link {
     /// A reply-bearing assignment cannot enter this link's runtime mode.
     pub(crate) fn refuse_version(&self, run: Token, attempt: Token, out: &mut Queue<Request>) {
         assert!(self.is_up(), "an assignment arrives on an open channel");
-        let ending = wire::EndingV2::Refused(wire::Refusal::Invalid(wire::Invalid::Version));
-        out.push(Request::AnswerV2 { run, attempt, answer: wire::AnswerV2 { turns: 0, spent: 0, ending } });
+        let ending = wire::Ending::Refused(wire::Refusal::Invalid(wire::Invalid::Version));
+        out.push(Request::Answer { run, attempt, answer: wire::Answer { turns: 0, spent: 0, ending } });
     }
 
     /// Refuse an assignment whose application workspace cannot be admitted.
     pub(crate) fn refuse(&self, run: Token, attempt: Token, refusal: wire::Refusal, out: &mut Queue<Request>) {
         assert!(self.is_up(), "an assignment arrives on an open channel");
-        let ending = wire::EndingV2::Refused(refusal);
-        out.push(Request::AnswerV2 { run, attempt, answer: wire::AnswerV2 { turns: 0, spent: 0, ending } });
+        let ending = wire::Ending::Refused(refusal);
+        out.push(Request::Answer { run, attempt, answer: wire::Answer { turns: 0, spent: 0, ending } });
     }
 
     /// The channel opened: the hello is next, made once the host reports.
@@ -411,7 +411,7 @@ impl Link {
         true
     }
 
-    pub(crate) fn answer_v2(&mut self, run: Token, attempt: Token, answer: wire::AnswerV2, out: &mut Queue<Request>) {
+    pub(crate) fn answer_v2(&mut self, run: Token, attempt: Token, answer: wire::Answer, out: &mut Queue<Request>) {
         self.turns.answer(run, attempt, answer, self.is_up(), out);
     }
     pub(crate) fn turn(&mut self, run: Token, attempt: Token, turn: wire::Turn, out: &mut Queue<Request>) {
@@ -442,7 +442,7 @@ fn request(relay: Relay) -> Request {
     let Relay { run, attempt, call, body } = relay;
     match body {
         RelayBody::Typed { name, tool, writes, input, deadline } => {
-            Request::RelayTyped { run, attempt, call: name, delivery: call, tool, writes, input, deadline }
+            Request::Relay { run, attempt, call: name, delivery: call, tool, writes, input, deadline }
         }
     }
 }
