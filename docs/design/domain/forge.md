@@ -188,22 +188,35 @@ Every effect is committed into the outbox and made by `client`, in
 commit order per lane (a pull request, an issue, a repository) and one
 at a time on each (connectors.md, section 4):
 
-| Effect | What it is | Found again after an uncertain failure |
-|---|---|---|
-| open a pull request | a creation: from a branch into its landing branch, with a title, a body and a key | by its branches: the newest pull request for them, open or not |
-| edit a pull request's title or body | a set | written again |
-| update a pull request from its base | a transition: the base's tip merged into its branch, by the forge | its head contains the base tip it asked for |
-| merge a pull request | a transition, conditional on its exact head | merged, and at which commit |
-| close, reopen a pull request | a set | written again |
-| post a review | a creation, keyed | by its key, among the reviews after the entry's start |
-| post a comment | a creation, keyed | by its key, among the comments after the entry's start |
-| post a commit status | a set: a context on a commit | written again |
-| create an issue | a creation, keyed | by its key, among the issues changed since the entry's start |
-| edit, close, reopen an issue | a set | written again |
-| set a pull request's reviewers | a set | written again |
-| create a branch at a commit | a creation, named | the branch exists at that commit |
-| delete a branch | a set: temper's own branches only | it is gone |
+| Effect | What it is | Recovery class (jig's `connectors.md`, 4.3) | Found again after an uncertain failure |
+|---|---|---|---|
+| open a pull request | a creation: from a branch into its landing branch, with a title, a body and a key | conditional: only while no pull request for its branches is open | by its branches: the newest pull request for them, open or not |
+| edit a pull request's title or body | a set | idempotent | written again |
+| update a pull request from its base | a transition: the base's tip merged into its branch, by the forge | unrecoverable | its head contains the base tip it asked for |
+| merge a pull request | a transition, conditional on its exact head | conditional | merged, and at which commit |
+| close, reopen a pull request | a set | idempotent | written again |
+| post a review | a creation, with a key | unrecoverable | by its key, among the reviews after the entry's start |
+| post a comment | a creation, with a key | unrecoverable | by its key, among the comments after the entry's start |
+| post a commit status | a set: a context on a commit | idempotent | written again |
+| create an issue | a creation, with a key | unrecoverable | by its key, among the issues changed since the entry's start |
+| edit, close, reopen an issue | a set | idempotent | written again |
+| set a pull request's reviewers | a set | idempotent | written again |
+| create a branch at a commit | a creation, named | conditional: only while no branch of that name exists | the branch exists at that commit |
+| delete a branch | a set: temper's own branches only | idempotent | it is gone |
 
+- **Classes follow what Forgejo offers.** It keeps no key it would refuse
+  a second creation by, so nothing temper makes is keyed. A pull request
+  or a branch is created only from a state Forgejo checks (none open for
+  those branches, no branch of that name), so a late copy fails while
+  the first stands. temper removes its own creations only once their
+  entries have settled; a late copy lands again only if another hand
+  removed the first within the write's lifetime, which is drift
+  (section 11 of jig's `connectors.md`), and the copy carries the same
+  key, so the forge finds it.
+- **An unrecoverable creation is looked for first:** an uncertain review,
+  comment, issue or update found by its key, or by the state it leads
+  to, is made; one not found holds its task for a person, and is never
+  sent again by temper on its own.
 - **Keys are carried** in what temper creates: a marker at the head of a
   body, a comment or a review, hidden where the forge renders it
   (`docs/design/forge.md`, section 4). A pull request's key is its
