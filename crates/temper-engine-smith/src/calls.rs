@@ -49,7 +49,7 @@ const SPECS: [Spec; 33] = [
     Spec { name: b"decide_escalation", description: b"Release, reject or pass a held descendant.", schema: br#"{"type":"object","properties":{"task":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1},"decision":{"type":"string","enum":["release","reject","pass"]},"reason":{"type":"string"}},"required":["task","revision","decision"]}"#, effect: run::HostEffect::Write },
     Spec { name: b"decide", description: b"Accept, reject or pass a pending proposal.", schema: br#"{"type":"object","properties":{"proposer":{"type":"integer","minimum":1},"proposal":{"type":"integer","minimum":1},"decision":{"type":"string","enum":["accept","reject","pass"]},"reason":{"type":"string"}},"required":["proposer","proposal","decision"]}"#, effect: run::HostEffect::Write },
     Spec { name: b"subscribe", description: b"Watch a referenced task or a timer.", schema: br#"{"type":"object","properties":{"kind":{"type":"string","enum":["task","timer"]},"target":{"type":"integer","minimum":1},"held":{"type":"boolean"},"result":{"type":"boolean"},"at":{"type":"integer","minimum":0},"period":{"type":"integer","minimum":1}},"required":["kind"]}"#, effect: run::HostEffect::Write },
-    Spec { name: b"propose", description: b"Ask the covering holder to act beyond your authority.", schema: br#"{"type":"object","properties":{"action":{"type":"string","enum":["batch","amend","widen","release"]},"task":{"type":"integer","minimum":1},"batch":{"type":"array","items":{"type":"object"}},"amendment":{"type":"object"},"authority":{"type":"object"},"reason":{"type":"string"},"as_holder":{"type":"boolean"}},"required":["action","reason"]}"#, effect: run::HostEffect::Write },
+    Spec { name: b"propose", description: b"Ask the covering holder to act beyond your authority.", schema: br#"{"type":"object","properties":{"action":{"type":"string","enum":["batch","effect","amend","widen","release"]},"task":{"type":"integer","minimum":1},"batch":{"type":"array","items":{"type":"object"}},"amendment":{"type":"object"},"authority":{"type":"object"},"reason":{"type":"string"},"as_holder":{"type":"boolean"},"repository":{"type":"object"},"resource":{"type":"object"},"write":{"type":"object"}},"required":["action","reason"]}"#, effect: run::HostEffect::Write },
     Spec { name: b"note", description: b"Write a scoped note, or revise one at the revision you recalled.", schema: br#"{"type":"object","properties":{"scope":{"type":"object"},"description":{"type":"string"},"body":{"type":"string"},"references":{"type":"array","items":{"type":"integer","minimum":1}},"name":{"type":"integer","minimum":1},"recalled":{"type":"integer","minimum":1}},"required":["scope","description","body"]}"#, effect: run::HostEffect::Write },
     Spec { name: b"recall", description: b"Recall a note by name or search scoped descriptions.", schema: br#"{"type":"object","properties":{"kind":{"type":"string","enum":["name","search"]},"name":{"type":"integer","minimum":1},"scopes":{"type":"array","items":{"type":"object"}},"query":{"type":"string"},"page":{"type":"integer","minimum":0}},"required":["kind"]}"#, effect: run::HostEffect::Read },
 ];
@@ -191,6 +191,11 @@ pub fn call(name: run::CallName, tool: &[u8], input: &run::HostInput) -> Result<
         b"propose" => {
             let action = value.required(b"action")?.text()?;
             let action = match action.as_ref() {
+                b"effect" => engine::ProposedAction::Effect {
+                    repository: forge::repository(value.required(b"repository")?)?,
+                    resource: forge::resource(value.required(b"resource")?)?,
+                    write: Box::new(forge::write(value.required(b"write")?)?),
+                },
                 b"release" => engine::ProposedAction::Release { task: positive(&value, b"task")? },
                 b"batch" => engine::ProposedAction::Batch(nested::delegates(value.required(b"batch")?)?),
                 b"amend" => engine::ProposedAction::Amend {

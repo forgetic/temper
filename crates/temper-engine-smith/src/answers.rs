@@ -112,7 +112,7 @@ pub fn answer(answer: &CallAnswer) -> HostAnswer {
 fn rendered(answer: &CallAnswer) -> Result<HostAnswer, Problem> {
     let mut text = Text::new();
     let error = match answer {
-        CallAnswer::ForgeEffect { entry, outcome } => {
+        CallAnswer::ForgeEffect { entry, outcome, .. } => {
             text.add(b"Forge effect ")?;
             text.number(*entry)?;
             match outcome {

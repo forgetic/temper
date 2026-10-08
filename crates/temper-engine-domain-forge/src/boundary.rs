@@ -305,6 +305,8 @@ pub struct ChangeEvidence {
 /// The connector's durable records, wrapped by the root store.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Stored {
+    /// Connector-owned payload retained under an explicit proposal's number.
+    ProposedEffect(ProposedEffect),
     /// One adopted repository.
     Repository(Repository),
     /// One held resource.
@@ -336,9 +338,18 @@ pub enum Stored {
     Issue(IssueRow),
     Release(ReleaseRow),
 }
+/// A bounded connector payload awaiting an authority holder's decision.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct ProposedEffect {
+    pub number: u64,
+    pub resource: What,
+    pub entry: client::Entry,
+}
+
 /// Stable store key of a connector record.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
+    ProposedEffect(u64),
     Repository(client::api::Repository),
     Hold(Name),
     Names(u64),
@@ -396,6 +407,10 @@ pub enum Event {
     Answered { task: u64, attempt: u64, pushed: Box<[(Name, client::api::Commit)]> },
     /// Read a lost writer's resource afresh before making its slot available.
     Lost { task: u64, attempt: u64 },
+    /// Retain an explicitly proposed agent effect without making it.
+    KeepProposedEffect { row: ProposedEffect },
+    /// Remove the payload of a terminal proposal.
+    DropProposedEffect { number: u64 },
     /// Enqueue a checked effect in the same decision as its cause.
     Enqueue { entry: client::Entry },
     /// Project a goal after the root checked its issue authority.

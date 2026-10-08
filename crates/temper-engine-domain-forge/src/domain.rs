@@ -101,6 +101,7 @@ pub struct Domain {
     pulls: Map<Name, PullState>,
     ci: Map<(client::api::Repository, client::api::Commit), CiState>,
     entries: Map<u64, client::Entry>,
+    proposed_effects: Map<u64, crate::ProposedEffect>,
     landed: Map<client::api::Commit, u64>,
     landings: Map<Token, PendingLanding>,
     lost: Map<Token, PendingLost>,
@@ -124,6 +125,18 @@ pub struct Domain {
 }
 
 impl Domain {
+    /// Available outbox room including the root's staged descriptions.
+    #[must_use]
+    pub fn effect_room(&self, limits: &Limits, staged: u32) -> bool {
+        self.entries.len().saturating_add(staged) < limits.entries
+    }
+
+    /// A connector's durable payload, read again before a holder accepts it.
+    #[must_use]
+    pub fn proposed_effect(&self, number: u64) -> Option<&crate::ProposedEffect> {
+        self.proposed_effects.get(&number)
+    }
+
     /// Bind agent and projection keys to the durable deployment ID before
     /// connector records are restored.
     pub fn bind_deployment(&mut self, id: [u8; 16], limits: &Limits) -> bool {
@@ -154,6 +167,7 @@ impl Domain {
             pulls: Map::with_capacity(l.client.resources),
             ci: Map::with_capacity(l.subscriptions),
             entries: Map::with_capacity(l.entries),
+            proposed_effects: Map::with_capacity(l.tasks),
             landed: Map::with_capacity(l.landings),
             landings: Map::with_capacity(l.landings),
             lost: Map::with_capacity(l.holds),
@@ -460,6 +474,7 @@ pub const fn max_out(l: &Limits) -> u32 {
 }
 
 /// Decide one parent event and collect its durable records and outputs.
+#[expect(clippy::too_many_lines, reason = "one exhaustive connector input dispatcher")]
 pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::PlanBrief { section, source } => {
@@ -506,6 +521,18 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         Event::Claim { task, attempt, writes, holders } => claim(d, env, task, attempt, &writes, &holders, out),
         Event::Answered { task, attempt, pushed } => answered(d, env, task, attempt, &pushed, out),
         Event::Lost { task, attempt } => lost(d, env, task, attempt, out),
+        Event::KeepProposedEffect { row } => {
+            assert!(
+                d.proposed_effects.insert(row.number, row.clone()).is_ok(),
+                "one bounded effect proposal per live task"
+            );
+            emit(out, Request::Save { record: Stored::ProposedEffect(row) });
+        }
+        Event::DropProposedEffect { number } => {
+            if d.proposed_effects.remove(&number).is_some() {
+                emit(out, Request::Erase { key: Key::ProposedEffect(number) });
+            }
+        }
         Event::Enqueue { entry } => enqueue(d, env, entry, out),
         Event::Project { entry, repository, view } => project(d, env, entry, repository, view, out),
         Event::ProjectDesired { entry, goal } => {
@@ -2895,6 +2922,9 @@ fn restore(d: &mut Domain, env: &Env<Limits>, record: Stored) {
         }
         Stored::Landed { commit, task } => {
             d.landed.insert(commit, task).expect("restored landing within limits");
+        }
+        Stored::ProposedEffect(row) => {
+            assert!(d.proposed_effects.insert(row.number, row).is_ok(), "restored proposed effect fits");
         }
         Stored::Entry(row) => {
             d.entries.insert(row.number, row).expect("restored entry within limits");

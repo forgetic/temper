@@ -179,6 +179,7 @@ pub fn stored_key(row: &Stored) -> Key {
         Stored::PullState(row) => Key::PullState(row.name.clone()),
         Stored::Ci(row) => Key::Ci { repository: row.repository, head: row.head },
         Stored::Landed { commit, .. } => Key::Landed(*commit),
+        Stored::ProposedEffect(row) => Key::ProposedEffect(row.number),
         Stored::Entry(row) => Key::Entry(row.number),
         Stored::Client(row) => Key::Client(match row {
             client::Stored::Live(row) => client::Key::Live(row.watch.resource.clone()),
@@ -293,6 +294,19 @@ pub fn stored_bytes(record: &Stored) -> Option<u64> {
         Stored::BranchHead(row) => name(&row.name),
         Stored::PullState(row) => name(&row.name),
         Stored::Ci(_) | Stored::Landed { .. } => Some(0),
+        Stored::ProposedEffect(row) => {
+            let resource = match &row.resource {
+                What::Branch(branch) => {
+                    let mut total = 0_u64;
+                    for segment in branch {
+                        total = total.checked_add(bytes(segment)?)?;
+                    }
+                    total
+                }
+                What::Repository | What::Pull(_) | What::Issue(_) => 0,
+            };
+            client::effect_bytes(&row.entry.effect)?.checked_add(resource)
+        }
         Stored::Entry(row) => client::effect_bytes(&row.effect),
         Stored::Client(row) => client::stored_bytes(row),
         Stored::Change(row) => bytes(&row.branch)?

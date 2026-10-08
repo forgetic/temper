@@ -18,7 +18,7 @@ pub use jig_core::{
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CallAnswer {
     /// A forge write joined the named call's decision; later attempts can reask for its settled result.
-    ForgeEffect { entry: u64, outcome: Option<temper_engine_domain_forge_client::Outcome> },
+    ForgeEffect { entry: u64, deadline: skein_lib::Wall, outcome: Option<temper_engine_domain_forge_client::Outcome> },
     /// A forge write was refused before an outbox entry existed.
     ForgeEffectRefused(temper_engine_domain_forge_client::api::Error),
     /// The pure policy check declined a forge write, retaining its bounded reasons.
@@ -79,9 +79,29 @@ impl CallAnswer {
     #[must_use]
     pub fn core_part(&self, connector: u16) -> jig_core::CallPart {
         match self {
-            CallAnswer::ForgeEffect { .. } | CallAnswer::ForgeEffectRefused(_) | CallAnswer::ForgeRead(_) => {
-                jig_core::CallPart::Connector { connector }
+            CallAnswer::ForgeEffect { entry, deadline, outcome } => {
+                let outcome = match outcome {
+                    Some(temper_engine_domain_forge_client::Outcome::Made { .. }) => {
+                        Some(jig_core::connector::OutboxOutcome::Made)
+                    }
+                    Some(
+                        temper_engine_domain_forge_client::Outcome::Failed(_)
+                        | temper_engine_domain_forge_client::Outcome::Raced { .. },
+                    ) => Some(jig_core::connector::OutboxOutcome::Failed),
+                    Some(temper_engine_domain_forge_client::Outcome::Withdrawn) => {
+                        Some(jig_core::connector::OutboxOutcome::Withdrawn)
+                    }
+                    Some(temper_engine_domain_forge_client::Outcome::Uncertain) => {
+                        Some(jig_core::connector::OutboxOutcome::Uncertain)
+                    }
+                    Some(temper_engine_domain_forge_client::Outcome::Held) => {
+                        Some(jig_core::connector::OutboxOutcome::Held { entry: *entry })
+                    }
+                    None => None,
+                };
+                jig_core::CallPart::Effect { connector, entry: *entry, deadline: *deadline, outcome }
             }
+            CallAnswer::ForgeEffectRefused(_) | CallAnswer::ForgeRead(_) => jig_core::CallPart::Connector { connector },
             CallAnswer::ForgeEffectDenied { answer, findings } => {
                 jig_core::CallPart::EffectDenied { answer: *answer, findings: findings.clone() }
             }
@@ -127,6 +147,9 @@ impl CallAnswer {
     #[must_use]
     pub fn from_core(part: &jig_core::CallPart) -> Option<CallAnswer> {
         Some(match part {
+            jig_core::CallPart::Effect { entry, deadline, .. } => {
+                CallAnswer::ForgeEffect { entry: *entry, deadline: *deadline, outcome: None }
+            }
             jig_core::CallPart::Connector { .. } => return None,
             jig_core::CallPart::EffectDenied { answer, findings } => {
                 CallAnswer::ForgeEffectDenied { answer: *answer, findings: findings.clone() }

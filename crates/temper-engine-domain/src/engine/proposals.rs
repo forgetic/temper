@@ -102,6 +102,7 @@ pub(super) fn propose_call(
     as_holder: bool,
 ) {
     let action = match action {
+        ProposedAction::Effect { .. } => unreachable!("connector effect proposals retain their own payload"),
         ProposedAction::Batch(batch) => {
             domain.work.push(Work::Core(jig_core::Event::NamedAction {
                 to,

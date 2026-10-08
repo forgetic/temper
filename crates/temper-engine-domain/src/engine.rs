@@ -400,6 +400,7 @@ pub enum Tool {
 /// Action a worker can submit for an authority holder's decision.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ProposedAction {
+    Effect { repository: forge_client::api::Repository, resource: forge::What, write: Box<forge_client::api::Write> },
     Batch(Box<[Delegate]>),
     Amend { task: u64, amendment: tasks::Amendment },
     Widen { task: u64, authority: tasks::Authority },
@@ -808,6 +809,8 @@ pub struct Domain {
     forge_unsubscribing: Map<Token, (u64, forge::Topic)>,
     forge_reading: Map<Token, (ReplyTo, CallKey)>,
     forge_effecting: Map<u64, (ReplyTo, CallKey)>,
+    forge_effects: Map<Token, forge_route::EffectFlight>,
+    next_effect_owner: u64,
     forge_projection_due: Map<u64, skein_lib::Wall>,
     forge_change_due: Map<u64, skein_lib::Wall>,
     forge_delegating: Map<(u64, u64), forge_change::Delegate>,
@@ -989,6 +992,10 @@ impl Domain {
             forge_unsubscribing: Map::with_capacity(limits.fleet.calls),
             forge_reading: Map::with_capacity(limits.fleet.calls),
             forge_effecting: Map::with_capacity(limits.fleet.calls),
+            forge_effects: Map::with_capacity(
+                limits.call_records.checked_add(limits.tasks.tasks).expect("effect handoff capacity"),
+            ),
+            next_effect_owner: 1,
             forge_projection_due: Map::with_capacity(limits.forge.issues),
             forge_change_due: Map::with_capacity(limits.forge.changes),
             forge_delegating: Map::with_capacity(limits.forge.changes),
@@ -1037,6 +1044,7 @@ impl Domain {
             && self.forge_reading.is_empty()
             && self.forge.briefs_idle()
             && self.forge_effecting.is_empty()
+            && self.forge_effects.is_empty()
             && self.brief_connectors.is_empty()
             && !self.forge.is_ready()
     }
@@ -1145,6 +1153,7 @@ fn view_requests(routed: jig_core::Requests, room: u32) -> Queue<views::Request>
                 | jig_core::Now::NotesRecalled { .. }
                 | jig_core::Now::NotesRefused { .. }
                 | jig_core::Now::NoteBusy { .. }
+                | jig_core::Now::EffectAnswer { .. }
                 | jig_core::Now::DropPayload { .. }
                 | jig_core::Now::DropAssignment { .. }
                 | jig_core::Now::TurnPayload { .. }
@@ -1224,6 +1233,7 @@ fn open_watch(
                 | jig_core::Now::NotesRecalled { .. }
                 | jig_core::Now::NotesRefused { .. }
                 | jig_core::Now::NoteBusy { .. }
+                | jig_core::Now::EffectAnswer { .. }
                 | jig_core::Now::DropPayload { .. }
                 | jig_core::Now::DropAssignment { .. }
                 | jig_core::Now::TurnPayload { .. }
@@ -2009,6 +2019,9 @@ fn fire_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>)
     let mut forge_out = Queue::with_capacity(forge::max_out(&env.limits.forge));
     forge::fire(&mut domain.forge, &environment_forge(env), &mut forge_out);
     forge_route::outputs(domain, env, &mut decision, &mut forge_out);
+    route_into(domain, env, &mut decision);
+    let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::EffectDeadline);
+    route_core_requests(domain, env, &mut decision, routed);
     let routed = jig_core::fire(&mut domain.core, &environment_core(env), jig_core::Timer::Tasks);
     route_core_requests(domain, env, &mut decision, routed);
     let routed = jig_core::fire(&mut domain.core, &environment_core(env), jig_core::Timer::Fleet);
@@ -2045,8 +2058,13 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                     jig_core::Request::Write(write) => match write {
                         jig_core::Write::Save(record) => match record {
                             jig_core::Record::Core(jig_core::CoreRecord::Call(row)) => {
-                                let answer =
-                                    CallAnswer::from_core(&row.part).expect("core call owns its complete answer");
+                                let answer = forge_route::effect_answer(domain, row.key, &row.part);
+                                if let jig_core::CallPart::Effect { .. } = row.part {
+                                    domain
+                                        .connector_calls
+                                        .insert(row.key, answer.clone())
+                                        .expect("admitted effect call payload");
+                                }
                                 save(
                                     decision,
                                     &env.limits,
@@ -2105,6 +2123,10 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                     },
                     jig_core::Request::Ask { connector, ask } => {
                         let request = match ask {
+                            jig_core::Ask::Effect(ask) => {
+                                forge_route::effect_ask(domain, env, connector, ask);
+                                None
+                            }
                             jig_core::Ask::Gather { section, budget } => {
                                 Some(brief::GatherRequest::Gather { connector, section, budget })
                             }
@@ -2407,14 +2429,18 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                         }
                     }
                     jig_core::Request::Held(held) => match *held {
+                        jig_core::Held::MakeEffect { connector, entry } => {
+                            assert!(connector == domain.config.forge_connector, "numbered forge make");
+                            emit(decision, &env.limits, Delivery::ForgeCommitted { entry });
+                        }
                         jig_core::Held::Relay { task, attempt, previous, word } => {
                             emit(decision, &env.limits, Delivery::Relay { task, attempt, previous, word });
                         }
                         jig_core::Held::PeopleReply { to, sign_in, reply } => {
                             emit(decision, &env.limits, Delivery::WebReply { to, sign_in, reply });
                         }
-                        jig_core::Held::CallAnswer { to, key: _, part } => {
-                            let answer = CallAnswer::from_core(&part).expect("core call owns its complete answer");
+                        jig_core::Held::CallAnswer { to, key, part } => {
+                            let answer = forge_route::effect_answer(domain, key, &part);
                             relay_call(domain, &env.limits, decision, to, answer);
                         }
                         jig_core::Held::ViewStart { run, attempt } => {
@@ -2828,6 +2854,10 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                         jig_core::Now::DropAssignment { task } => {
                             drop(domain.assignments.remove(&task));
                         }
+                        jig_core::Now::EffectAnswer { to, key: _, part } => {
+                            let answer = CallAnswer::from_core(&part).expect("effect wait answer");
+                            relay_call(domain, &env.limits, decision, to, answer);
+                        }
                         jig_core::Now::NoteBusy { to, key: _ } => {
                             relay_call(
                                 domain,
@@ -2907,7 +2937,7 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
 
 fn call_answer(domain: &Domain, key: CallKey) -> Option<CallAnswer> {
     match domain.core.replay_call(key) {
-        Some(jig_core::CallReplay::Core(part)) => CallAnswer::from_core(&part),
+        Some(jig_core::CallReplay::Core(part)) => Some(forge_route::effect_answer(domain, key, &part)),
         Some(jig_core::CallReplay::Connector { .. }) => domain.connector_calls.get(&key).cloned(),
         None => None,
     }
@@ -2997,7 +3027,7 @@ fn call_shape(tool: &Tool, limits: &tasks::Limits) -> Option<tasks::Refusal> {
                         Some(tasks::Refusal::AuthorityShape)
                     }
                 }
-                ProposedAction::Release { .. } => None,
+                ProposedAction::Effect { .. } | ProposedAction::Release { .. } => None,
             }
         }
         Tool::Decide { decision, .. } => match decision {
@@ -3103,7 +3133,7 @@ fn decide_call(
 ) {
     let part = answer.core_part(domain.config.forge_connector);
     let connector_owned = match &part {
-        jig_core::CallPart::Connector { .. } => true,
+        jig_core::CallPart::Connector { .. } | jig_core::CallPart::Effect { .. } => true,
         jig_core::CallPart::EffectDenied { .. }
         | jig_core::CallPart::ToolDenied { .. }
         | jig_core::CallPart::EscalationDecided { .. }
@@ -3312,6 +3342,23 @@ fn relay_payload(
     };
     assert!(key.task == run.raw() && key.attempt == attempt.raw(), "fleet call envelope is unchanged");
     assert!(current_proof(domain, key.task, key.attempt), "fleet only relays a current claim");
+    if let Some(jig_core::CallPart::Effect {
+        deadline,
+        outcome:
+            None | Some(jig_core::connector::OutboxOutcome::Uncertain | jig_core::connector::OutboxOutcome::Held { .. }),
+        ..
+    }) = domain.core.call_parts.get(&key)
+        && env.wall < *deadline
+    {
+        let deadline = *deadline;
+        domain.work.push(Work::Core(jig_core::Event::EffectStart {
+            owner: Token::new(domain.next_effect_owner),
+            connector: domain.config.forge_connector,
+            origin: jig_core::EffectOrigin::Call { to: reply_to, key, deadline },
+        }));
+        domain.next_effect_owner = domain.next_effect_owner.checked_add(1).expect("transient effect owner");
+        return;
+    }
     match call_answer(domain, key) {
         Some(answer) => relay_call(domain, &env.limits, decision, reply_to, answer),
         None => {
@@ -3367,9 +3414,25 @@ fn relay_payload(
                 Tool::Delegate { batch } => {
                     delegate_call(domain, env, decision, reply_to, key, batch, false, Box::new([]));
                 }
-                Tool::Propose { action, reason, as_holder } => {
-                    proposals::propose_call(domain, reply_to, key, action, reason, as_holder);
-                }
+                Tool::Propose { action, reason, as_holder } => match action {
+                    ProposedAction::Effect { repository, resource, write } => forge_route::effect_call(
+                        domain,
+                        env,
+                        decision,
+                        reply_to,
+                        key,
+                        repository,
+                        resource,
+                        *write,
+                        Some((reason, as_holder)),
+                    ),
+                    action @ (ProposedAction::Batch(_)
+                    | ProposedAction::Amend { .. }
+                    | ProposedAction::Widen { .. }
+                    | ProposedAction::Release { .. }) => {
+                        proposals::propose_call(domain, reply_to, key, action, reason, as_holder);
+                    }
+                },
                 Tool::Decide { proposer, proposal, decision: choice } => {
                     domain.work.push(Work::Core(jig_core::Event::NamedAction {
                         to: reply_to,
@@ -3459,7 +3522,7 @@ fn relay_payload(
                     forge_route::read_call(domain, env, decision, reply_to, key, repository, read);
                 }
                 Tool::EffectForge { repository, resource, write } => {
-                    forge_route::effect_call(domain, env, decision, reply_to, key, repository, resource, *write);
+                    forge_route::effect_call(domain, env, decision, reply_to, key, repository, resource, *write, None);
                 }
                 Tool::Unsubscribe { subscription } => {
                     let token = reply_to.into_token();
@@ -4368,6 +4431,7 @@ fn account_outputs(routed: jig_core::Requests, out: &mut Queue<Request>) {
                 | jig_core::Now::NotesRecalled { .. }
                 | jig_core::Now::NotesRefused { .. }
                 | jig_core::Now::NoteBusy { .. }
+                | jig_core::Now::EffectAnswer { .. }
                 | jig_core::Now::DropPayload { .. }
                 | jig_core::Now::DropAssignment { .. }
                 | jig_core::Now::TurnPayload { .. }
@@ -4553,7 +4617,12 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     {
         return None;
     }
-    let mut bytes = crate::worst_case(&limits.journal)?;
+    let mut bytes =
+        crate::worst_case(&limits.journal)?.checked_add(jig_core::effect_worst_case(&core_limits(limits))?)?;
+    let effect_flights = limits.call_records.checked_add(limits.tasks.tasks)?;
+    bytes = bytes
+        .checked_add(Map::<Token, forge_route::EffectFlight>::worst_case(effect_flights)?)?
+        .checked_add(u64::from(effect_flights).checked_mul(row_bound(limits)?.checked_mul(3)?)?)?;
     if max_out(limits) > limits.journal.deliveries {
         bytes = bytes.checked_add(
             Queue::<Output>::worst_case(max_out(limits))?
@@ -5122,7 +5191,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                 domain.startup = Startup::Failed;
                 return;
             }
-            if let jig_core::CallPart::Connector { .. } = part
+            if let jig_core::CallPart::Connector { .. } | jig_core::CallPart::Effect { .. } = part
                 && domain.connector_calls.insert(key, record.answer).is_err()
             {
                 domain.startup = Startup::Failed;

@@ -88,6 +88,10 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         )?)?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingCi>::worst_case(l.subscriptions)?)?
         .checked_add(Map::<u64, client::Entry>::worst_case(l.entries)?)?
+        .checked_add(Map::<u64, crate::ProposedEffect>::worst_case(l.tasks)?)?
+        .checked_add(
+            u64::from(l.tasks).checked_mul(u64::from(l.client.op_bytes).checked_add(u64::from(l.name_bytes))?)?,
+        )?
         .checked_add(Map::<client::api::Commit, u64>::worst_case(l.landings)?)?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingLanding>::worst_case(l.landings)?)?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingLost>::worst_case(l.holds)?)?

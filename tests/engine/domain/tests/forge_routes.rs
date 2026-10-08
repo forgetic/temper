@@ -1355,7 +1355,7 @@ fn a_change_failing_ci_is_repaired_reviewed_at_its_head_and_lands() {
         "repaired change did not land: task2={:?}; pending={:?}; forge={:?}",
         world.store.rows.get(&Key::Tasks(tasks::Key::Live(2))),
         world.pending,
-        world.store.rows.values().filter(|row| matches!(row, Record::Forge { .. })).collect::<Vec<_>>()
+        world.store.rows.values().collect::<Vec<_>>()
     );
 }
 
@@ -2793,7 +2793,9 @@ fn a_named_forge_effect_is_committed_before_its_write_and_made_once() {
     });
     world.until(Until::Effect);
     let entry = match world.answers[0] {
-        temper_engine_domain::CallAnswer::ForgeEffect { entry, outcome: None } => entry,
+        temper_engine_domain::CallAnswer::ForgeEffect {
+            entry, outcome: Some(client::Outcome::Made { .. }), ..
+        } => entry,
         ref other => panic!("unexpected effect answer: {other:?}"),
     };
     for _ in 0..30 {
@@ -2806,7 +2808,7 @@ fn a_named_forge_effect_is_committed_before_its_write_and_made_once() {
         position: 1,
     };
     assert!(
-        matches!(world.store.rows.get(&Key::Call(key)), Some(Record::Call(row)) if matches!(row.answer, temper_engine_domain::CallAnswer::ForgeEffect { entry: observed, outcome: Some(client::Outcome::Made { .. }) } if observed == entry))
+        matches!(world.store.rows.get(&Key::Call(key)), Some(Record::Call(row)) if matches!(row.answer, temper_engine_domain::CallAnswer::ForgeEffect { entry: observed, outcome: Some(client::Outcome::Made { .. }), .. } if observed == entry))
     );
     world.send(engine::Event::Call {
         channel: Token::new(7),
@@ -2831,8 +2833,94 @@ fn a_named_forge_effect_is_committed_before_its_write_and_made_once() {
         world.tick();
     }
     assert!(
-        matches!(world.answers.last(), Some(temper_engine_domain::CallAnswer::ForgeEffect { entry: observed, outcome: Some(client::Outcome::Made { .. }) }) if *observed == entry)
+        matches!(world.answers.last(), Some(temper_engine_domain::CallAnswer::ForgeEffect { entry: observed, outcome: Some(client::Outcome::Made { .. }), .. }) if *observed == entry)
     );
+}
+
+#[test]
+fn an_explicit_forge_effect_proposal_is_retained_until_its_holder_accepts() {
+    let mut world = World::configured(true, false);
+    world.adopt();
+    world.send(engine::Event::Hello {
+        channel: Token::new(7),
+        hello: fleet::Hello {
+            stop_bound: Duration::from_secs(1),
+            slots: 1,
+            workstreams: Box::new([]),
+            hosting: Box::new([]),
+        },
+    });
+    world.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(92)),
+        sign_in: world.signed_in.expect("owner session"),
+        key: [92; 16],
+        ask: people::Ask::StartChat { project: 1, words: Box::from(&b"propose an issue"[..]) },
+    });
+    world.until(Until::Assigned);
+    let assignment = world.assigned[0].clone();
+    world.send(engine::Event::Call {
+        channel: Token::new(7),
+        task: assignment.task,
+        attempt: assignment.attempt,
+        call: Token::new(93),
+        body: engine::Call {
+            completion: 1,
+            position: 1,
+            tool: engine::Tool::Propose {
+                action: engine::ProposedAction::Effect {
+                    repository: forge_world::REPO,
+                    resource: forge_top::What::Repository,
+                    write: Box::new(client::api::Write::CreateIssue {
+                        key: Box::new([]),
+                        title: b"Proposed finding".as_slice().into(),
+                        body: b"Fix this".as_slice().into(),
+                    }),
+                },
+                reason: b"please approve".as_slice().into(),
+                as_holder: false,
+            },
+        },
+    });
+    world.until(Until::Ready);
+    let proposal = match world.answers.last().expect("proposal answer") {
+        temper_engine_domain::CallAnswer::Proposed { proposal } => *proposal,
+        other => panic!("unexpected proposal answer: {other:?}"),
+    };
+    assert!(world.store.rows.values().any(|record| matches!(record, Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::ProposedEffect(effect) if effect.number == proposal))));
+    assert_eq!(issue_count(&mut world), 0);
+    world.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(94)),
+        sign_in: world.signed_in.expect("owner session"),
+        key: [94; 16],
+        ask: people::Ask::DecideProposal {
+            project: 1,
+            proposer: assignment.task,
+            proposal,
+            decision: people::ProposalDecision::Accept,
+        },
+    });
+    world.until(Until::Ready);
+    assert!(!world.store.rows.values().any(|record| matches!(record, Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::ProposedEffect(effect) if effect.number == proposal))));
+    for _ in 0..30 {
+        world.tick();
+    }
+    assert_eq!(issue_count(&mut world), 1);
+    world.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(95)),
+        sign_in: world.signed_in.expect("owner session"),
+        key: [94; 16],
+        ask: people::Ask::DecideProposal {
+            project: 1,
+            proposer: assignment.task,
+            proposal,
+            decision: people::ProposalDecision::Accept,
+        },
+    });
+    world.until(Until::Ready);
+    for _ in 0..30 {
+        world.tick();
+    }
+    assert_eq!(issue_count(&mut world), 1);
 }
 
 fn issue_effect_call(assignment: &engine::Assignment) -> engine::Event {

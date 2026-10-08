@@ -158,6 +158,25 @@ fn every_declared_tool_decodes_its_minimum_shape_and_rejects_a_wrong_shape() {
     }
 }
 
+#[test]
+fn an_effect_proposal_decodes_its_connector_payload_and_rejects_an_unknown_resource() {
+    assert_eq!(
+        decoded(b"propose", br#"{"action":"effect","repository":{"forge":1,"repository":2},"resource":{"kind":"repository"},"write":{"kind":"close","number":3},"reason":"x"}"#),
+        Ok(engine::Call {
+            completion: 2, position: 1,
+            tool: engine::Tool::Propose {
+                action: engine::ProposedAction::Effect {
+                    repository: temper_engine_domain_forge_client::api::Repository { forge: 1, repository: 2 },
+                    resource: temper_engine_domain_forge::What::Repository,
+                    write: Box::new(temper_engine_domain_forge_client::api::Write::Close { number: 3 }),
+                },
+                reason: b"x".as_slice().into(), as_holder: false,
+            },
+        })
+    );
+    assert_eq!(decoded(b"propose", br#"{"action":"effect","repository":{"forge":1,"repository":2},"resource":{},"write":{"kind":"close","number":3},"reason":"x"}"#), Err(Problem::Missing));
+}
+
 fn spend(units: u64) -> run::Spend {
     run::Spend { turns: 1, input: 2, output: 3, cache_read: 0, cache_write: 0, units }
 }

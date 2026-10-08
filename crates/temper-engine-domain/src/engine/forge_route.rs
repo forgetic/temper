@@ -258,6 +258,7 @@ pub(super) fn rows(limits: &Limits) -> Option<u32> {
         .checked_add(forge.holds)?
         .checked_add(forge.tasks)?
         .checked_add(forge.tasks)?
+        .checked_add(forge.tasks)?
         .checked_add(forge.subscriptions)?
         .checked_add(forge.client.resources.checked_mul(3)?)?
         .checked_add(forge.subscriptions)?
@@ -382,11 +383,7 @@ fn effect_key(domain: &Domain, key: CallKey) -> Box<[u8]> {
     .expect("fixed call key fits its frame")
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    reason = "one named call carries the root and its typed forge write"
-)]
+#[expect(clippy::too_many_arguments, reason = "one named call carries the root and its typed forge write")]
 pub(super) fn effect_call(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -396,28 +393,56 @@ pub(super) fn effect_call(
     repository: forge_client::api::Repository,
     resource: forge::What,
     write: forge_client::api::Write,
+    proposal: Option<(Box<[u8]>, bool)>,
 ) {
-    let Some(adopted) = domain.forge.repository(repository) else {
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::ForgeEffectRefused(forge_client::api::Error::Missing),
-        );
-        return;
+    let owner = effect_owner(domain);
+    let flight = match describe_agent(domain, env, key, repository, resource, write) {
+        Ok(flight) => flight,
+        Err(forge_client::api::Error::Busy) => {
+            super::relay_call(domain, &env.limits, decision, to, CallAnswer::Unavailable);
+            return;
+        }
+        Err(why) => {
+            decide_call(domain, &env.limits, decision, to, key, CallAnswer::ForgeEffectRefused(why));
+            return;
+        }
     };
+    assert!(domain.forge_effects.insert(owner, flight).is_ok(), "admitted forge effect handoff");
+    let deadline = skein_lib::Wall::from_nanos(
+        env.wall.as_nanos().saturating_add(domain.core.settings.run.call_timeout.as_nanos()),
+    );
+    let origin = match proposal {
+        Some((reason, as_holder)) => jig_core::EffectOrigin::Propose { to, key, reason, as_holder },
+        None => jig_core::EffectOrigin::Call { to, key, deadline },
+    };
+    domain.work.push(Work::Core(jig_core::Event::EffectStart {
+        owner,
+        connector: domain.config.forge_connector,
+        origin,
+    }));
+}
+
+fn describe_agent(
+    domain: &Domain,
+    env: &Env<Limits>,
+    key: CallKey,
+    repository: forge_client::api::Repository,
+    resource: forge::What,
+    write: forge_client::api::Write,
+) -> Result<EffectFlight, forge_client::api::Error> {
+    let mut staged = 0_u32;
+    for (_, flight) in &domain.forge_effects {
+        match flight {
+            EffectFlight::Call { .. } => staged = staged.saturating_add(1),
+            EffectFlight::Procedure { .. } => {}
+        }
+    }
+    if !domain.forge.effect_room(&env.limits.forge, staged) {
+        return Err(forge_client::api::Error::Busy);
+    }
+    let adopted = domain.forge.repository(repository).ok_or(forge_client::api::Error::Missing)?;
     if !domain.core.connector_project(key.task, adopted.project) {
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::ForgeEffectRefused(forge_client::api::Error::Forbidden),
-        );
-        return;
+        return Err(forge_client::api::Error::Forbidden);
     }
     let described = match forge::describe_agent_effect(
         adopted,
@@ -428,23 +453,11 @@ pub(super) fn effect_call(
     ) {
         Ok(described) => described,
         Err(why) => {
-            decide_call(domain, &env.limits, decision, to, key, CallAnswer::ForgeEffectRefused(why));
-            return;
+            return Err(why);
         }
     };
-    let Some(name) = resource_name(adopted, &resource, env.limits.authority.segments) else {
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::ForgeEffectRefused(forge_client::api::Error::TooLarge),
-        );
-        return;
-    };
-    let mut findings =
-        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
+    let name =
+        resource_name(adopted, &resource, env.limits.authority.segments).ok_or(forge_client::api::Error::TooLarge)?;
     let form = match described.form {
         forge::EffectForm::Creation => EffectForm::Creation,
         forge::EffectForm::Transition => EffectForm::Transition,
@@ -472,58 +485,7 @@ pub(super) fn effect_call(
         form,
         recovery,
     };
-    let checked = domain.core.connector_effect_admit(key.task, &description, env.wall, &[], &mut findings);
-    if checked != authority::Answer::Allow {
-        let mut reasons =
-            List::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
-        for _ in 0..findings.len() {
-            reasons.push(findings.pop().expect("counted finding")).expect("reserved finding room");
-        }
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::ForgeEffectDenied { answer: checked, findings: reasons.into_boxed() },
-        );
-        return;
-    }
-    let Some(entry) = crate::fresh(&mut domain.core.counters, Family::ConnectorRow) else {
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::ForgeEffectRefused(forge_client::api::Error::Busy),
-        );
-        return;
-    };
-    let token = to.into_token();
-    if domain.forge_effecting.insert(entry, (ReplyTo::new(token), key)).is_err() {
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            ReplyTo::new(token),
-            key,
-            CallAnswer::ForgeEffectRefused(forge_client::api::Error::Busy),
-        );
-        return;
-    }
-    assert!(domain.core.reserve_connector_call(key), "call record room reserved");
-    domain.work.push(Work::Forge(forge::Event::Enqueue {
-        entry: forge_client::Entry {
-            number: entry,
-            task: key.task,
-            repository,
-            effect: described.effect,
-            start: None,
-            attempt: None,
-            failures: 0,
-        },
-    }));
+    Ok(EffectFlight::Call { description: Box::new(description), repository, effect: described.effect, key, resource })
 }
 
 pub(super) fn read_call(
@@ -1422,18 +1384,18 @@ fn landing_reviewers(
     Some(reviews.into_boxed())
 }
 
-fn check_change_effect(
+fn describe_change_effect(
     domain: &Domain,
     env: &Env<Limits>,
     task: u64,
     effect: forge_change::Effect,
     evidence: &forge::ChangeEvidence,
-) -> authority::Answer {
-    let Some(row) = domain.forge.change(task) else { return authority::Answer::Refuse };
-    let Some(repository) = domain.forge.repository(row.repository) else { return authority::Answer::Refuse };
-    let Some(context) = domain.core.tasks.delegation(task) else { return authority::Answer::Refuse };
+) -> Option<EffectDescription> {
+    let row = domain.forge.change(task)?;
+    let repository = domain.forge.repository(row.repository)?;
+    let context = domain.core.tasks.delegation(task)?;
     if repository.project != context.project || repository.role == forge::Role::Context {
-        return authority::Answer::Refuse;
+        return None;
     }
     let pull_what = pull_what(row.pull);
     let (kind, what, state) = match effect {
@@ -1447,11 +1409,9 @@ fn check_change_effect(
         forge_change::Effect::Update { head, .. } => (2, branch_what(&row.branch, env.limits.forge.name_bytes), head),
         forge_change::Effect::Merge { head, .. } => (4, branch_what(&row.base, env.limits.forge.name_bytes), head),
     };
-    let Some(what) = what else { return authority::Answer::Refuse };
-    let Some(name) = resource_name(repository, &what, env.limits.authority.segments) else {
-        return authority::Answer::Refuse;
-    };
-    let mut effect = authority::Effect {
+    let what = what?;
+    let name = resource_name(repository, &what, env.limits.authority.segments)?;
+    let effect = authority::Effect {
         connector: domain.config.forge_connector,
         kind,
         name,
@@ -1461,52 +1421,7 @@ fn check_change_effect(
         additional: Box::new([]),
         guards: Box::new([]),
     };
-    let Some(judges) = domain.core.connector_needed_judges(context.project, &effect) else {
-        return authority::Answer::Refuse;
-    };
-    let mut guards = List::with_capacity(env.limits.authority.facts);
-    if kind == 4 {
-        for judge in &judges {
-            if judge.connector == domain.config.forge_connector
-                && domain.forge.guards_landing(context.project, judge.requirement, judge.parameters)
-                && guards.push(*judge).is_err()
-            {
-                return authority::Answer::Refuse;
-            }
-        }
-    }
-    effect.guards = guards.into_boxed();
-    let Some(reviewers) = landing_reviewers(domain, env, row, evidence) else {
-        return authority::Answer::Refuse;
-    };
-    let mut given = List::with_capacity(env.limits.authority.facts);
-    for judge in &judges {
-        if judge.connector != domain.config.forge_connector {
-            continue;
-        }
-        let Some(verdict) = domain.forge.judge_landing(
-            context.project,
-            judge.requirement,
-            judge.parameters,
-            task,
-            state,
-            evidence,
-            &reviewers,
-        ) else {
-            continue;
-        };
-        let verdict = match verdict {
-            forge::JudgeVerdict::Met => authority::Verdict::Met,
-            forge::JudgeVerdict::Wait => authority::Verdict::Wait,
-            forge::JudgeVerdict::Refuse => authority::Verdict::Refuse,
-        };
-        if given.push(authority::Given { judge: *judge, verdict, at: env.wall, state }).is_err() {
-            return authority::Answer::Refuse;
-        }
-    }
-    let mut findings =
-        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
-    let Some((forge_form, forge_recovery)) = forge::effect_shape(kind) else { return authority::Answer::Refuse };
+    let (forge_form, forge_recovery) = forge::effect_shape(kind)?;
     let form = match forge_form {
         forge::EffectForm::Creation => EffectForm::Creation,
         forge::EffectForm::Transition => EffectForm::Transition,
@@ -1518,13 +1433,13 @@ fn check_change_effect(
         forge::Recovery::Idempotent => Recovery::Idempotent,
         forge::Recovery::Unrecoverable => Recovery::Unrecoverable,
     };
-    domain.core.connector_effect_admit(
-        task,
-        &EffectDescription { connector: domain.config.forge_connector, purpose: task, effect, form, recovery },
-        env.wall,
-        given.as_slice(),
-        &mut findings,
-    )
+    Some(EffectDescription {
+        connector: domain.config.forge_connector,
+        purpose: u64::from(kind),
+        effect,
+        form,
+        recovery,
+    })
 }
 
 /// Register the connector's procedure beside the task's first due step.
@@ -2017,7 +1932,8 @@ pub(super) fn outputs(
                 };
                 let entry = match &record {
                     forge::Stored::Entry(row) => Some((row.number, row.task)),
-                    forge::Stored::Repository(_)
+                    forge::Stored::ProposedEffect(_)
+                    | forge::Stored::Repository(_)
                     | forge::Stored::Hold(_)
                     | forge::Stored::Names { .. }
                     | forge::Stored::Subscription(_)
@@ -2032,21 +1948,12 @@ pub(super) fn outputs(
                 };
                 save(decision, &env.limits, Write::Save(Record::Forge { id: number, row: Box::new(record) }));
                 if let Some((entry, task)) = entry {
-                    if let Some((to, key)) = domain.forge_effecting.remove(&entry) {
-                        decide_call(
-                            domain,
-                            &env.limits,
-                            decision,
-                            to,
-                            key,
-                            CallAnswer::ForgeEffect { entry, outcome: None },
-                        );
-                    }
+                    let core_effect = domain.forge_effecting.remove(&entry).is_some();
                     let change_pending = match domain.forge.change(task) {
                         Some(row) => row.pending == Some(entry),
                         None => false,
                     };
-                    if first && !change_pending {
+                    if first && !change_pending && !core_effect {
                         emit(decision, &env.limits, Delivery::ForgeCommitted { entry });
                     }
                 }
@@ -2166,15 +2073,22 @@ pub(super) fn outputs(
                     }
                 }
                 if let Some(entry) = failed {
-                    let (to, key) = domain.forge_effecting.remove(&entry).expect("effect awaiting connector admission");
-                    decide_call(
-                        domain,
-                        &env.limits,
-                        decision,
-                        to,
-                        key,
-                        CallAnswer::ForgeEffectRefused(forge_client::api::Error::Busy),
-                    );
+                    let (_, key) = domain.forge_effecting.remove(&entry).expect("effect awaiting connector admission");
+                    if let Some(CallAnswer::ForgeEffect { deadline, .. }) = domain.connector_calls.get(&key) {
+                        let answer = CallAnswer::ForgeEffect {
+                            entry,
+                            deadline: *deadline,
+                            outcome: Some(forge_client::Outcome::Failed(forge_client::api::Error::Busy)),
+                        };
+                        assert!(domain.connector_calls.insert(key, answer).is_ok(), "retained connector answer");
+                    }
+                    domain.work.push(Work::Core(jig_core::Event::EffectConnector(
+                        jig_core::connector::Event::Outbox {
+                            entry,
+                            task: key.task,
+                            outcome: jig_core::connector::OutboxOutcome::Failed,
+                        },
+                    )));
                 }
                 domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
             }
@@ -2216,7 +2130,11 @@ pub(super) fn outputs(
                         }
                     }
                     if let Some(key) = named {
-                        let answer = CallAnswer::ForgeEffect { entry, outcome: Some(outcome) };
+                        let deadline = match domain.connector_calls.get(&key) {
+                            Some(CallAnswer::ForgeEffect { deadline, .. }) => *deadline,
+                            Some(_) | None => unreachable!("retained effect call"),
+                        };
+                        let answer = CallAnswer::ForgeEffect { entry, deadline, outcome: Some(outcome) };
                         domain.connector_calls.insert(key, answer.clone()).expect("replaces retained named effect");
                         save(decision, &env.limits, Write::Save(Record::Call(crate::CallRecord { key, answer })));
                     }
@@ -2230,9 +2148,11 @@ pub(super) fn outputs(
                     forge_client::Outcome::Uncertain => jig_core::connector::OutboxOutcome::Uncertain,
                     forge_client::Outcome::Held => jig_core::connector::OutboxOutcome::Held { entry },
                 };
-                if let Some(event) = domain.core.connector_outbox(task, result, domain.forge.change(task).is_some()) {
-                    domain.work.push(Work::Tasks(event));
-                }
+                domain.work.push(Work::Core(jig_core::Event::EffectConnector(jig_core::connector::Event::Outbox {
+                    entry,
+                    task,
+                    outcome: result,
+                })));
             }
             forge::Request::ContinueRelease { task } => {
                 if let Some(entry) = crate::fresh(&mut domain.core.counters, Family::ConnectorRow) {
@@ -2263,50 +2183,61 @@ pub(super) fn outputs(
             forge::Request::Drift { task, .. } => {
                 domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Drift }));
             }
-            forge::Request::ChangeDecision { task, decision: choice, entry, evidence } => {
-                change_decision(domain, env, task, choice);
-                match choice {
-                    forge_change::Decision::Effect(effect) => {
-                        if let Some(entry) = entry
-                            && let Some(evidence) = evidence
-                        {
-                            let answer = check_change_effect(domain, env, task, effect, &evidence);
-                            match answer {
-                                authority::Answer::Allow => {
-                                    emit(decision, &env.limits, Delivery::ForgeCommitted { entry });
-                                }
-                                authority::Answer::Wait | authority::Answer::Propose | authority::Answer::Refuse => {
-                                    domain.work.push(Work::Forge(forge::Event::VetoChange {
-                                        task,
-                                        entry,
-                                        prior: evidence.prior,
-                                    }));
-                                    if answer == authority::Answer::Wait {
-                                        let when = skein_lib::Wall::from_nanos(
-                                            env.wall
-                                                .as_nanos()
-                                                .saturating_add(env.limits.forge.queue_window.as_nanos()),
-                                        );
-                                        domain.forge_change_due.insert(task, when).expect("one timer per change");
-                                    } else {
-                                        domain
-                                            .work
-                                            .push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
-                                    }
-                                }
+            forge::Request::ChangeDecision { task, decision: choice, entry, evidence } => match choice {
+                forge_change::Decision::Effect(effect) => {
+                    if let Some(entry) = entry
+                        && let Some(evidence) = evidence
+                    {
+                        match describe_change_effect(domain, env, task, effect, &evidence) {
+                            Some(description) => {
+                                let Some((_, _, step)) = domain.core.tasks.procedure_due(task) else { continue };
+                                let owner = effect_owner(domain);
+                                assert!(
+                                    domain
+                                        .forge_effects
+                                        .insert(
+                                            owner,
+                                            EffectFlight::Procedure {
+                                                description: Box::new(description),
+                                                entry,
+                                                task,
+                                                evidence: Box::new(evidence)
+                                            }
+                                        )
+                                        .is_ok(),
+                                    "admitted procedure effect handoff"
+                                );
+                                domain.work.push(Work::Core(jig_core::Event::EffectStart {
+                                    owner,
+                                    connector: domain.config.forge_connector,
+                                    origin: jig_core::EffectOrigin::Procedure { task, step, entry: Some(entry) },
+                                }));
+                            }
+                            None => {
+                                domain.work.push(Work::Forge(forge::Event::VetoChange {
+                                    task,
+                                    entry,
+                                    prior: evidence.prior,
+                                }));
+                                change_decision(
+                                    domain,
+                                    env,
+                                    task,
+                                    forge_change::Decision::Hold(forge_change::Hold::Failed),
+                                );
                             }
                         }
                     }
-                    forge_change::Decision::None
-                    | forge_change::Decision::Wait { .. }
-                    | forge_change::Decision::Delegate(_)
-                    | forge_change::Decision::Ready
-                    | forge_change::Decision::QueueRepair
-                    | forge_change::Decision::Finish { .. }
-                    | forge_change::Decision::Cancel
-                    | forge_change::Decision::Hold(_) => {}
                 }
-            }
+                forge_change::Decision::None
+                | forge_change::Decision::Wait { .. }
+                | forge_change::Decision::Delegate(_)
+                | forge_change::Decision::Ready
+                | forge_change::Decision::QueueRepair
+                | forge_change::Decision::Finish { .. }
+                | forge_change::Decision::Cancel
+                | forge_change::Decision::Hold(_) => change_decision(domain, env, task, choice),
+            },
             forge::Request::ProjectAfter { goal, when } => {
                 if let Some(issue) = domain.forge.issue(goal)
                     && let Some(number) = issue.number
@@ -2329,5 +2260,275 @@ pub(super) fn outputs(
                 }
             }
         }
+    }
+}
+
+/// Connector-owned effect data while the core chooses its requirements.
+#[derive(Debug)]
+pub(super) enum EffectFlight {
+    Call {
+        description: Box<EffectDescription>,
+        repository: forge_client::api::Repository,
+        effect: forge_client::Effect,
+        key: CallKey,
+        resource: forge::What,
+    },
+    Procedure {
+        description: Box<EffectDescription>,
+        entry: u64,
+        task: u64,
+        evidence: Box<forge::ChangeEvidence>,
+    },
+}
+
+fn effect_owner(domain: &mut Domain) -> Token {
+    let owner = Token::new(domain.next_effect_owner);
+    domain.next_effect_owner = domain.next_effect_owner.checked_add(1).expect("transient effect owner counter");
+    owner
+}
+
+/// Assemble connector evidence without replacing the core's status decision.
+pub(super) fn effect_answer(domain: &Domain, key: CallKey, part: &jig_core::CallPart) -> CallAnswer {
+    match part {
+        jig_core::CallPart::Effect { .. } => match domain.connector_calls.get(&key) {
+            Some(answer) => answer.clone(),
+            None => CallAnswer::from_core(part).expect("core effect status"),
+        },
+        jig_core::CallPart::Connector { .. }
+        | jig_core::CallPart::EffectDenied { .. }
+        | jig_core::CallPart::ToolDenied { .. }
+        | jig_core::CallPart::EscalationDecided { .. }
+        | jig_core::CallPart::EscalationRefused(_)
+        | jig_core::CallPart::Proposed { .. }
+        | jig_core::CallPart::ProposalDecided { .. }
+        | jig_core::CallPart::ProposalRefused(_)
+        | jig_core::CallPart::Controlled
+        | jig_core::CallPart::ControlRefused(_)
+        | jig_core::CallPart::ControlDenied { .. }
+        | jig_core::CallPart::Sent { .. }
+        | jig_core::CallPart::Introduced
+        | jig_core::CallPart::MessageRefused(_)
+        | jig_core::CallPart::Subscribed { .. }
+        | jig_core::CallPart::Unsubscribed
+        | jig_core::CallPart::SubscriptionRefused(_)
+        | jig_core::CallPart::Delegated(_)
+        | jig_core::CallPart::DelegationDenied { .. }
+        | jig_core::CallPart::DelegationRefused(_)
+        | jig_core::CallPart::NoteWritten { .. }
+        | jig_core::CallPart::NoteRecalled { .. }
+        | jig_core::CallPart::NoteRefused(_)
+        | jig_core::CallPart::Unavailable => CallAnswer::from_core(part).expect("core owns its answer"),
+    }
+}
+
+/// The root only translates each handoff that the core selected.
+#[expect(clippy::too_many_lines, reason = "one exhaustive core effect handoff translator")]
+pub(super) fn effect_ask(domain: &mut Domain, env: &Env<Limits>, number: u16, ask: jig_core::connector::Ask) {
+    match ask {
+        jig_core::connector::Ask::Describe { owner } => {
+            let description = match domain.forge_effects.get(&owner) {
+                Some(EffectFlight::Call { description, .. } | EffectFlight::Procedure { description, .. }) => {
+                    description.clone()
+                }
+                None => return,
+            };
+            domain.work.push(Work::Core(jig_core::Event::EffectConnector(jig_core::connector::Event::Described {
+                owner,
+                description,
+            })));
+        }
+        jig_core::connector::Ask::DescribeProposal { owner, proposal } => {
+            let flight = match domain.forge.proposed_effect(proposal) {
+                Some(row) => {
+                    let key = match domain.core.tasks.proposal(row.entry.task, proposal) {
+                        Some(pending) => match pending.action {
+                            tasks::ProposalAction::Effect { attempt, completion, position, .. } => {
+                                CallKey { task: pending.proposer, attempt, completion, position }
+                            }
+                            tasks::ProposalAction::Batch(_)
+                            | tasks::ProposalAction::Amend { .. }
+                            | tasks::ProposalAction::Widen { .. }
+                            | tasks::ProposalAction::Release { .. } => return,
+                        },
+                        None => return,
+                    };
+                    describe_agent(
+                        domain,
+                        env,
+                        key,
+                        row.entry.repository,
+                        row.resource.clone(),
+                        row.entry.effect.write.clone(),
+                    )
+                }
+                None => Err(forge_client::api::Error::Missing),
+            };
+            match flight {
+                Ok(flight) => {
+                    assert!(domain.forge_effects.insert(owner, flight).is_ok(), "fresh proposal description");
+                    effect_ask(domain, env, number, jig_core::connector::Ask::Describe { owner });
+                }
+                Err(why) => domain.work.push(Work::Core(jig_core::Event::EffectConnector(
+                    if why == forge_client::api::Error::Busy {
+                        jig_core::connector::Event::DescribeBusy { owner }
+                    } else {
+                        jig_core::connector::Event::DescribeRefused { owner }
+                    },
+                ))),
+            }
+        }
+        jig_core::connector::Ask::KeepProposal { owner, proposal, task } => match domain.forge_effects.remove(&owner) {
+            Some(EffectFlight::Call { repository, effect, resource, .. }) => {
+                domain.work.push(Work::Forge(forge::Event::KeepProposedEffect {
+                    row: forge::ProposedEffect {
+                        number: proposal,
+                        resource,
+                        entry: forge_client::Entry {
+                            number: 0,
+                            task,
+                            repository,
+                            effect,
+                            start: None,
+                            attempt: None,
+                            failures: 0,
+                        },
+                    },
+                }));
+            }
+            Some(EffectFlight::Procedure { .. }) | None => unreachable!("agent effect proposal was described"),
+        },
+        jig_core::connector::Ask::DropProposal { proposal } => {
+            domain.work.push(Work::Forge(forge::Event::DropProposedEffect { number: proposal }));
+        }
+        jig_core::connector::Ask::Keep { owner, entry, task, key: core_key } => {
+            match domain.forge_effects.remove(&owner) {
+                Some(EffectFlight::Call { repository, effect, key, description, .. }) => {
+                    assert!(
+                        core_key
+                            == jig_core::EffectKey {
+                                deployment: domain.core.counters.deployment().id,
+                                task: key.task,
+                                origin: jig_core::EffectPurpose::Call {
+                                    attempt: key.attempt,
+                                    completion: key.completion,
+                                    position: key.position,
+                                },
+                                purpose: description.purpose,
+                            },
+                        "core preserves the connector's original call purpose"
+                    );
+                    assert!(
+                        domain.forge_effecting.insert(entry, (ReplyTo::new(owner), key)).is_ok(),
+                        "admitted connector keep"
+                    );
+                    domain.work.push(Work::Forge(forge::Event::Enqueue {
+                        entry: forge_client::Entry {
+                            number: entry,
+                            task,
+                            repository,
+                            effect,
+                            start: None,
+                            attempt: None,
+                            failures: 0,
+                        },
+                    }));
+                }
+                Some(EffectFlight::Procedure { entry: kept, .. }) => {
+                    assert!(kept == entry, "core releases the described procedure entry");
+                }
+                None => {}
+            }
+        }
+        jig_core::connector::Ask::Drop { owner, answer } => match domain.forge_effects.remove(&owner) {
+            Some(EffectFlight::Procedure { entry, task, evidence, .. }) => {
+                domain.work.push(Work::Forge(forge::Event::VetoChange { task, entry, prior: evidence.prior }));
+                if answer == authority::Answer::Wait {
+                    let when = skein_lib::Wall::from_nanos(
+                        env.wall.as_nanos().saturating_add(env.limits.forge.queue_window.as_nanos()),
+                    );
+                    domain.forge_change_due.insert(task, when).expect("one timer per procedure");
+                } else {
+                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                }
+            }
+            Some(EffectFlight::Call { .. }) | None => {}
+        },
+        jig_core::connector::Ask::Judge { owner, judge, state, resources: _ } => {
+            let (verdict, guarded) = judge_effect(domain, env, owner, number, judge, state);
+            domain.work.push(Work::Core(jig_core::Event::EffectConnector(jig_core::connector::Event::Verdict {
+                owner,
+                judge,
+                verdict,
+                at: env.wall,
+                guarded,
+                state,
+            })));
+        }
+        jig_core::connector::Ask::Names { .. }
+        | jig_core::connector::Ask::Unname { .. }
+        | jig_core::connector::Ask::Hold { .. }
+        | jig_core::connector::Ask::ReleaseHold { .. }
+        | jig_core::connector::Ask::Writer { .. }
+        | jig_core::connector::Ask::Make { .. }
+        | jig_core::connector::Ask::ProcedureMade { .. }
+        | jig_core::connector::Ask::ProcedureActivate { .. }
+        | jig_core::connector::Ask::ProcedureMessage { .. }
+        | jig_core::connector::Ask::ProcedureClose { .. }
+        | jig_core::connector::Ask::Project { .. }
+        | jig_core::connector::Ask::Release { .. }
+        | jig_core::connector::Ask::Subscribe { .. }
+        | jig_core::connector::Ask::Unsubscribe { .. }
+        | jig_core::connector::Ask::Read { .. }
+        | jig_core::connector::Ask::Gather { .. }
+        | jig_core::connector::Ask::CutTo { .. }
+        | jig_core::connector::Ask::Take { .. }
+        | jig_core::connector::Ask::Prepare { .. }
+        | jig_core::connector::Ask::Left { .. }
+        | jig_core::connector::Ask::Adopt { .. }
+        | jig_core::connector::Ask::Restore { .. }
+        | jig_core::connector::Ask::ReadAfresh
+        | jig_core::connector::Ask::SettleOutbox => unreachable!("core effect handoff"),
+    }
+}
+
+fn judge_effect(
+    domain: &Domain,
+    env: &Env<Limits>,
+    owner: Token,
+    number: u16,
+    judge: authority::Judge,
+    state: [u8; 32],
+) -> (authority::Verdict, bool) {
+    if number != domain.config.forge_connector {
+        return (authority::Verdict::Wait, false);
+    }
+    match domain.forge_effects.get(&owner) {
+        Some(EffectFlight::Procedure { task, evidence, description, .. }) => {
+            let Some(row) = domain.forge.change(*task) else { return (authority::Verdict::Refuse, false) };
+            let Some(repository) = domain.forge.repository(row.repository) else {
+                return (authority::Verdict::Refuse, false);
+            };
+            let Some(reviewers) = landing_reviewers(domain, env, row, evidence) else {
+                return (authority::Verdict::Refuse, false);
+            };
+            let guarded = description.effect.kind == 4
+                && domain.forge.guards_landing(repository.project, judge.requirement, judge.parameters);
+            let verdict = domain.forge.judge_landing(
+                repository.project,
+                judge.requirement,
+                judge.parameters,
+                *task,
+                state,
+                evidence,
+                &reviewers,
+            );
+            let verdict = match verdict {
+                Some(forge::JudgeVerdict::Met) => authority::Verdict::Met,
+                Some(forge::JudgeVerdict::Wait) | None => authority::Verdict::Wait,
+                Some(forge::JudgeVerdict::Refuse) => authority::Verdict::Refuse,
+            };
+            (verdict, guarded)
+        }
+        Some(EffectFlight::Call { .. }) | None => (authority::Verdict::Wait, false),
     }
 }

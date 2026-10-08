@@ -498,6 +498,7 @@ fn key(row: &top::Stored) -> top::Key {
         top::Stored::PullState(row) => top::Key::PullState(row.name.clone()),
         top::Stored::Ci(row) => top::Key::Ci { repository: row.repository, head: row.head },
         top::Stored::Landed { commit, .. } => top::Key::Landed(*commit),
+        top::Stored::ProposedEffect(row) => top::Key::ProposedEffect(row.number),
         top::Stored::Entry(row) => top::Key::Entry(row.number),
         top::Stored::Client(row) => top::Key::Client(match row {
             client::Stored::Live(row) => client::Key::Live(row.watch.resource.clone()),
