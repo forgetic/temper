@@ -543,6 +543,7 @@ and workspace suites remain within their existing budgets.
 | jig 17.1a relayed read answers | merged and pushed | afb92897 | Retained read/write classification through the fleet; both application roots answer reads through the journal door while mutations remain held. Gate: fmt/clippy; 1,225 focused / 3.448 s; 37 fuzzy / 8.893 s. Focused fleet/core development check: 167 / 0.273 s. |
 | jig 17.1 reference ops root | merged and pushed | 0507c918 | Composed the core, both connectors, permanent engine hub and inline Smith agent with one journal, admission bounds and core-selected restart order. Seven root checks cover admission, failure, reads during a held commit, restored header, bounds, startup and atomic tool replies. Gate: fmt/clippy; 1,237 focused / 3.688 s; 37 fuzzy / 8.704 s. |
 | jig 17.2a inline readiness and accepted-batch referee | merged and pushed | b07a2250 | Pure inline readiness prevents parking deferred Smith work. Durable accepted-batch member ranges let the referee follow the accepter's authority while retaining result delivery to the proposer; positive and negative cases check the evidence. Gate on main 0868ff4e: fmt/clippy; 1,250 focused / 3.542 s; 37 fuzzy / 8.810 s. |
+| jig 17.2b procedure news batching | merged and pushed | 4b02f82e | Procedure news follows its count/age policy; other message kinds remain immediate. Three new inbox stories cover count, age and words during a pending batch, with restart coverage. Gate on main 750f62a0: fmt/clippy; 1,253 focused / 4.234 s; 37 fuzzy / 8.969 s. Serial inbox measure: 12 focused / 0.065 s. |
 
 ### temper 03 boundary and handoff
 
@@ -575,30 +576,51 @@ and workspace suites remain within their existing budgets.
 
 ### jig 17 stopped proof and reference-root handoff
 
-- **17.2 is blocked by procedure watch batching.** `examples.md`, section
-  7.1 requires alerts 7–9 to wake the observability watch once, using the
-  news batching described by `domain/tasks.md`, section 8.3. The current
-  `jig/crates/jig-core-tasks/src/wake.rs` forces every procedure message to
-  `WakeRule::Immediate`, bypassing batching. This is a core task behavior
-  prerequisite outside this session's authorized scope. No batching code
-  was changed. Proposal for its owner: honor the owner's configured batch
-  rule for procedure news, retain immediate non-news procedure triggers,
-  and add count/age cases beside the burst-of-news case in
-  `jig/tests/tasks/tests/inbox.rs`; then check the ops alert. No design
-  change is proposed.
+- **17.2b is merged; 17.2 is blocked by procedure inbox consumption.**
+  `domain/tasks.md`, section 8.2 says inbox messages are taken when the
+  procedure's step commits. `jig-core-tasks/src/procedure.rs` commits its
+  step fence and decision without consuming any inbox messages. After the
+  storm's triage returns, its result steps the watch immediately on the
+  old storm news, making an empty triage before alert 12. Proposal: a
+  separate core/tasks prerequisite increment that carries a procedure's
+  offered/read fence into its committed step, consumes only that offered
+  inbox prefix, preserves later arrivals, and tests restart and refused
+  steps. The design already decides consumption; no design change is
+  proposed. Core/tasks changes await plan steering.
 - **Unfinished work is preserved, not ready:** branch `jig/17-2-stories`,
   worktree `/srv/data/git/runner/worktrees/jig-extraction/temper/jig-17-2-stories`,
-  remains uncommitted on `0507c918`. It retains the conformance adapter,
-  scripted Smith stories and root integration fixes. The full alert
-  scenario is restored; temporary accepted-batch integration overlays were
-  removed after their prerequisite merged. Rebase onto current main before
-  resuming. Recovery copies are `/tmp/jig17-2-before-cleanup.tar.gz` and
-  `/tmp/jig17-2-before-cleanup.patch`.
-- **Proof remains incomplete:** the night scenario passed during development
-  (0.028 s); the full alert, focused crash cuts, one fuzzy commit sweep,
-  serial half-allocation measurement (0.75 s focused / 4 s fuzzy), and
-  17.2's gate have not passed. The accepted-batch diagnostic confirmed the
-  referee gap fixed by 17.2a; it does not establish the full alert story.
+  is uncommitted on `ad3d6e2c`, with an empty index. It retains the
+  conformance adapter, full scripted alert, night and initial night crash
+  cases. Recovery copies are `/tmp/jig17-2-inbox-blocked.tar.gz` and
+  `/tmp/jig17-2-inbox-blocked.patch`; the earlier cleanup copies remain.
+  No temporary core or referee overlays remain.
+- **Independent ops repairs retained:** infrastructure named holds reach
+  admission; holdings follow the procedure executor rather than any
+  service-shaped spec; read admission reserves authority's declared output
+  bound; infrastructure service paths reach observability's judge; the
+  cold load finishes people's restoration; and startup reads the durable
+  header before numbering another commit. Observability emits an explicit
+  `WatchInterest` request when its watch chooses a task-scoped interest,
+  and the root only translates it. The prior root block that chose and
+  numbered an interest was removed because `domain/root.md`, section 11
+  forbids root decisions. The connector's unit story checks the request
+  and repeated starts.
+- **Proof remains incomplete:** the six-test independent development run
+  passed on `4b02f82e` in 0.030 s, including five observability units and the night
+  baseline (0.029 s). The alert still needs its inbox prerequisite; the
+  initial night cut cases do not yet recover the scale effect. The
+  cold-start commit-number assertion was repaired, but the three cuts
+  still require diagnosis. Full alert assertions, focused crash cuts,
+  one fuzzy commit sweep, serial half-allocation measurement (0.75 s
+  focused / 4 s fuzzy), and 17.2's gate have not passed. These retained
+  changes are not evidence that the two conformance stories are complete.
+- **Resume after steering:** implement and merge the procedure inbox
+  prerequisite first; the retained tree is rebased onto jig 21.2,
+  whose project-scoped resource role reports must now reach the ops
+  named-resource translation. Preserve the adopting project and report its
+  role through `core::connector::Event::Resource`; the retained translation
+  currently feeds only task hold reports and needs that adaptation. Then complete
+  alert/result checks, crash cuts, one sweep, budgets and the full gate.
 - **Copy for temper session 05:** replace connector numbers and routing arms;
   application record wrappers and load ranges; connector restart adapters;
   tool schemas, decoders and result translations; configured charters,
@@ -608,12 +630,12 @@ and workspace suites remain within their existing budgets.
   core-selected restart script, the permanent engine hub, inline agent,
   shared charter codec, and readiness/quiescence queries. Application roots
   route and translate; the core retains decisions.
-- **Vocabulary and design:** 17.1a supplied the missing read/write answer
-  classification; 17.2a supplied pure inline readiness and durable accepted
-  batch membership for observation. No additional vocabulary or design
-  change was taken. Further alert integration failures must be diagnosed
-  after the batching prerequisite; the uncommitted proof is not evidence
-  that those stories work.
+- **Vocabulary and design:** 17.1a supplied read/write answer
+  classification; 17.2a supplied inline readiness and accepted batch
+  evidence; 17.2b supplied procedure news batching. The retained
+  connector-owned watch interest follows the existing subscription design.
+  Procedure inbox consumption is still a missing implementation of
+  `domain/tasks.md`, section 8.2, outside the current increment's scope.
 - **Dependencies and repository boundaries:** this resumed session changed
   no prerequisite repository or pins. Forge URLs remain in the manifests;
   `Cargo.lock` keeps Smith `a54fe558421ed07ce376ac1ebf2ce09345c8d496`, Skein
