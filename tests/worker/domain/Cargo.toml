@@ -1,6 +1,6 @@
 [package]
 name = "temper-worker-domain-world"
-description = "The worker root version-two runtime world at a typed domain boundary"
+description = "The complete worker with Smith processes, the fake forge and disk, and typed replay stories"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,8 @@ skein-lib.workspace = true
 smith-channel.workspace = true
 temper-worker-domain.workspace = true
 temper-world.workspace = true
+temper-worker-checkout-world.workspace = true
+temper-fake-checkout.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
 # tests/clippy.toml bans what would make a run unrepeatable.

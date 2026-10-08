@@ -117,6 +117,7 @@ jig-inline-agent = { path = "jig/crates/jig-inline-agent" }
 temper-fake-forge-domain = { path = "testing/temper-fake-forge-domain" }
 temper-fake-checkout = { path = "tests/fake-checkout" }
 temper-world = { path = "tests/world" }
+temper-worker-checkout-world = { path = "tests/worker/checkout" }
 
 # Panics are fail-stop and overflow traps, in every profile. (The test harness
 # needs unwinding, so cargo ignores `panic` for test targets.)

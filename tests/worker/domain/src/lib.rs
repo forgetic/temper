@@ -1,13 +1,14 @@
-//! The worker root's version-two runtime world at its typed domain boundary.
-//! A scripted engine, checkout and agent drive the worker through deterministic
-//! turns, reconnects, merges and retained answers (domain/worker.md, section 9).
-//! It owns injected time and seeds; it does not know a wire protocol or store.
-//! `next::World` runs and replays those stories.
+//! The complete worker: jig's hub, Smith's process host and temper's checkout,
+//! against scripted engine and agent peers and the fake forge and disk
+//! (jig's domain/hosts.md, sections 4, 6.6 and 11).
+//! `whole` checks remote trees, delivery settlement, contact loss and the hello's
+//! stop bound. `next` measures retained state and replays small turn windows.
 
 use skein_lib::Duration;
 use temper_worker_domain::{Limits, agent, checkout, host};
 
 pub mod next;
+pub mod whole;
 
 /// The calm worker's limits: room for three runs of one repository each,
 /// with the engine's charters, and events and outcomes of a few hundred

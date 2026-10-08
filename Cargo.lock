@@ -854,6 +854,8 @@ version = "0.0.0"
 dependencies = [
  "skein-lib",
  "smith-channel",
+ "temper-fake-checkout",
+ "temper-worker-checkout-world",
  "temper-worker-domain",
  "temper-world",
 ]
