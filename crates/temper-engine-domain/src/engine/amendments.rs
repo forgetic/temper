@@ -1,9 +1,9 @@
-//! Authenticated person amendments (domain/people.md, 5.1; domain/tasks.md, 6).
+//! Authenticated person amendments (domain/people.md, 5.1; jig's domain/tasks.md, 7).
 //! The root translates the person's typed payload, checks current standing and
 //! authority, and sends one task edit. Tasks retains the change and history.
 use super::{
     Domain, Env, Limits, PersonTaskRoute, ReplyTo, Token, Work, authority, authority_numbers, authority_value,
-    escalation, people, person_control_refused, person_tree, tasks,
+    escalation, people, person_control_refused, person_escalation_recipient, person_tree, tasks,
 };
 use skein_lib::{List, Queue};
 
@@ -151,14 +151,15 @@ pub(super) fn begin(
             None => false,
         },
     };
-    if context.project != project || !any_task && !person_tree(domain, person, task) {
+    let standing = person_tree(domain, person, task) || person_escalation_recipient(domain, person, role, task);
+    if context.project != project || !any_task && !standing {
         return person_control_refused(domain, request, people::Refusal::Standing);
     }
     let role_number = escalation::role_number(role);
     let Some(role_policy) = domain.config.authority.role(project, role_number) else {
         return person_control_refused(domain, request, people::Refusal::Authority);
     };
-    if !role_policy.requests.allows(authority::RequestKind::Amend) {
+    if !role_policy.requests.allows(authority::RequestKind::Amend) && !standing {
         return person_control_refused(domain, request, people::Refusal::Authority);
     }
     let Some(amendment) = translate(amendment, &env.limits.tasks) else {
@@ -181,7 +182,7 @@ pub(super) fn begin(
             };
             let mut findings =
                 Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority bound"));
-            let checked = authority::check_request(
+            let checked = authority::check_request_with_standing(
                 &domain.config.authority,
                 &authority::PersonAsk {
                     project,
@@ -190,6 +191,7 @@ pub(super) fn begin(
                     tasks_left: context.tasks_left,
                     request: authority::PersonRequest::Amend(after),
                 },
+                standing,
                 &mut findings,
             );
             let role_shortage = if findings.len() == 1 {

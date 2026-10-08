@@ -502,6 +502,65 @@ fn a_person_amends_their_live_task_and_the_change_reaches_its_run() {
 }
 
 #[test]
+fn a_requester_may_amend_and_cancel_without_role_control_bits() {
+    let bounds = limits();
+    let mut configuration = config(2045);
+    let mut policy = configuration.authority.policy(1).expect("project policy").clone();
+    policy.roles[0].requests = authority::Requests(1 | 4);
+    let mut authority =
+        authority::Domain::new(configuration.authority.rules().clone(), bounds.authority).expect("valid authority");
+    let mut output = Queue::with_capacity(authority::POLICY_MAX_OUT);
+    authority::step(&mut authority, authority::Event::Policy { project: 1, policy }, &mut output);
+    assert_eq!(output.pop(), Some(authority::PolicyFact::Added { project: 1 }));
+    configuration.authority = authority;
+    let mut driver = Driver::configured(Store::new(), configuration, &bounds);
+    driver.settle();
+    driver.sign_in();
+    driver.settle();
+    hello(&mut driver);
+    driver.settle();
+    chat(&mut driver, 46);
+    driver.settle();
+    let task = assigned(&driver).task;
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2046)),
+        sign_in: driver.session(),
+        key: [47; 16],
+        ask: people::Ask::Amend {
+            project: 1,
+            task,
+            amendment: people::Amendment {
+                spec: Some(people::Spec {
+                    words: b"requester edit".as_slice().into(),
+                    parameters: Box::new([]),
+                    inputs: Box::new([]),
+                }),
+                wake: None,
+                dependencies: None,
+                authority: None,
+                reason: b"requester decides".as_slice().into(),
+            },
+        },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Amended { task: found }), .. }
+            if *found == task
+    )));
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(2047)),
+        sign_in: driver.session(),
+        key: [48; 16],
+        ask: people::Ask::Cancel { project: 1, task, reason: b"requester closes".as_slice().into() },
+    });
+    driver.settle();
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::WebReply { reply: people::Reply::Outcome(people::Outcome::Cancelled { task: found }), .. }
+            if *found == task
+    )));
+}
+
+#[test]
 #[expect(clippy::wildcard_enum_match_arm, reason = "select the named proposal outcome")]
 fn a_members_wider_amendment_waits_for_a_maintainer_to_accept() {
     let (mut driver, _, _, maintainer_session, _, member_session) = people_roles_driver();
@@ -2298,6 +2357,52 @@ fn an_amendment_reaches_a_live_run() {
         panic!("parent funder")
     };
     assert_eq!(parent_row.numbers.reserved, 25);
+}
+
+#[test]
+fn an_ancestor_amends_a_live_grandchild() {
+    let (mut driver, root) = batch_fixture_with(3, 2);
+    let mut middle = report_delegate(b"middle", Box::new([]));
+    middle.authority.budget.spend = 50;
+    middle.authority.delegation.kinds = Box::new([tasks::AuthorityExecutor::Charter(1)]);
+    middle.authority.delegation.tasks = 1;
+    middle.authority.delegation.depth = 1;
+    let child = call_batch(&mut driver, &root, 901, Box::new([middle]))[0];
+    let child_run = assigned_task(&driver, child);
+    let grandchild =
+        call_batch(&mut driver, &child_run, 902, Box::new([report_delegate(b"grandchild", Box::new([]))]))[0];
+    let grandchild_run = assigned_task(&driver, grandchild);
+    tool_call(
+        &mut driver,
+        &root,
+        903,
+        engine::Tool::Amend {
+            target: grandchild,
+            amendment: tasks::Amendment {
+                spec: Some(tasks::Spec {
+                    words: b"revised by ancestor".as_slice().into(),
+                    parameters: Box::new([]),
+                    inputs: Box::new([]),
+                }),
+                wake: None,
+                dependencies: None,
+                authority: None,
+                reason: b"tree plan changed".as_slice().into(),
+            },
+        },
+    );
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::CallAnswer { call, answer: temper_engine_domain::CallAnswer::Controlled, .. }
+            if *call == Token::new(903)
+    )));
+    assert!(matches!(driver.store.rows.get(&Key::Tasks(tasks::Key::Live(grandchild))),
+        Some(Record::Tasks(tasks::Stored::Live(row))) if row.spec.words.as_ref() == b"revised by ancestor"
+    ));
+    assert!(driver.delivered.iter().any(|delivery| matches!(delivery,
+        Delivery::Inbound { task, attempt, word, .. }
+            if *task == grandchild && *attempt == grandchild_run.attempt
+                && matches!(word.kind, tasks::MessageKind::Amendment { .. })
+    )));
 }
 
 #[test]

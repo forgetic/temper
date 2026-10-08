@@ -2885,6 +2885,20 @@ fn person_tree(domain: &Domain, person: u64, task: u64) -> bool {
     false
 }
 
+fn person_escalation_recipient(domain: &Domain, person: u64, role: people::Role, task: u64) -> bool {
+    let Some(context) = domain.tasks.escalation(task) else { return false };
+    match context.escalation {
+        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Person(holder), .. } => holder == person,
+        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Role { project, role: holder }, .. } => {
+            project == context.project && holder == escalation::role_number(role)
+        }
+        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Task(_), .. }
+        | tasks::Escalation::Unheld { .. }
+        | tasks::Escalation::Routing { .. }
+        | tasks::Escalation::Rejected { .. } => false,
+    }
+}
+
 fn person_control_refused(domain: &mut Domain, request: Token, why: people::Refusal) {
     domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Refused(why) }));
 }
@@ -2940,7 +2954,8 @@ fn route_person_control(
             None => false,
         },
     };
-    if context.project != project || !any_task && !person_tree(domain, person, task) {
+    let standing = person_tree(domain, person, task) || person_escalation_recipient(domain, person, holding, task);
+    if context.project != project || !any_task && !standing {
         return person_control_refused(domain, request, people::Refusal::Standing);
     }
     let pool = tasks::Funder::Pool { project, person, period: domain.config.period };
@@ -2975,7 +2990,7 @@ fn route_person_control(
     };
     let mut findings =
         Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("bounded findings"));
-    let checked = authority::check_request(
+    let checked = authority::check_request_with_standing(
         &domain.config.authority,
         &authority::PersonAsk {
             project,
@@ -2984,6 +2999,7 @@ fn route_person_control(
             tasks_left: context.tasks_left,
             request: action,
         },
+        standing,
         &mut findings,
     );
     if checked.answer != authority::Answer::Allow {
@@ -3069,11 +3085,13 @@ fn move_for_person(
         }));
         return;
     }
-    let role_number = escalation::role_number(role.expect("checked member"));
+    let role = role.expect("checked member");
+    let role_number = escalation::role_number(role);
     let Some(role_policy) = domain.config.authority.role(project, role_number) else {
         unreachable!("member belongs to configured policy")
     };
-    if !role_policy.requests.allows(authority::RequestKind::Amend) {
+    let standing = person_tree(domain, person, task) || person_escalation_recipient(domain, person, role, task);
+    if !role_policy.requests.allows(authority::RequestKind::Amend) && !standing {
         domain.work.push(Work::People(people::Event::Decided {
             request,
             outcome: people::Outcome::Refused(people::Refusal::Authority),
@@ -3111,7 +3129,7 @@ fn move_for_person(
     giving.budget.spend = left;
     let mut findings =
         Queue::with_capacity(authority::max_out(domain.config.authority.limits()).expect("authority output"));
-    let checked = authority::check_request(
+    let checked = authority::check_request_with_standing(
         &domain.config.authority,
         &authority::PersonAsk {
             project,
@@ -3120,6 +3138,7 @@ fn move_for_person(
             tasks_left: env.limits.tasks.tree_tasks,
             request: authority::PersonRequest::Move(giving),
         },
+        true,
         &mut findings,
     );
     if checked.answer != authority::Answer::Allow {
@@ -3815,7 +3834,10 @@ fn amend_call(
             }),
         );
     };
-    if current.requester != tasks::Party::Task(key.task) || current.project != holder.project {
+    if target == key.task
+        || current.project != holder.project
+        || !in_tree(&domain.tasks.view_tasks(), target, key.task, domain.limits.tasks.depth)
+    {
         return decide_call(
             domain,
             &env.limits,
