@@ -544,6 +544,8 @@ and workspace suites remain within their existing budgets.
 | jig 17.1 reference ops root | merged and pushed | 0507c918 | Composed the core, both connectors, permanent engine hub and inline Smith agent with one journal, admission bounds and core-selected restart order. Seven root checks cover admission, failure, reads during a held commit, restored header, bounds, startup and atomic tool replies. Gate: fmt/clippy; 1,237 focused / 3.688 s; 37 fuzzy / 8.704 s. |
 | jig 17.2a inline readiness and accepted-batch referee | merged and pushed | b07a2250 | Pure inline readiness prevents parking deferred Smith work. Durable accepted-batch member ranges let the referee follow the accepter's authority while retaining result delivery to the proposer; positive and negative cases check the evidence. Gate on main 0868ff4e: fmt/clippy; 1,250 focused / 3.542 s; 37 fuzzy / 8.810 s. |
 | jig 17.2b procedure news batching | merged and pushed | 4b02f82e | Procedure news follows its count/age policy; other message kinds remain immediate. Three new inbox stories cover count, age and words during a pending batch, with restart coverage. Gate on main 750f62a0: fmt/clippy; 1,253 focused / 4.234 s; 37 fuzzy / 8.969 s. Serial inbox measure: 12 focused / 0.065 s. |
+| jig 17.2c procedure inbox consumption | merged and pushed | aa35d6cc | A procedure step carries its offered read fence; its committed decision consumes that prefix, preserving later arrivals. Refused steps consume nothing; cold restart offers unconsumed messages again. Five inbox stories and referee negative cases cover consumption, late news/results, refusal and restart. Gate: fmt/clippy; 1,262 focused / 5.156 s; 37 fuzzy / 8.755 s. Serial tasks: 99 focused / 0.650 s; 1 fuzzy / 3.369 s. |
+| jig 17.2 ops conformance stories | merged and pushed | 0b8c3eb3 | The real reference root runs the scripted alert and agent-free recurring night against independent production and jig's referee. Focused cuts cover acceptance, restart entry/sent, and before/at/after scale entry; one fuzzy story sweeps every night commit. Root repairs preserve cold adoption, offered inboxes, settled answers and project resource roles. Gate: fmt/clippy; 1,265 focused / 3.054 s; 38 fuzzy / 7.346 s. Final-tip serial ops plus both connector worlds: 41 focused / 0.706 s summed (0.713 s elapsed), 3 fuzzy / 0.334 s summed (0.335 s elapsed), within the configured half allocation of 0.75 s / 4 s. |
 | jig 21.1 kinds of hold and pool slots | merged and pushed | 0868ff4e | Branch `jig/21-1-holds`: named connector reports govern shared/exclusive/pooled admission and waiting/refusing behavior. Unknown reports retain the whole batch before task creation or funding reservation; shrinking pools retain holders and admit no waiter until they drain. Both roots route reports. Gate: fmt/clippy; 1,247 focused / 3.409 s; 37 fuzzy / 8.956 s. |
 | jig 21.2 roles of resources | merged and pushed | ad3d6e2c | Branch `jig/21-2-roles`: current roles scoped to projects govern effects, projections, accepted effects and workspace writes. Unavailable resources refuse holds and hold waiters with a reason; narrowing stops a run writer while committed effects remain made. Restored adoption reports preserve context refusal. Stories cover participating writes, project isolation, narrowing, unavailable holds and cold restart. Gate: fmt/clippy; 1,257 focused / 1.867 s; 37 fuzzy / 4.971 s. |
 
@@ -616,71 +618,71 @@ and workspace suites remain within their existing budgets.
   resource admission is complete; application conformance sign-off remains
   Temper 05's work.
 
-### jig 17 stopped proof and reference-root handoff
+### jig 17 completed proof and reference-root handoff
 
-- **17.2b is merged; 17.2 is blocked by procedure inbox consumption.**
-  `domain/tasks.md`, section 8.2 says inbox messages are taken when the
-  procedure's step commits. `jig-core-tasks/src/procedure.rs` commits its
-  step fence and decision without consuming any inbox messages. After the
-  storm's triage returns, its result steps the watch immediately on the
-  old storm news, making an empty triage before alert 12. Proposal: a
-  separate core/tasks prerequisite increment that carries a procedure's
-  offered/read fence into its committed step, consumes only that offered
-  inbox prefix, preserves later arrivals, and tests restart and refused
-  steps. The design already decides consumption; no design change is
-  proposed. Core/tasks changes await plan steering.
-- **Unfinished work is preserved, not ready:** branch `jig/17-2-stories`,
-  worktree `/srv/data/git/runner/worktrees/jig-extraction/temper/jig-17-2-stories`,
-  is uncommitted on `ad3d6e2c`, with an empty index. It retains the
-  conformance adapter, full scripted alert, night and initial night crash
-  cases. Recovery copies are `/tmp/jig17-2-inbox-blocked.tar.gz` and
-  `/tmp/jig17-2-inbox-blocked.patch`; the earlier cleanup copies remain.
-  No temporary core or referee overlays remain.
-- **Independent ops repairs retained:** infrastructure named holds reach
-  admission; holdings follow the procedure executor rather than any
-  service-shaped spec; read admission reserves authority's declared output
-  bound; infrastructure service paths reach observability's judge; the
-  cold load finishes people's restoration; and startup reads the durable
-  header before numbering another commit. Observability emits an explicit
-  `WatchInterest` request when its watch chooses a task-scoped interest,
-  and the root only translates it. The prior root block that chose and
-  numbered an interest was removed because `domain/root.md`, section 11
-  forbids root decisions. The connector's unit story checks the request
-  and repeated starts.
-- **Proof remains incomplete:** the six-test independent development run
-  passed on `4b02f82e` in 0.030 s, including five observability units and the night
-  baseline (0.029 s). The alert still needs its inbox prerequisite; the
-  initial night cut cases do not yet recover the scale effect. The
-  cold-start commit-number assertion was repaired, but the three cuts
-  still require diagnosis. Full alert assertions, focused crash cuts,
-  one fuzzy commit sweep, serial half-allocation measurement (0.75 s
-  focused / 4 s fuzzy), and 17.2's gate have not passed. These retained
-  changes are not evidence that the two conformance stories are complete.
-- **Resume after steering:** implement and merge the procedure inbox
-  prerequisite first; the retained tree is rebased onto jig 21.2,
-  whose project-scoped resource role reports must now reach the ops
-  named-resource translation. Preserve the adopting project and report its
-  role through `core::connector::Event::Resource`; the retained translation
-  currently feeds only task hold reports and needs that adaptation. Then complete
-  alert/result checks, crash cuts, one sweep, budgets and the full gate.
-- **Copy for temper session 05:** replace connector numbers and routing arms;
-  application record wrappers and load ranges; connector restart adapters;
-  tool schemas, decoders and result translations; configured charters,
-  policy, endpoint names and account limits; connector brief sections; and
-  each application's worst-case route and journal bounds. Keep the journal's
-  admission and ordered release, its held/read answer distinction, the
-  core-selected restart script, the permanent engine hub, inline agent,
-  shared charter codec, and readiness/quiescence queries. Application roots
-  route and translate; the core retains decisions.
-- **Vocabulary and design:** 17.1a supplied read/write answer
-  classification; 17.2a supplied inline readiness and accepted batch
-  evidence; 17.2b supplied procedure news batching. The retained
-  connector-owned watch interest follows the existing subscription design.
-  Procedure inbox consumption is still a missing implementation of
-  `domain/tasks.md`, section 8.2, outside the current increment's scope.
+- **All session 17 increments are merged and pushed.** The rows above
+  record 17.0, 17.1a, 17.1, 17.2a, 17.2b, 17.2c and 17.2 with their
+  gate evidence. The retained draft was rebased onto the current resource
+  contract and completed; no unfinished implementation remains.
+- **The alert proof:** storm alerts 7/8/9 produce one triage. Alert 12
+  reaches a triage agent, an incident lead and the on-call person's
+  authenticated acceptance of a production restart. Observability judges
+  the requirement; independent production observes operation 77 applied
+  once, including after the acceptance, entry and sent commit cuts.
+  The lead reads the procedure result and finishes its incident report;
+  the scripted client reads that committed report using the fixture's
+  durable sign-in and project-owner permission. This fixture reads the
+  archive directly; a complete client application is outside session 17.
+- **The night proof:** a recurring procedure scales staging from three
+  replicas to one after load below 20 percent for 1,800 seconds. There are
+  no agent assignments. The missing scale after cold cuts was fixed:
+  connector hold kinds are reconstructed before live task restoration,
+  and procedure callbacks refresh owner state without issuing decisions
+  outside a task-offered step. Before/at/after entry cuts and a sweep of
+  every baseline night commit recover one applied conditional scale.
+- **The final proof fits its allocation:** measured serially through the
+  shared lock on `0b8c3eb3`, ops and both connector worlds use 0.706 s
+  focused and 0.334 s fuzzy, below 0.75 s / 4 s. Immutable fixture limits
+  are cached between events. The referee uses configured 60-second
+  delivery and uncertainty bounds and a 2,000-step story bound; these
+  values are fixture choices, not changes to jig's open design defaults.
+- **Copy for temper session 05:** replace connector numbers and routing
+  arms; application record wrappers and load ranges; connector restart
+  adapters; tool schemas, decoders and result translations; configured
+  charters, policy, endpoint names and account limits; connector brief
+  sections; and each application's worst-case route and journal bounds.
+  Keep the journal's admission and ordered release, held/read answer
+  distinction, core-selected restart script, permanent engine hub,
+  inline agent, shared charter codec and readiness/quiescence queries.
+- **Cold-start details to retain:** load the durable deployment header
+  before numbering a commit; finish people's restoration; reconstruct
+  configured connector hold kinds; report each restored resource role
+  with its adopting project during the matching connector restoration,
+  rejecting startup on a refused report; then feed the tasks restoration
+  terminal before admitting its resulting claims into the fleet. Global
+  named pool slots and project-scoped resource roles use their respective
+  core connector events.
+- **Run and connector handoffs to retain:** assignments carry the core's
+  offered inbox as well as charters, transcripts and settled answers.
+  Opaque inbox translations preserve result and proposal-decision kinds;
+  the hub carries message names as the read fence. Ignore transcript
+  answers whose preparation was invalidated. Restored settled host
+  answers remain visible even when the saved transcript lacks their
+  original call. Observability owns watch-interest identities and the
+  durable subscription; the root translates its request. Infrastructure
+  effect callbacks refresh connector state and leave step decisions to
+  the tasks owner. Application roots route and translate throughout.
+- **Vocabulary gaps resolved:** 17.1a supplied read/write answer
+  classification; 17.2a supplied inline readiness and accepted-batch
+  evidence; 17.2b supplied procedure news batching; 17.2c supplied offered
+  inbox consumption. Project resource adoption follows jig 21's completed
+  contract. Connector-owned watch interests follow the existing
+  subscription design. No design question or prerequisite blocks this
+  session; no additional vocabulary proposal is required.
 - **Dependencies and repository boundaries:** this resumed session changed
   no prerequisite repository or pins. Forge URLs remain in the manifests;
   `Cargo.lock` keeps Smith `a54fe558421ed07ce376ac1ebf2ce09345c8d496`, Skein
   `17b221b8423352d5c1d30128837ccbf5cd8025c2`, and the separately retained
   Skein JSON dependency at `e1152507c94c0fb6d4fd9ed190d392ec5d21da9b`.
-  `later.md` work was not started.
+  Only the two requested stories, a few focused cuts and one night sweep
+  were implemented; `later.md` work was not started.
