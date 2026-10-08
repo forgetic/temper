@@ -1,4 +1,4 @@
-//! Proposal authorization and nearest-holder routing (domain/tasks.md, section 8;
+//! Proposal authorization and nearest-holder routing (jig's domain/tasks.md, section 9;
 //! domain/authority.md, section 9). Tasks keeps durable actions and recipients;
 //! root uses current policy, roles and funding. No authority or people policy is
 //! copied into the task child.
@@ -331,6 +331,35 @@ pub(super) fn holder(
         }
     }
     None
+}
+
+/// Revisit pending recipients after project policy or role membership changes.
+/// A queued reroute carries the exact holder and task revision it inspected, so
+/// another decision made before it drains cannot redirect a newer proposal.
+pub(super) fn recheck_project(domain: &mut Domain, project: u32) {
+    for view in domain.tasks.view_tasks() {
+        if view.project != project {
+            continue;
+        }
+        let Some(record) = domain.tasks.task(view.number) else { continue };
+        let Some(proposal) = &record.proposal else { continue };
+        let current = match proposal.state {
+            tasks::ProposalState::Pending { holder, .. } => holder,
+            tasks::ProposalState::Accepted { .. }
+            | tasks::ProposalState::Rejected { .. }
+            | tasks::ProposalState::Withdrawn => continue,
+        };
+        let Some(next) = holder(domain, view.number, &proposal.action, None) else { continue };
+        if current != next {
+            domain.work.push(Work::Tasks(tasks::Event::StalledProposal {
+                proposer: view.number,
+                proposal: proposal.number,
+                from: current,
+                revision: record.revision,
+                holder: next,
+            }));
+        }
+    }
 }
 
 fn materialize(

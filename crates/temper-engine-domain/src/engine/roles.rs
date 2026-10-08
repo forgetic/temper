@@ -4,7 +4,9 @@
 
 //! Owner permission checks also admit current policy and pool changes.
 
-use super::{Decision, Domain, Env, Limits, ReplyTo, Token, Work, authority, escalation, people, save, tasks};
+use super::{
+    Decision, Domain, Env, Limits, ReplyTo, Token, Work, authority, escalation, people, proposals, save, tasks,
+};
 use crate::{Record, Write};
 use alloc::boxed::Box;
 use skein_lib::Queue;
@@ -183,7 +185,7 @@ pub(super) fn begin(
     // mutation can intervene between these stages.
     drop(contexts);
     drop(holdings);
-    if domain.work.room() < handoffs
+    if domain.work.room() < handoffs.checked_add(env.limits.tasks.tasks).expect("validated recheck bound")
         || !decision.room_for(changed.checked_add(2).expect("validated cohort bound"), env.limits.people.waiters)
     {
         refused(domain, request, people::Refusal::Busy);
@@ -224,6 +226,7 @@ pub(super) fn begin(
         return;
     }
     recheck(domain, env, request, project);
+    proposals::recheck_project(domain, project);
     domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::RolesSet { project } }));
 }
 

@@ -5,8 +5,8 @@
 use alloc::boxed::Box;
 
 use super::{
-    Decision, Domain, Env, Limits, PersonTaskRoute, Token, Work, authority, people, policy_translate, roles, save,
-    tasks,
+    Decision, Domain, Env, Limits, PersonTaskRoute, Token, Work, authority, people, policy_translate, proposals, roles,
+    save, tasks,
 };
 use crate::{Record, Write};
 use skein_lib::Queue;
@@ -27,7 +27,9 @@ pub(super) fn change(
     if let Err(why) = roles::allowed(domain, person, project) {
         return refused(domain, request, why);
     }
-    if !decision.room_for(2, env.limits.people.waiters) {
+    if domain.work.room() < env.limits.tasks.tasks.checked_add(1).expect("validated task bound")
+        || !decision.room_for(2, env.limits.people.waiters)
+    {
         return refused(domain, request, people::Refusal::Busy);
     }
     let Some(mut policy) = domain.config.authority.policy(project).cloned() else {
@@ -65,6 +67,7 @@ pub(super) fn change(
     match facts.pop().expect("policy update terminal") {
         authority::PolicyFact::Changed { .. } => {
             assert!(domain.config.permission_roles.insert(project, permissions).is_ok(), "admitted permission policy");
+            proposals::recheck_project(domain, project);
             save(
                 decision,
                 &env.limits,

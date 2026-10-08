@@ -4694,9 +4694,13 @@ fn tasks_outputs(
                     match pending.state {
                         tasks::ProposalState::Pending { holder: current, .. } if current == holder => {
                             if let Some(next) = proposals::holder(domain, proposer, &pending.action, Some(holder)) {
+                                let revision =
+                                    domain.tasks.task(proposer).expect("pending proposer remains live").revision;
                                 domain.work.push(Work::Tasks(tasks::Event::StalledProposal {
                                     proposer,
                                     proposal,
+                                    from: holder,
+                                    revision,
                                     holder: next,
                                 }));
                             }
@@ -4715,9 +4719,13 @@ fn tasks_outputs(
                             if let Some(next) = proposals::holder(domain, proposer, &pending.action, None)
                                 && current != next
                             {
+                                let revision =
+                                    domain.tasks.task(proposer).expect("pending proposer remains live").revision;
                                 domain.work.push(Work::Tasks(tasks::Event::StalledProposal {
                                     proposer,
                                     proposal,
+                                    from: current,
+                                    revision,
                                     holder: next,
                                 }));
                             }
