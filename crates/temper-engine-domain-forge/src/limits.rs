@@ -60,11 +60,17 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
     {
         return None;
     }
-    if l.output < client::max_out(&l.client).checked_add(l.subscriptions)?.checked_add(l.holds)?.checked_add(8)? {
+    if l.output
+        < client::max_out(&l.client)
+            .checked_add(l.subscriptions.checked_mul(3)?)?
+            .checked_add(l.holds)?
+            .checked_add(8)?
+    {
         return None;
     }
     let names =
         u64::from(l.tasks).checked_mul(u64::from(l.resources_per_task))?.checked_mul(u64::from(l.name_bytes))?;
+    let goal_tasks = u64::from(l.subscriptions).checked_mul(u64::from(l.issue_policy.plan_items))?.checked_mul(8)?;
     let subscribers = u64::from(l.subscriptions)
         .checked_mul(u64::from(l.paths_per_subscription))?
         .checked_mul(u64::from(l.name_bytes))?;
@@ -96,6 +102,9 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingLanding>::worst_case(l.landings)?)?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingLost>::worst_case(l.holds)?)?
         .checked_add(Map::<u64, crate::ChangeRow>::worst_case(l.changes)?)?
+        .checked_add(Map::<u64, crate::topics::Files>::worst_case(l.changes)?)?
+        .checked_add(Map::<skein_lib::Token, crate::topics::Pending>::worst_case(l.changes)?)?
+        .checked_add(file_payload(l)?)?
         .checked_add(
             u64::from(l.changes)
                 .checked_mul(u64::from(l.change_policy.gates))?
@@ -108,18 +117,7 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         .checked_add(Map::<u64, crate::IssueRow>::worst_case(l.issues)?)?
         .checked_add(Map::<u64, crate::ReleaseRow>::worst_case(l.tasks)?)?
         .checked_add(u64::from(l.tasks).checked_mul(u64::from(l.name_bytes))?)?
-        .checked_add(
-            u64::from(l.issues).checked_mul(
-                u64::from(l.issue_policy.title_bytes)
-                    .checked_add(u64::from(l.issue_policy.body_bytes))?
-                    .checked_add(
-                        u64::from(l.issue_policy.plan_items).checked_mul(u64::from(l.issue_policy.body_bytes))?,
-                    )?
-                    .checked_add(
-                        u64::from(l.issue_policy.milestones).checked_mul(u64::from(l.issue_policy.comment_bytes))?,
-                    )?,
-            )?,
-        )?
+        .checked_add(issue_payload(l)?)?
         .checked_add(Map::<skein_lib::Token, crate::domain::PendingAdoption>::worst_case(l.adoptions)?)?
         .checked_add(Map::<skein_lib::Token, crate::brief::BriefFetch>::worst_case(l.brief_sections)?)?
         .checked_add(Map::<skein_lib::Token, crate::BriefSource>::worst_case(l.brief_sections)?)?
@@ -134,7 +132,33 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         .checked_add(Queue::<client::Fact>::worst_case(l.facts)?)?
         .checked_add(names)?
         .checked_add(subscribers)?
+        .checked_add(goal_tasks)?
         .checked_add(judges)
 }
 
 use alloc::boxed::Box;
+
+fn file_payload(l: &Limits) -> Option<u64> {
+    u64::from(l.changes)
+        .checked_mul(u64::from(l.paths_per_subscription))?
+        .checked_mul(u64::from(l.name_bytes).checked_add(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?)?
+        .checked_mul(2)
+}
+
+fn issue_payload(l: &Limits) -> Option<u64> {
+    use temper_engine_domain_forge_issues::{Milestone, MilestoneKey, PlanItem};
+    let plan = u64::from(l.issue_policy.plan_items)
+        .checked_mul(u64::from(l.issue_policy.body_bytes).checked_add(u64::try_from(size_of::<PlanItem>()).ok()?)?)?;
+    let milestones = u64::from(l.issue_policy.milestones).checked_mul(
+        u64::from(l.issue_policy.comment_bytes)
+            .checked_add(u64::try_from(size_of::<Milestone>()).ok()?)?
+            .checked_add(u64::try_from(size_of::<MilestoneKey>()).ok()?.checked_mul(2)?)?,
+    )?;
+    u64::from(l.issues).checked_mul(
+        u64::from(l.issue_policy.title_bytes)
+            .checked_add(u64::from(l.issue_policy.body_bytes))?
+            .checked_add(u64::from(l.issue_policy.comment_bytes))?
+            .checked_add(plan)?
+            .checked_add(milestones)?,
+    )
+}

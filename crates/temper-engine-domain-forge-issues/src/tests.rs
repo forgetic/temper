@@ -19,11 +19,12 @@ fn at(seconds: u64) -> Wall {
 
 fn goal() -> GoalView {
     GoalView {
+        phase: crate::Phase::Waiting,
         goal: 7,
         repository: 12,
         title: "Ship the goal".into(),
         goal_text: "A goal with a plan.".into(),
-        plan: Box::new([PlanItem { text: "First step".into(), done: false }]),
+        plan: Box::new([PlanItem { text: "First step".into(), phase: crate::Phase::Waiting }]),
         milestones: Box::new([]),
         finished: None,
     }
@@ -39,7 +40,7 @@ fn opening_is_keyed_and_the_body_is_a_task_list() {
             repository: 12,
             key: Key::Open,
             title: "Ship the goal".into(),
-            body: copy_of(b"A goal with a plan.\n- [ ] First step\n"),
+            body: copy_of(b"A goal with a plan.\nState: waiting\n- [ ] First step (waiting)\n"),
         })
     );
     assert_eq!(project(&goal(), &opened.projected, at(1), &LIMITS).decision, Decision::None);
@@ -50,7 +51,7 @@ fn opening_is_keyed_and_the_body_is_a_task_list() {
 fn a_changed_plan_writes_once_after_its_interval() {
     let old = project(&goal(), &Projected::default(), at(1), &LIMITS).projected;
     let mut changed = goal();
-    changed.plan = Box::new([PlanItem { text: "First step".into(), done: true }]);
+    changed.plan = Box::new([PlanItem { text: "First step".into(), phase: crate::Phase::Done }]);
     assert_eq!(project(&changed, &old, at(30), &LIMITS).decision, Decision::Wait(at(61)));
     let rewritten = project(&changed, &old, at(61), &LIMITS);
     assert_eq!(
@@ -59,11 +60,12 @@ fn a_changed_plan_writes_once_after_its_interval() {
             goal: 7,
             repository: 12,
             key: Key::Body(1),
-            body: copy_of(b"A goal with a plan.\n- [x] First step\n"),
+            title: "Ship the goal".into(),
+            body: copy_of(b"A goal with a plan.\nState: waiting\n- [x] First step (done)\n"),
         })
     );
     assert_eq!(project(&changed, &rewritten.projected, at(61), &LIMITS).decision, Decision::None);
-    changed.plan = Box::new([PlanItem { text: "Second step".into(), done: false }]);
+    changed.plan = Box::new([PlanItem { text: "Second step".into(), phase: crate::Phase::Waiting }]);
     assert_eq!(project(&changed, &rewritten.projected, at(120), &LIMITS).decision, Decision::Wait(at(121)));
     let second = project(&changed, &rewritten.projected, at(121), &LIMITS);
     assert_eq!(
@@ -72,7 +74,8 @@ fn a_changed_plan_writes_once_after_its_interval() {
             goal: 7,
             repository: 12,
             key: Key::Body(2),
-            body: copy_of(b"A goal with a plan.\n- [ ] Second step\n"),
+            title: "Ship the goal".into(),
+            body: copy_of(b"A goal with a plan.\nState: waiting\n- [ ] Second step (waiting)\n"),
         })
     );
 }
@@ -81,7 +84,7 @@ fn a_changed_plan_writes_once_after_its_interval() {
 fn milestones_are_comments_once_even_while_a_body_waits() {
     let old = project(&goal(), &Projected::default(), at(1), &LIMITS).projected;
     let mut changed = goal();
-    changed.plan = Box::new([PlanItem { text: "First step".into(), done: true }]);
+    changed.plan = Box::new([PlanItem { text: "First step".into(), phase: crate::Phase::Done }]);
     changed.milestones = Box::new([
         Milestone { key: MilestoneKey::PlanAccepted, text: "Plan accepted".into() },
         Milestone { key: MilestoneKey::Revision(2), text: "Revised because tests changed".into() },
@@ -133,7 +136,7 @@ fn final_comment_precedes_close_and_close_is_stable() {
 fn changed_final_body_is_written_before_close() {
     let old = project(&goal(), &Projected::default(), at(0), &LIMITS).projected;
     let mut completed = goal();
-    completed.plan = Box::new([PlanItem { text: "First step".into(), done: true }]);
+    completed.plan = Box::new([PlanItem { text: "First step".into(), phase: crate::Phase::Done }]);
     completed.finished = Some("Goal finished".into());
     assert_eq!(project(&completed, &old, at(1), &LIMITS).decision, Decision::Wait(at(60)));
     let rewritten = project(&completed, &old, at(60), &LIMITS);
@@ -143,7 +146,8 @@ fn changed_final_body_is_written_before_close() {
             goal: 7,
             repository: 12,
             key: Key::Body(1),
-            body: copy_of(b"A goal with a plan.\n- [x] First step\n"),
+            title: "Ship the goal".into(),
+            body: copy_of(b"A goal with a plan.\nState: waiting\n- [x] First step (done)\n"),
         })
     );
     let commented = project(&completed, &rewritten.projected, at(60), &LIMITS);
@@ -166,7 +170,7 @@ fn changed_final_body_is_written_before_close() {
 fn oversized_and_contradictory_history_is_held_without_mutation() {
     let old = project(&goal(), &Projected::default(), at(0), &LIMITS).projected;
     let mut oversized = goal();
-    oversized.plan = Box::new([PlanItem { text: "A task that is far too long".into(), done: false }]);
+    oversized.plan = Box::new([PlanItem { text: "A task that is far too long".into(), phase: crate::Phase::Waiting }]);
     let tight = Limits { body_bytes: 4, ..LIMITS };
     let held = project(&oversized, &old, at(60), &tight);
     assert_eq!(held.decision, Decision::Hold);
@@ -189,7 +193,7 @@ fn projection_steps_repeat_from_identical_snapshots() {
             for milestone in [false, true] {
                 let mut view = goal();
                 if changed {
-                    view.plan = Box::new([PlanItem { text: "First step".into(), done: true }]);
+                    view.plan = Box::new([PlanItem { text: "First step".into(), phase: crate::Phase::Done }]);
                 }
                 if finished {
                     view.finished = Some("done".into());

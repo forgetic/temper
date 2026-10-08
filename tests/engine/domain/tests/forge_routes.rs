@@ -591,7 +591,7 @@ fn change_world_with_gate(
     approval: Option<engine::Freshness>,
     agent_gate: bool,
 ) -> (World, engine::Assignment, engine::Assignment, Box<[u8]>) {
-    change_world_with_policy(silent_ci, passes, approval, agent_gate, false, false)
+    change_world_with_policy(silent_ci, passes, approval, agent_gate, false, false, false)
 }
 
 #[expect(clippy::too_many_lines, reason = "the root change fixture builds both producer and review routes")]
@@ -603,6 +603,7 @@ fn change_world_with_policy(
     agent_gate: bool,
     no_ci: bool,
     owner_gate: bool,
+    tracked: bool,
 ) -> (World, engine::Assignment, engine::Assignment, Box<[u8]>) {
     let mut world = World::configured_policy(true, true, silent_ci, passes, approval, agent_gate, owner_gate);
     if no_ci {
@@ -671,11 +672,16 @@ fn change_world_with_policy(
             hosting: Box::new([]),
         },
     });
+    let ask = if tracked {
+        people::Ask::SetGoal { project: 1, spec: Box::from(&b"make the fix"[..]), charter: 1, budget: 100, priority: 3 }
+    } else {
+        people::Ask::StartChat { project: 1, words: Box::from(&b"make the fix"[..]) }
+    };
     world.send(engine::Event::Ask {
         reply_to: ReplyTo::new(Token::new(92)),
         sign_in: world.signed_in.expect("owner session"),
         key: [92; 16],
-        ask: people::Ask::StartChat { project: 1, words: Box::from(&b"make the fix"[..]) },
+        ask,
     });
     world.until(Until::Assigned);
     let chat = world.assigned[0].clone();
@@ -715,6 +721,7 @@ fn change_world_with_policy(
                                 resource: u64::from(forge_world::REPO.repository),
                             },
                             tasks::Parameter::Bytes { name: 2, value: Box::from(&b"main"[..]) },
+                            tasks::Parameter::Bytes { name: 6, value: Box::from(&b"file"[..]) },
                         ]),
                         inputs: Box::new([]),
                     },
@@ -1030,7 +1037,7 @@ fn an_owner_adds_a_branch_requirement_and_later_changes_wait_for_it() {
 
 fn check_gate_landing(no_ci: bool, owner_gate: bool) {
     let (mut world, _chat, producer, branch) =
-        change_world_with_policy(no_ci, 1000, None, !owner_gate, no_ci, owner_gate);
+        change_world_with_policy(no_ci, 1000, None, !owner_gate, no_ci, owner_gate, false);
     assert!(matches!(
         world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
         raw::Answer::Branch(raw::Created::Created)
@@ -1119,7 +1126,7 @@ fn a_failing_check_is_repaired_and_checked_again() {
 
 #[expect(clippy::too_many_lines, reason = "the check repair story spans both gate heads and their worker reports")]
 fn check_gate_repair(no_ci: bool) {
-    let (mut world, _chat, producer, branch) = change_world_with_policy(no_ci, 1000, None, true, no_ci, false);
+    let (mut world, _chat, producer, branch) = change_world_with_policy(no_ci, 1000, None, true, no_ci, false, false);
     assert!(matches!(
         world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 })),
         raw::Answer::Branch(raw::Created::Created)
@@ -2341,7 +2348,7 @@ fn a_saved_repository_tag_becomes_a_concrete_checkout_in_the_next_attempt() {
 }
 
 #[test]
-fn a_tracked_goal_opens_its_issue_through_the_checked_outbox() {
+fn a_tracked_goal_opens_its_owned_issue_without_reading_participant_comments() {
     let mut world = World::configured(true, false);
     world.adopt();
     world.send(engine::Event::Ask {
@@ -2372,10 +2379,10 @@ fn a_tracked_goal_opens_its_issue_through_the_checked_outbox() {
         })
         .expect("tracked goal's issue was opened and acknowledged");
     let number = issue.number.expect("provider issued an issue number");
-    assert!(world.store.rows.values().any(|stored| matches!(stored,
+    assert!(!world.store.rows.values().any(|stored| matches!(stored,
         Record::Forge { row, .. } if matches!(row.as_ref(), forge_top::Stored::Subscription(sub)
             if sub.task == issue.goal && sub.topic == forge_top::Topic::Participation { repository: forge_world::REPO, number })
-    )), "goal subscribed to its actual issue");
+    )), "owned projection has no participant subscription");
     fake::step(
         &mut world.fake,
         &world.fake_env,
@@ -2405,12 +2412,9 @@ fn a_tracked_goal_opens_its_issue_through_the_checked_outbox() {
     }
     assert!(
         matches!(world.store.rows.get(&Key::Tasks(tasks::Key::Live(issue.goal))),
-        Some(Record::Tasks(tasks::Stored::Live(row))) if row.inbox.iter().any(|word|
+        Some(Record::Tasks(tasks::Stored::Live(row))) if !row.inbox.iter().any(|word|
             matches!(word.kind, tasks::MessageKind::News { class: tasks::NewsClass::Wakes, .. }))),
-        "goal row after issue hint: {:?}; forge rows: {:?}; pending: {:?}",
-        world.store.rows.get(&Key::Tasks(tasks::Key::Live(issue.goal))),
-        world.store.rows.values().filter(|row| matches!(row, Record::Forge { .. })).collect::<Vec<_>>(),
-        world.pending
+        "comments on the owned projection do not wake its goal"
     );
 }
 
@@ -3070,4 +3074,79 @@ fn effect_survives_each_commit_and_outbox_cut_without_a_second_issue() {
             "cut {cut} committed the settled named answer"
         );
     }
+}
+
+#[test]
+fn a_tracked_goals_changes_install_landing_and_current_head_ci_topics_without_agent_calls() {
+    let (mut world, goal, producer, branch) = change_world_with_policy(true, 1000, None, false, false, false, true);
+    let subscriptions = |world: &World| -> Vec<forge_top::Subscriber> {
+        world
+            .store
+            .rows
+            .values()
+            .filter_map(|stored| match stored {
+                Record::Forge { row, .. } => match row.as_ref() {
+                    forge_top::Stored::Subscription(subscriber) if subscriber.task == goal.task => {
+                        Some(subscriber.clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    };
+    assert!(
+        subscriptions(&world).iter().any(|subscriber| matches!(&subscriber.topic,
+        forge_top::Topic::Landings { branch, .. } if branch.as_ref() == b"main")
+            && subscriber.goal_tasks.as_ref().is_some_and(|tasks| !tasks.is_empty())),
+        "goal subscribed as its plan names the landing branch"
+    );
+    world.external(2, raw::Op::Git(raw::Git::Create { branch: branch.clone(), commit: 1 }));
+    let pushed = fake::advance(&mut world.fake, &world.fake_env, b"org/repo", &branch, b"file", b"fixed", 1)
+        .expect("producer pushed");
+    world.send(engine::Event::Answer {
+        channel: Token::new(7),
+        task: producer.task,
+        attempt: producer.attempt,
+        cumulative: 5,
+        end: tasks::End::Finished {
+            result: tasks::TaskResult::Change {
+                connector: 0,
+                kind: 2,
+                resource: u64::from(forge_world::REPO.repository),
+                words: Box::from(&b"pushed"[..]),
+            },
+            cancel_delegates: false,
+        },
+        saved: None,
+    });
+    for _ in 0..180 {
+        world.tick();
+        if subscriptions(&world).iter().any(|subscriber| {
+            subscriber.topic == forge_top::Topic::Ci { repository: forge_world::REPO, head: translate::commit(pushed) }
+        }) {
+            break;
+        }
+    }
+    let current = subscriptions(&world);
+    let ci = current
+        .iter()
+        .find(|subscriber| {
+            subscriber.topic == forge_top::Topic::Ci { repository: forge_world::REPO, head: translate::commit(pushed) }
+        })
+        .expect("goal's own CI topic");
+    assert!(matches!(world.store.rows.get(&Key::Tasks(tasks::Key::Live(goal.task))),
+        Some(Record::Tasks(tasks::Stored::Live(task))) if task.subscriptions.iter().any(|sub| sub.number == ci.number)));
+    world.restart(true, true);
+    for _ in 0..100 {
+        world.tick();
+    }
+    assert_eq!(
+        subscriptions(&world)
+            .iter()
+            .filter(|subscriber| matches!(subscriber.topic, forge_top::Topic::Landings { .. }))
+            .count(),
+        1,
+        "one durable interest for the whole subtree"
+    );
 }

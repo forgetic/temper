@@ -246,6 +246,8 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
         | Request::ProjectionSettled { .. }
+        | Request::GoalTopic { .. }
+        | Request::GoalUntopic { .. }
         | Request::ChangeDecision { .. }
         | Request::Read { .. }
         | Request::BriefClient { .. }
@@ -286,6 +288,8 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
         | Request::ProjectionSettled { .. }
+        | Request::GoalTopic { .. }
+        | Request::GoalUntopic { .. }
         | Request::ChangeDecision { .. }
         | Request::Read { .. }
         | Request::BriefClient { .. }
@@ -326,6 +330,8 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
         | Request::ProjectionSettled { .. }
+        | Request::GoalTopic { .. }
+        | Request::GoalUntopic { .. }
         | Request::ChangeDecision { .. }
         | Request::Read { .. }
         | Request::BriefClient { .. }
@@ -372,6 +378,7 @@ fn restored_ci_subscriptions_are_read_in_the_fresh_step_and_delay_its_completion
                 number: 1,
                 topic: Topic::Ci { repository: REPO, head: [4; 32] },
                 own_change: None,
+                goal_tasks: None,
                 paths: Box::new([]),
             }),
         },

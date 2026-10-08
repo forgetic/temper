@@ -6,11 +6,30 @@
 use alloc::boxed::Box;
 use skein_lib::{Duration, Wall};
 
+/// Progress displayed for one goal or plan task.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Phase {
+    /// Waiting for dependencies or a run.
+    Waiting,
+    /// Work is active.
+    Active,
+    /// Its result is settling.
+    Settling,
+    /// A decision is needed before work continues.
+    Held,
+    /// Work succeeded.
+    Done,
+    /// Work failed.
+    Failed,
+    /// Work was cancelled.
+    Cancelled,
+}
+
 /// One task-list line from the current plan.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PlanItem {
     pub text: Box<str>,
-    pub done: bool,
+    pub phase: Phase,
 }
 
 /// Stable identity of a milestone in the goal's history.
@@ -44,6 +63,7 @@ pub struct Milestone {
 /// Current goal facts from the root.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct GoalView {
+    pub phase: Phase,
     pub goal: u64,
     pub repository: u64,
     pub title: Box<str>,
@@ -72,7 +92,7 @@ pub enum Effect {
     /// Create a goal issue in its home repository.
     Open { goal: u64, repository: u64, key: Key, title: Box<str>, body: Box<[u8]> },
     /// Replace the issue's body.
-    Body { goal: u64, repository: u64, key: Key, body: Box<[u8]> },
+    Body { goal: u64, repository: u64, key: Key, title: Box<str>, body: Box<[u8]> },
     /// Add one milestone comment.
     Comment { goal: u64, repository: u64, key: Key, body: Box<str> },
     /// Close the goal issue.

@@ -216,6 +216,8 @@ pub struct Subscriber {
     pub number: u64,
     pub topic: Topic,
     pub own_change: Option<u64>,
+    /// Whole goal subtree for automatic topics; absent for an agent subscription.
+    pub goal_tasks: Option<Box<[u64]>>,
     pub paths: Box<[Box<[u8]>]>,
 }
 /// Last observed branch tip, used to publish each landing once.
@@ -475,6 +477,10 @@ pub enum Event {
 /// The connector's output to the root, including child API calls.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
+    /// Add a goal's topic through the core's durable task subscriptions.
+    GoalTopic { goal: u64, topic: Topic },
+    /// Remove a goal's CI topic after no change names that head.
+    GoalUntopic { goal: u64, topic: Topic },
     /// Feed the next bounded read of a forge section to this connector's client.
     BriefClient { event: client::Event },
     /// One connector-owned section is ready for the root to route to the brief.

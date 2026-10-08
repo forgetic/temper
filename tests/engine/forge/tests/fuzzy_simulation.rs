@@ -11,6 +11,7 @@ fn seeded_restarts_recover_one_keyed_issue_without_repeating_the_write() {
             entry: 1,
             repository: REPO,
             view: issues::GoalView {
+                phase: issues::Phase::Waiting,
                 goal: 42,
                 repository: u64::from(REPO.repository),
                 title: Box::from("Goal"),

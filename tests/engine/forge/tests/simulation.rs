@@ -716,6 +716,8 @@ fn a_change_produced_opened_checked_queued_and_landed() {
                 | top::Request::ProjectionEffect { .. }
                 | top::Request::ProjectAfter { .. }
                 | top::Request::ProjectionSettled { .. }
+                | top::Request::GoalTopic { .. }
+                | top::Request::GoalUntopic { .. }
                 | top::Request::ProjectionFailed { .. }
                 | top::Request::News { .. }
                 | top::Request::Drift { .. }
@@ -741,6 +743,7 @@ fn a_goal_issue_is_created_only_after_its_outbox_commit() {
     let mut world = World::new(7);
     world.adopt();
     let view = issues::GoalView {
+        phase: issues::Phase::Waiting,
         goal: 42,
         repository: u64::from(REPO.repository),
         title: Box::from("Goal"),
@@ -777,6 +780,7 @@ fn a_goals_issue_is_revised_and_closed_as_the_goal_finishes() {
     let mut world = World::new(71);
     world.adopt();
     let mut view = issues::GoalView {
+        phase: issues::Phase::Waiting,
         goal: 42,
         repository: u64::from(REPO.repository),
         title: Box::from("Goal"),
@@ -820,6 +824,7 @@ fn a_created_issue_with_its_answer_lost_is_found_after_restart() {
     world.adopt();
     world.slow_calls(skein_lib::Duration::from_secs(1));
     let view = issues::GoalView {
+        phase: issues::Phase::Waiting,
         goal: 77,
         repository: u64::from(REPO.repository),
         title: Box::from("Goal"),
@@ -1155,7 +1160,14 @@ fn a_ci_subscription_reads_its_head_and_restarts_without_repeating_old_news() {
     let head = temper_engine_forge_world::translate::commit(world.branch(b"temper/51"));
     let topic = top::Topic::Ci { repository: REPO, head };
     world.event(top::Event::Subscribe {
-        subscription: top::Subscriber { task: 51, number: 1, topic, own_change: None, paths: Box::new([]) },
+        subscription: top::Subscriber {
+            task: 51,
+            number: 1,
+            topic,
+            own_change: None,
+            goal_tasks: None,
+            paths: Box::new([]),
+        },
     });
     world.run_for(2);
     assert!(world.seen().iter().any(|request| matches!(request, top::Request::News { task: 51, news: top::News::Ci { head: seen, .. }, .. } if *seen == head)));
@@ -1341,6 +1353,7 @@ fn a_landing_wakes_overlapping_work_and_keeps_unrelated_news() {
             number: 1,
             topic: topic.clone(),
             own_change: None,
+            goal_tasks: None,
             paths: Box::new([Box::from(&b"file"[..])]),
         },
     });
@@ -1350,6 +1363,7 @@ fn a_landing_wakes_overlapping_work_and_keeps_unrelated_news() {
             number: 2,
             topic,
             own_change: None,
+            goal_tasks: None,
             paths: Box::new([Box::from(&b"elsewhere"[..])]),
         },
     });
@@ -1371,5 +1385,159 @@ fn a_landing_wakes_overlapping_work_and_keeps_unrelated_news() {
     assert!(world.seen().iter().any(|request| matches!(
         request,
         top::Request::News { task: 2, news: top::News::Landing { .. }, class: top::Class::Kept, .. }
+    )));
+}
+
+#[test]
+fn new_projection_feeds_retain_unwritten_milestones_across_a_pending_write_and_restart() {
+    let mut world = World::new(81);
+    world.adopt();
+    let view = issues::GoalView {
+        phase: issues::Phase::Waiting,
+        goal: 42,
+        repository: u64::from(REPO.repository),
+        title: Box::from("Goal"),
+        goal_text: Box::from("Plan"),
+        plan: Box::new([]),
+        milestones: Box::new([issues::Milestone {
+            key: issues::MilestoneKey::Lifecycle { task: 43, position: 1 },
+            text: Box::from("First child ended"),
+        }]),
+        finished: None,
+    };
+    world.event(top::Event::Project { entry: 1, repository: REPO, view: view.clone() });
+    let next = issues::GoalView {
+        milestones: Box::new([issues::Milestone {
+            key: issues::MilestoneKey::TaskRevision { task: 44, revision: 1 },
+            text: Box::from("Second child amended"),
+        }]),
+        ..view
+    };
+    world.event(top::Event::Project { entry: 2, repository: REPO, view: next });
+    world.restart();
+    world.run_for(3);
+    for entry in 3..8 {
+        world.event(top::Event::ProjectDesired { entry, goal: 42 });
+        if world.stored().get(&top::Key::Entry(entry)).is_some() {
+            world.event(top::Event::Committed { entry });
+            world.run_for(3);
+        }
+    }
+    let Some(top::Stored::Issue(row)) = world.stored().get(&top::Key::Issue(42)) else { panic!("projection kept") };
+    assert_eq!(row.state.milestones.len(), 2);
+    assert_eq!(world.writes(), 3, "one issue and each immutable milestone once");
+    let empty = issues::GoalView {
+        phase: issues::Phase::Waiting,
+        goal: 42,
+        repository: u64::from(REPO.repository),
+        title: Box::from("Goal"),
+        goal_text: Box::from("Plan"),
+        plan: Box::new([]),
+        milestones: Box::new([]),
+        finished: None,
+    };
+    world.event(top::Event::Project { entry: 9, repository: REPO, view: empty });
+    assert_eq!(world.writes(), 3);
+    assert!(!world.seen().iter().any(|event| matches!(event, top::Request::ProjectionFailed { .. })));
+}
+
+#[test]
+fn goals_classify_landings_from_their_subtree_heads_and_planned_paths_after_restart() {
+    let mut world = World::new(82);
+    world.adopt();
+    world.produce_file(b"temper/51", b"file", b"own change");
+    let pull = world.open_pull(b"temper/51", b"main");
+    let head = translate::commit(world.branch(b"temper/51"));
+    let mut row = change_row();
+    row.pull = Some(pull);
+    row.change.last_head = Some(head);
+    world.event(top::Event::Change { row });
+    let topic = top::Topic::Landings { repository: REPO, branch: Box::from(&b"main"[..]) };
+    let name = top::Name {
+        forge: REPO.forge,
+        repository: REPO.repository,
+        what: top::What::Branch(Box::new([Box::from(&b"main"[..])])),
+    };
+    world.event(top::Event::Names { task: 42, resources: Box::new([name]) });
+    for (task, own, paths) in [(42, 51, Vec::new()), (43, 53, vec![Box::from(&b"elsewhere"[..])]), (44, 54, Vec::new())]
+    {
+        world.event(top::Event::Subscribe {
+            subscription: top::Subscriber {
+                task,
+                number: task,
+                topic: topic.clone(),
+                own_change: None,
+                goal_tasks: Some(Box::new([own])),
+                paths: paths.into_boxed_slice(),
+            },
+        });
+    }
+    world.run_for(3);
+    assert!(world.seen().iter().any(|request| matches!(request, top::Request::GoalTopic { goal: 42,
+        topic: top::Topic::Ci { head: subscribed, .. } } if *subscribed == head)));
+    world.restart();
+    world.run_for(3);
+    world.take_seen();
+    world.push(b"main", b"landing");
+    let hint =
+        client::api::Hint { repository: REPO, change: client::api::Change::Branch(Box::from(&b"main"[..])), key: None };
+    world.event(top::Event::Hint { hint: hint.clone() });
+    world.run_for(5);
+    for (task, expected) in [(42, top::Class::Wakes), (43, top::Class::Kept), (44, top::Class::Wakes)] {
+        let news: Vec<_> = world
+            .seen()
+            .iter()
+            .filter_map(|request| match request {
+                top::Request::News { task: goal, class, news: top::News::Landing { .. }, .. } if *goal == task => {
+                    Some(*class)
+                }
+                top::Request::GoalTopic { .. }
+                | top::Request::GoalUntopic { .. }
+                | top::Request::BriefClient { .. }
+                | top::Request::BriefReady { .. }
+                | top::Request::BriefSized { .. }
+                | top::Request::BriefTaken { .. }
+                | top::Request::Adopted { .. }
+                | top::Request::Save { .. }
+                | top::Request::Erase { .. }
+                | top::Request::Taken { .. }
+                | top::Request::Refused { .. }
+                | top::Request::Outcome { .. }
+                | top::Request::ContinueRelease { .. }
+                | top::Request::EffectsSettled { .. }
+                | top::Request::Released { .. }
+                | top::Request::Retained { .. }
+                | top::Request::ReleaseFailed { .. }
+                | top::Request::ProjectionEffect { .. }
+                | top::Request::ProjectAfter { .. }
+                | top::Request::ProjectionSettled { .. }
+                | top::Request::ProjectionFailed { .. }
+                | top::Request::ChangeDecision { .. }
+                | top::Request::News { .. }
+                | top::Request::Drift { .. }
+                | top::Request::Call { .. }
+                | top::Request::Read { .. }
+                | top::Request::RestartDone { .. } => None,
+            })
+            .collect();
+        assert_eq!(news, [expected], "each goal receives one classified landing");
+    }
+    world.take_seen();
+    world.event(top::Event::Hint { hint: hint.clone() });
+    world.run_for(3);
+    assert!(
+        !world
+            .seen()
+            .iter()
+            .any(|request| matches!(request, top::Request::News { news: top::News::Landing { .. }, .. }))
+    );
+    world.push(b"main", b"own landing");
+    let landed = translate::commit(world.branch(b"main"));
+    world.event(top::Event::Restore { record: top::Stored::Landed { commit: landed, task: 51 } });
+    world.event(top::Event::Hint { hint });
+    world.run_for(5);
+    assert!(world.seen().iter().any(|request| matches!(
+        request,
+        top::Request::News { task: 42, class: top::Class::Kept, news: top::News::Landing { .. }, .. }
     )));
 }

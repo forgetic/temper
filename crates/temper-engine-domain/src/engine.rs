@@ -2414,9 +2414,7 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                 None
                             }
                             jig_core::Ask::ProjectGoal { feed } => {
-                                if connector == domain.config.forge_connector
-                                    && domain.forge.home(feed.goal.project).is_some()
-                                {
+                                if connector == domain.config.forge_connector {
                                     domain.work.push(Work::ProjectGoal(feed));
                                 } else if feed.closing {
                                     domain.work.push(Work::Core(jig_core::Event::ProjectionSettled {

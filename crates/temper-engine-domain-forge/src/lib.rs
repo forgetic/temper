@@ -21,6 +21,7 @@ mod judge;
 mod limits;
 #[cfg(test)]
 mod tests;
+mod topics;
 pub use boundary::*;
 pub use domain::{Domain, fire, max_out, resume, step};
 pub use judge::{Criterion, Freshness as JudgeFreshness, Judges, Reviewer, Verdict as JudgeVerdict};
@@ -283,7 +284,11 @@ pub fn stored_bytes(record: &Stored) -> Option<u64> {
             Some(held)
         }
         Stored::Subscription(row) => {
-            let mut held = topic(&row.topic)?.checked_add(
+            let tasks = match &row.goal_tasks {
+                Some(tasks) => u64::try_from(tasks.len()).ok()?.checked_mul(8)?,
+                None => 0,
+            };
+            let mut held = topic(&row.topic)?.checked_add(tasks)?.checked_add(
                 u64::try_from(row.paths.len()).ok()?.checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?,
             )?;
             for path in &row.paths {
@@ -336,9 +341,30 @@ pub fn stored_bytes(record: &Stored) -> Option<u64> {
                 Some(before) => before.milestones.len(),
                 None => 0,
             };
-            u64::try_from(row.state.milestones.len().checked_add(before)?)
+            let mut held = u64::try_from(row.state.milestones.len().checked_add(before)?)
                 .ok()?
-                .checked_mul(u64::try_from(size_of::<temper_engine_domain_forge_issues::MilestoneKey>()).ok()?)
+                .checked_mul(u64::try_from(size_of::<temper_engine_domain_forge_issues::MilestoneKey>()).ok()?)?;
+            if let Some(view) = &row.desired {
+                held =
+                    held.checked_add(bytes(view.title.as_bytes())?)?
+                        .checked_add(bytes(view.goal_text.as_bytes())?)?
+                        .checked_add(u64::try_from(view.plan.len()).ok()?.checked_mul(
+                            u64::try_from(size_of::<temper_engine_domain_forge_issues::PlanItem>()).ok()?,
+                        )?)?
+                        .checked_add(u64::try_from(view.milestones.len()).ok()?.checked_mul(
+                            u64::try_from(size_of::<temper_engine_domain_forge_issues::Milestone>()).ok()?,
+                        )?)?;
+                for item in &view.plan {
+                    held = held.checked_add(bytes(item.text.as_bytes())?)?;
+                }
+                for milestone in &view.milestones {
+                    held = held.checked_add(bytes(milestone.text.as_bytes())?)?;
+                }
+                if let Some(finished) = &view.finished {
+                    held = held.checked_add(bytes(finished.as_bytes())?)?;
+                }
+            }
+            Some(held)
         }
         Stored::Release(row) => match &row.pending {
             Some((_, Some(resource))) => name(resource),

@@ -601,7 +601,7 @@ pub(super) fn subscribe_call(
         );
         return;
     };
-    let subscriber = forge::Subscriber { task: key.task, number, topic, own_change, paths };
+    let subscriber = forge::Subscriber { task: key.task, number, topic, own_change, goal_tasks: None, paths };
     if !domain.forge.can_subscribe(&env.limits.forge, &subscriber)
         || watch_names(domain, &env.limits, &subscriber).is_none()
     {
@@ -837,8 +837,17 @@ pub(super) struct RunWorkspace {
     reason = "projection converts already validated task text and selects current milestone kinds"
 )]
 pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, feed: &jig_core::ProjectionFeed) {
+    goal_topics(domain, env, feed);
     let goal = &feed.goal;
-    let Some(repository) = domain.forge.home(goal.project) else { return };
+    let Some(repository) = domain.forge.home(goal.project) else {
+        if feed.closing {
+            domain.work.push(Work::Core(jig_core::Event::ProjectionSettled {
+                goal: goal.number,
+                connector: domain.config.forge_connector,
+            }));
+        }
+        return;
+    };
     let provider = repository.provider;
     let Some(text) = core::str::from_utf8(&goal.words).ok() else {
         domain.work.push(Work::Tasks(tasks::Event::Hold { task: goal.number, why: tasks::Hold::Effects }));
@@ -851,18 +860,7 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, feed: &jig_co
             continue;
         }
         let Some(words) = core::str::from_utf8(&child.words).ok() else { continue };
-        if plan
-            .push(forge_issues::PlanItem {
-                text: Box::from(words),
-                done: match child.phase {
-                    tasks::Phase::Ended(_) => true,
-                    tasks::Phase::Waiting
-                    | tasks::Phase::Active(_)
-                    | tasks::Phase::Closing(_)
-                    | tasks::Phase::Held { .. } => false,
-                },
-            })
-            .is_err()
+        if plan.push(forge_issues::PlanItem { text: Box::from(words), phase: projection_phase(&child.phase) }).is_err()
         {
             domain.work.push(Work::Tasks(tasks::Event::Hold { task: goal.number, why: tasks::Hold::Effects }));
             return;
@@ -897,6 +895,7 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, feed: &jig_co
         entry,
         repository: provider,
         view: forge_issues::GoalView {
+            phase: goal_phase(&goal.phase),
             goal: goal.number,
             repository: u64::from(provider.repository),
             title: Box::from(title),
@@ -913,26 +912,221 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, feed: &jig_co
     }));
 }
 
+fn projection_phase(phase: &tasks::Phase) -> forge_issues::Phase {
+    match phase {
+        tasks::Phase::Waiting => forge_issues::Phase::Waiting,
+        tasks::Phase::Active(_) => forge_issues::Phase::Active,
+        tasks::Phase::Held { .. } => forge_issues::Phase::Held,
+        tasks::Phase::Closing(_) => forge_issues::Phase::Settling,
+        tasks::Phase::Ended(ending) => ending_phase(ending),
+    }
+}
+fn ending_phase(ending: &tasks::Ending) -> forge_issues::Phase {
+    match ending {
+        tasks::Ending::Done(_) => forge_issues::Phase::Done,
+        tasks::Ending::Failed { .. } => forge_issues::Phase::Failed,
+        tasks::Ending::Cancelled { .. } => forge_issues::Phase::Cancelled,
+    }
+}
+fn goal_phase(phase: &tasks::Phase) -> forge_issues::Phase {
+    match phase {
+        tasks::Phase::Closing(closing) | tasks::Phase::Held { was: tasks::Was::Closing(closing), .. } => {
+            ending_phase(&closing.ending)
+        }
+        tasks::Phase::Waiting | tasks::Phase::Active(_) | tasks::Phase::Held { .. } | tasks::Phase::Ended(_) => {
+            projection_phase(phase)
+        }
+    }
+}
+
+// Translate the plan's forge procedure parameters before those tasks activate.
+fn goal_topics(domain: &mut Domain, env: &Env<Limits>, feed: &jig_core::ProjectionFeed) {
+    if feed.closing {
+        return;
+    }
+    for child in &feed.plan {
+        let Some(task) = domain.core.tasks.task(child.number) else { continue };
+        let relevant = match task.executor {
+            tasks::Executor::Procedure { connector, code: 2 } => connector == domain.config.forge_connector,
+            tasks::Executor::Procedure { .. } | tasks::Executor::Agent { .. } | tasks::Executor::Person(_) => false,
+        };
+        if !relevant {
+            continue;
+        }
+        let Some(topic) = change_topic(domain, task) else { continue };
+        subscribe_goal(domain, env, feed.goal.number, topic);
+    }
+}
+
+fn change_topic(domain: &Domain, task: &tasks::TaskRecord) -> Option<forge::Topic> {
+    let mut provider = None;
+    let mut branch = None;
+    for parameter in &task.spec.parameters {
+        match parameter {
+            tasks::Parameter::Resource { name: 1, connector, resource }
+                if *connector == domain.config.forge_connector =>
+            {
+                if let Ok(tag) = u32::try_from(*resource) {
+                    let repository = domain.forge.repository_tag(task.project, tag)?;
+                    provider = Some(repository.provider);
+                }
+            }
+            tasks::Parameter::Bytes { name: 2, value } => branch = Some(value.clone()),
+            tasks::Parameter::Resource { .. } | tasks::Parameter::Bytes { .. } | tasks::Parameter::Number { .. } => {}
+        }
+    }
+    let repository = provider?;
+    let adopted = domain.forge.repository(repository)?;
+    Some(forge::Topic::Landings { repository, branch: branch.unwrap_or(adopted.settings.default_branch.clone()) })
+}
+
 pub(super) fn subscribe_goal(domain: &mut Domain, env: &Env<Limits>, goal: u64, topic: forge::Topic) {
     if domain.core.tasks.task(goal).is_none() {
         return;
     }
-    let Some(number) = crate::fresh(&mut domain.core.counters, Family::Message) else { return };
-    let subscriber = forge::Subscriber { task: goal, number, topic, own_change: None, paths: Box::new([]) };
+    let mut previous = domain.forge.topic_subscriber(goal, &topic).cloned();
+    for work in &domain.work {
+        match work {
+            Work::GoalSubscribe(subscriber) if subscriber.task == goal && subscriber.topic == topic => {
+                previous = Some(subscriber.clone());
+            }
+            Work::GoalSubscribe(_)
+            | Work::AdoptRestored
+            | Work::AdoptDone
+            | Work::Restart(_)
+            | Work::TypedDecoded { .. }
+            | Work::Core(_)
+            | Work::Tasks(_)
+            | Work::People(_)
+            | Work::Fleet(_)
+            | Work::Brief(_)
+            | Work::StartBrief { .. }
+            | Work::Forge(_)
+            | Work::ProjectGoal(_)
+            | Work::Activate(_)
+            | Work::EscalationLoaded { .. }
+            | Work::EscalationFailed { .. }
+            | Work::ProposalLoaded { .. }
+            | Work::ProposalFailed { .. } => {}
+        }
+    }
+    let Some(members) = goal_members(domain, env, goal, &topic, previous.as_ref()) else { return };
+    let number = match &previous {
+        Some(previous) => previous.number,
+        None => match crate::fresh(&mut domain.core.counters, Family::Message) {
+            Some(number) => number,
+            None => return,
+        },
+    };
+    let subscriber = forge::Subscriber {
+        task: goal,
+        number,
+        topic,
+        own_change: None,
+        goal_tasks: Some(members.tasks),
+        paths: members.paths,
+    };
+    if previous.as_ref() == Some(&subscriber) {
+        return;
+    }
     if !domain.forge.can_subscribe(&env.limits.forge, &subscriber)
         || watch_names(domain, &env.limits, &subscriber).is_none()
     {
         return;
     }
-    domain.work.push(Work::Tasks(tasks::Event::SubscribeTopic {
-        reply_to: super::internal(u64::MAX),
-        task: goal,
-        subscription: tasks::Subscription {
-            number,
-            kind: tasks::SubscriptionKind::Topic { connector: domain.config.forge_connector, topic: number },
-        },
-    }));
+    if previous.is_none() {
+        domain.work.push(Work::Tasks(tasks::Event::SubscribeTopic {
+            reply_to: super::internal(u64::MAX),
+            task: goal,
+            subscription: tasks::Subscription {
+                number,
+                kind: tasks::SubscriptionKind::Topic { connector: domain.config.forge_connector, topic: number },
+            },
+        }));
+    }
     domain.work.push(Work::GoalSubscribe(subscriber));
+}
+
+struct GoalMembers {
+    tasks: Box<[u64]>,
+    paths: Box<[Box<[u8]>]>,
+}
+
+fn goal_members(
+    domain: &Domain,
+    env: &Env<Limits>,
+    goal: u64,
+    topic: &forge::Topic,
+    previous: Option<&forge::Subscriber>,
+) -> Option<GoalMembers> {
+    let mut goal_tasks = List::with_capacity(env.limits.forge.issue_policy.plan_items);
+    let mut paths = List::with_capacity(env.limits.forge.paths_per_subscription);
+    let mut hints_complete = true;
+    if let Some(previous) = previous
+        && let Some(tasks) = &previous.goal_tasks
+    {
+        for task in tasks {
+            if goal_tasks.push(*task).is_err() {
+                return None;
+            }
+        }
+    }
+    for view in domain.core.tasks.view_tasks() {
+        let Some(task) = domain.core.tasks.task(view.number) else { continue };
+        if task.root != goal || task.number == goal {
+            continue;
+        }
+        match task.executor {
+            tasks::Executor::Procedure { connector, code: 2 } if connector == domain.config.forge_connector => {}
+            tasks::Executor::Procedure { .. } | tasks::Executor::Agent { .. } | tasks::Executor::Person(_) => continue,
+        }
+        let Some(change_topic) = change_topic(domain, task) else { continue };
+        match topic {
+            forge::Topic::Landings { .. } if *topic != change_topic => continue,
+            forge::Topic::Ci { repository, .. } => match change_topic {
+                forge::Topic::Landings { repository: home, .. } if home == *repository => {}
+                forge::Topic::Landings { .. }
+                | forge::Topic::Ci { .. }
+                | forge::Topic::Pull { .. }
+                | forge::Topic::Participation { .. } => continue,
+            },
+            forge::Topic::Landings { .. } | forge::Topic::Pull { .. } | forge::Topic::Participation { .. } => {}
+        }
+        let mut hinted = false;
+        let mut present = false;
+        for kept in &goal_tasks {
+            if *kept == task.number {
+                present = true;
+            }
+        }
+        if !present && goal_tasks.push(task.number).is_err() {
+            return None;
+        }
+        for parameter in &task.spec.parameters {
+            match parameter {
+                tasks::Parameter::Bytes { name: 6, value } => {
+                    hinted = true;
+                    if paths.push(value.clone()).is_err() {
+                        return None;
+                    }
+                }
+                tasks::Parameter::Bytes { .. }
+                | tasks::Parameter::Number { .. }
+                | tasks::Parameter::Resource { .. } => {}
+            }
+        }
+        let produced = match domain.forge.change(task.number) {
+            Some(change) => change.pull.is_some(),
+            None => false,
+        };
+        if !produced && !hinted {
+            hints_complete = false;
+        }
+    }
+    if !hints_complete {
+        paths = List::with_capacity(env.limits.forge.paths_per_subscription);
+    }
+    Some(GoalMembers { tasks: goal_tasks.into_boxed(), paths: paths.into_boxed() })
 }
 
 pub(super) fn goal_subscribed(domain: &mut Domain, env: &Env<Limits>, subscriber: forge::Subscriber) {
@@ -1446,6 +1640,7 @@ pub(super) fn start_change(domain: &mut Domain, env: &Env<Limits>, context: &tas
                 priority = number;
             }
             tasks::Parameter::Number { name: 9, value: 1 } => base_repair = true,
+            tasks::Parameter::Bytes { name: 6, .. } => {}
             tasks::Parameter::Number { .. } | tasks::Parameter::Bytes { .. } | tasks::Parameter::Resource { .. } => {
                 return false;
             }
@@ -1865,6 +2060,17 @@ pub(super) fn outputs(
     for _ in 0..out.len() {
         let request = out.pop().expect("connector output count");
         match request {
+            forge::Request::GoalTopic { goal, topic } => subscribe_goal(domain, env, goal, topic),
+            forge::Request::GoalUntopic { goal, topic } => {
+                if let Some(subscriber) = domain.forge.topic_subscriber(goal, &topic) {
+                    domain.work.push(Work::Tasks(tasks::Event::Unsubscribe {
+                        reply_to: super::internal(u64::MAX),
+                        task: goal,
+                        subscription: subscriber.number,
+                    }));
+                    domain.work.push(Work::Forge(forge::Event::Unsubscribe { task: goal, topic }));
+                }
+            }
             forge::Request::RestartDone { stage } => {
                 let stage = match stage {
                     forge::RestartStage::Restored => jig_core::connector::RestartStage::Restored,
@@ -2289,16 +2495,6 @@ pub(super) fn outputs(
                 }
             }
             forge::Request::ProjectAfter { goal, when } => {
-                if let Some(issue) = domain.forge.issue(goal)
-                    && let Some(number) = issue.number
-                {
-                    subscribe_goal(
-                        domain,
-                        env,
-                        goal,
-                        forge::Topic::Participation { repository: issue.repository, number },
-                    );
-                }
                 if let Some(when) = when {
                     domain.forge_projection_due.insert(goal, when).expect("projection count bounded by issue rows");
                 } else if match domain.forge.issue(goal) {

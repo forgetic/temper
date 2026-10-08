@@ -8,7 +8,7 @@ use alloc::boxed::Box;
 use sha2::{Digest, Sha256};
 use skein_lib::{List, Wall};
 
-use crate::{Decision, Effect, GoalView, Key, Limits, MilestoneKey, Projected, Projection};
+use crate::{Decision, Effect, GoalView, Key, Limits, MilestoneKey, Phase, Projected, Projection};
 
 /// Project one goal from its current committed record and root facts.
 #[must_use]
@@ -22,7 +22,10 @@ pub fn project(goal: &GoalView, last: &Projected, now: Wall, limits: &Limits) ->
         return held(last);
     }
     let Some(body) = body(goal, limits) else { return held(last) };
-    let hash: [u8; 32] = Sha256::digest(&body).into();
+    let mut digest = Sha256::new();
+    digest.update(goal.title.as_bytes());
+    digest.update(&body);
+    let hash: [u8; 32] = digest.finalize().into();
     if last.closed {
         let mut complete = has(&last.milestones, MilestoneKey::Finished);
         for milestone in &goal.milestones {
@@ -67,6 +70,7 @@ pub fn project(goal: &GoalView, last: &Projected, now: Wall, limits: &Limits) ->
                     goal: goal.goal,
                     repository: goal.repository,
                     key: Key::Body(revision),
+                    title: goal.title.clone(),
                     body,
                 }),
             };
@@ -103,6 +107,53 @@ pub fn project(goal: &GoalView, last: &Projected, now: Wall, limits: &Limits) ->
         };
     }
     Projection { projected: last.clone(), decision: Decision::None }
+}
+
+/// Retain immutable milestone history while replacing the goal and its whole plan.
+#[must_use]
+pub fn gather(prior: Option<&GoalView>, mut next: GoalView, limits: &Limits) -> Option<GoalView> {
+    let mut milestones = List::with_capacity(limits.milestones);
+    if let Some(prior) = prior {
+        if prior.goal != next.goal
+            || prior.repository != next.repository
+            || (prior.finished.is_some() && prior.finished != next.finished)
+        {
+            return None;
+        }
+        for item in &prior.milestones {
+            milestones.push(item.clone()).ok()?;
+        }
+    }
+    for item in &next.milestones {
+        let mut found = false;
+        for kept in &milestones {
+            if kept.key == item.key {
+                if kept != item {
+                    return None;
+                }
+                found = true;
+            }
+        }
+        if !found {
+            milestones.push(item.clone()).ok()?;
+        }
+    }
+    next.milestones = milestones.into_boxed();
+    if next.plan.len() > usize::try_from(limits.plan_items).ok()?
+        || next.title.len() > usize::try_from(limits.title_bytes).ok()?
+        || body(&next, limits).is_none()
+    {
+        return None;
+    }
+    for item in &next.milestones {
+        if item.text.len() > usize::try_from(limits.comment_bytes).ok()? {
+            return None;
+        }
+    }
+    if !valid_history(&next, &Projected::default(), limits) {
+        return None;
+    }
+    Some(next)
 }
 
 fn held(last: &Projected) -> Projection {
@@ -156,22 +207,43 @@ fn valid_history(goal: &GoalView, last: &Projected, limits: &Limits) -> bool {
 }
 
 fn body(goal: &GoalView, limits: &Limits) -> Option<Box<[u8]>> {
-    let mut bytes = goal.goal_text.len().checked_add(1)?;
+    let mut bytes = goal.goal_text.len().checked_add(9)?.checked_add(label(goal.phase).len())?;
     for item in &goal.plan {
-        bytes = bytes.checked_add(7)?.checked_add(item.text.len())?;
+        bytes = bytes.checked_add(10)?.checked_add(item.text.len())?.checked_add(label(item.phase).len())?;
     }
     if bytes > usize::try_from(limits.body_bytes).expect("u32 fits usize") {
         return None;
     }
     let mut rendered = List::with_capacity(limits.body_bytes);
     append(&mut rendered, goal.goal_text.as_bytes());
+    append(&mut rendered, b"\nState: ");
+    append(&mut rendered, label(goal.phase));
     rendered.push(b'\n').expect("body size checked");
     for item in &goal.plan {
-        append(&mut rendered, if item.done { b"- [x] " } else { b"- [ ] " });
+        let done = match item.phase {
+            Phase::Done | Phase::Failed | Phase::Cancelled => true,
+            Phase::Waiting | Phase::Active | Phase::Settling | Phase::Held => false,
+        };
+        append(&mut rendered, if done { b"- [x] " } else { b"- [ ] " });
         append(&mut rendered, item.text.as_bytes());
+        append(&mut rendered, b" (");
+        append(&mut rendered, label(item.phase));
+        append(&mut rendered, b")");
         rendered.push(b'\n').expect("body size checked");
     }
     Some(rendered.into_boxed())
+}
+
+fn label(phase: Phase) -> &'static [u8] {
+    match phase {
+        Phase::Waiting => b"waiting",
+        Phase::Active => b"active",
+        Phase::Settling => b"settling",
+        Phase::Held => b"held",
+        Phase::Done => b"done",
+        Phase::Failed => b"failed",
+        Phase::Cancelled => b"cancelled",
+    }
 }
 
 fn append(into: &mut List<u8>, bytes: &[u8]) {

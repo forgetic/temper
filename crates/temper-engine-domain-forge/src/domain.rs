@@ -11,7 +11,7 @@ use crate::{
     Protection, PullState, ReleaseEnding, ReleaseRow, Repository, Request, RestartStage, Role, Stored, Subscriber,
     Topic, What, Writer,
 };
-use crate::{brief, held};
+use crate::{brief, held, topics};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum AdoptionStage {
@@ -96,19 +96,21 @@ pub struct Domain {
     repositories: Map<client::api::Repository, Repository>,
     names: Map<u64, Box<[Name]>>,
     holds: Map<Name, Hold>,
-    subscriptions: Map<(u64, Topic), Subscriber>,
+    pub(crate) subscriptions: Map<(u64, Topic), Subscriber>,
+    pub(crate) goal_files: Map<u64, topics::Files>,
+    pub(crate) goal_file_reads: Map<Token, topics::Pending>,
     heads: Map<Name, BranchHead>,
     pulls: Map<Name, PullState>,
     ci: Map<(client::api::Repository, client::api::Commit), CiState>,
     entries: Map<u64, client::Entry>,
     proposed_effects: Map<u64, crate::ProposedEffect>,
-    landed: Map<client::api::Commit, u64>,
+    pub(crate) landed: Map<client::api::Commit, u64>,
     landings: Map<Token, PendingLanding>,
     lost: Map<Token, PendingLost>,
     pending_ci: Map<Token, PendingCi>,
     restart_fresh: Option<bool>,
-    sequence: u64,
-    changes: Map<u64, ChangeRow>,
+    pub(crate) sequence: u64,
+    pub(crate) changes: Map<u64, ChangeRow>,
     steps: Map<Token, PendingStep>,
     issues: Map<u64, IssueRow>,
     releases: Map<u64, ReleaseRow>,
@@ -164,6 +166,8 @@ impl Domain {
             names: Map::with_capacity(l.tasks),
             holds: Map::with_capacity(l.holds),
             subscriptions: Map::with_capacity(l.subscriptions),
+            goal_files: Map::with_capacity(l.changes),
+            goal_file_reads: Map::with_capacity(l.changes),
             heads: Map::with_capacity(l.client.resources),
             pulls: Map::with_capacity(l.client.resources),
             ci: Map::with_capacity(l.subscriptions),
@@ -294,7 +298,10 @@ impl Domain {
     /// Check one typed task interest before the root adds its matching durable task row.
     #[must_use]
     pub fn can_subscribe(&self, limits: &Limits, subscription: &Subscriber) -> bool {
-        if subscription.number == 0
+        if match &subscription.goal_tasks {
+            Some(tasks) => tasks.len() > usize::try_from(limits.issue_policy.plan_items).expect("u32 fits usize"),
+            None => false,
+        } || subscription.number == 0
             || subscription.paths.len() > usize::try_from(limits.paths_per_subscription).expect("u32 fits usize")
         {
             return false;
@@ -321,6 +328,12 @@ impl Domain {
             }
         };
         self.repositories.contains_key(&repository)
+    }
+
+    /// Current subscriber for an automatic goal topic, preserving its durable number.
+    #[must_use]
+    pub fn topic_subscriber(&self, task: u64, topic: &Topic) -> Option<&Subscriber> {
+        self.subscriptions.get(&(task, topic.clone()))
     }
 
     /// Find the connector half of one durable task subscription.
@@ -616,7 +629,7 @@ fn child_env(env: &Env<Limits>) -> Env<client::Limits> {
     Env { now: env.now, wall: env.wall, limits: env.limits.client }
 }
 
-fn child(d: &mut Domain, env: &Env<Limits>, event: client::Event, out: &mut Queue<Request>) {
+pub(crate) fn child(d: &mut Domain, env: &Env<Limits>, event: client::Event, out: &mut Queue<Request>) {
     client::step(&mut d.client, &child_env(env), event, &mut d.client_out);
     drain(d, env, out);
 }
@@ -694,6 +707,8 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                     adoption_read(d, env, owner, result, out);
                 } else if d.landings.contains_key(&owner) {
                     landing_read(d, owner, result, out);
+                } else if d.goal_file_reads.contains_key(&owner) {
+                    topics::answer(d, env, owner, result, out);
                 } else if d.steps.contains_key(&owner) {
                     step_read(d, env, owner, result, out);
                 } else if d.pending_ci.contains_key(&owner) {
@@ -711,7 +726,7 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     read_afresh_complete(d, out);
 }
 
-fn emit(out: &mut Queue<Request>, request: Request) {
+pub(crate) fn emit(out: &mut Queue<Request>, request: Request) {
     out.push(request);
 }
 
@@ -1761,6 +1776,8 @@ fn finish_step(d: &mut Domain, env: &Env<Limits>, pending: PendingStep, out: &mu
             | change::Decision::Hold(_)) => {
                 d.changes.insert(row.task, row.clone()).expect("replaces change");
                 emit(out, Request::Save { record: Stored::Change(row.clone()) });
+                topics::head_changed(d, row.task, out);
+                topics::refresh(d, env, row.task, out);
                 emit(out, Request::ChangeDecision { task: row.task, decision, entry: None, evidence: None });
                 return;
             }
@@ -2330,17 +2347,9 @@ fn project(
         emit(out, Request::ProjectionFailed { goal });
         return;
     }
-    let prior = match d.issues.get(&goal) {
-        Some(row) if row.repository != repository || row.failed => {
+    let mut prior = match d.issues.get(&goal) {
+        Some(row) if row.repository != repository => {
             emit(out, Request::ProjectionFailed { goal });
-            return;
-        }
-        Some(row) if row.pending.is_some() => {
-            let mut row = row.clone();
-            row.desired = Some(view);
-            d.issues.insert(goal, row.clone()).expect("replaces issue");
-            emit(out, Request::Save { record: Stored::Issue(row) });
-            emit(out, Request::ProjectAfter { goal, when: None });
             return;
         }
         Some(row) => row.clone(),
@@ -2355,21 +2364,30 @@ fn project(
             desired: None,
         },
     };
+    let Some(view) = issues::gather(prior.desired.as_ref(), view, &env.limits.issue_policy) else {
+        emit(out, Request::ProjectionFailed { goal });
+        return;
+    };
+    if prior.desired.as_ref() != Some(&view) {
+        prior.desired = Some(view.clone());
+        d.issues.insert(goal, prior.clone()).expect("projection room checked");
+        emit(out, Request::Save { record: Stored::Issue(prior.clone()) });
+    }
+    if prior.failed {
+        emit(out, Request::ProjectionFailed { goal });
+        return;
+    }
+    if prior.pending.is_some() {
+        emit(out, Request::ProjectAfter { goal, when: None });
+        return;
+    }
     let projected = issues::project(&view, &prior.state, env.wall, &env.limits.issue_policy);
     match projected.decision {
-        issues::Decision::None | issues::Decision::Wait(_) => {
-            if prior.desired.as_ref() != Some(&view) {
-                let mut row = prior;
-                row.desired = Some(view);
-                d.issues.insert(goal, row.clone()).expect("replaces issue");
-                emit(out, Request::Save { record: Stored::Issue(row) });
-            }
-            match projected.decision {
-                issues::Decision::Wait(when) => emit(out, Request::ProjectAfter { goal, when: Some(when) }),
-                issues::Decision::None => settled_projection(d, goal, out),
-                issues::Decision::Hold | issues::Decision::Effect(_) => unreachable!("matched above"),
-            }
-        }
+        issues::Decision::None | issues::Decision::Wait(_) => match projected.decision {
+            issues::Decision::Wait(when) => emit(out, Request::ProjectAfter { goal, when: Some(when) }),
+            issues::Decision::None => settled_projection(d, goal, out),
+            issues::Decision::Hold | issues::Decision::Effect(_) => unreachable!("matched above"),
+        },
         issues::Decision::Hold => emit(out, Request::ProjectionFailed { goal }),
         issues::Decision::Effect(effect) => {
             if d.entries.len() == env.limits.entries || d.entries.contains_key(&number) {
@@ -2414,9 +2432,11 @@ fn project_write(d: &Domain, row: &IssueRow, effect: issues::Effect, l: &Limits)
             let key = projection_key(&d.namespace, goal, key, l)?;
             Some(client::api::Write::CreateIssue { key, title: Box::from(title.as_bytes()), body })
         }
-        issues::Effect::Body { body, .. } => {
-            Some(client::api::Write::Edit { number: row.number?, title: None, body: Some(body) })
-        }
+        issues::Effect::Body { title, body, .. } => Some(client::api::Write::Edit {
+            number: row.number?,
+            title: Some(Box::from(title.as_bytes())),
+            body: Some(body),
+        }),
         issues::Effect::Comment { goal, key, body, .. } => {
             let key = projection_key(&d.namespace, goal, key, l)?;
             Some(client::api::Write::Post { number: row.number?, key, body: Box::from(body.as_bytes()) })
@@ -2549,7 +2569,14 @@ fn subscribe(d: &mut Domain, env: &Env<Limits>, subscription: Subscriber, out: &
     }
     let key = (task, subscription.topic.clone());
     d.subscriptions.insert(key, subscription.clone()).expect("preflighted subscription capacity");
+    topics::subscribe(d, &subscription, out);
+    let tasks = subscription.goal_tasks.clone();
     emit(out, Request::Save { record: Stored::Subscription(subscription) });
+    if let Some(tasks) = tasks {
+        for task in tasks {
+            topics::refresh(d, env, task, out);
+        }
+    }
     if let Some((repository, head)) = ci {
         ci_refresh(d, env, repository, head, out);
     }
@@ -2846,7 +2873,7 @@ fn pull_changed(
     }
 }
 
-fn overlap(files: &[Box<[u8]>], paths: &[Box<[u8]>]) -> bool {
+pub(crate) fn overlap(files: &[Box<[u8]>], paths: &[Box<[u8]>]) -> bool {
     for file in files {
         for path in paths {
             if file.as_ref() == path.as_ref() {
@@ -2860,7 +2887,7 @@ fn overlap(files: &[Box<[u8]>], paths: &[Box<[u8]>]) -> bool {
     false
 }
 
-fn classify(d: &Domain, subscription: &Subscriber, news: &News) -> Class {
+pub(crate) fn classify(d: &Domain, subscription: &Subscriber, news: &News) -> Class {
     match news {
         News::Landing { after, files, .. } => {
             if let Some(owner) = d.landed.get(after)
@@ -2881,7 +2908,7 @@ fn classify(d: &Domain, subscription: &Subscriber, news: &News) -> Class {
 fn publish(d: &Domain, topic: Topic, news: News, out: &mut Queue<Request>) {
     for (_, subscriber) in &d.subscriptions {
         if subscriber.topic == topic {
-            let class = classify(d, subscriber, &news);
+            let class = topics::classify(d, subscriber, &news);
             emit(
                 out,
                 Request::News {
@@ -3009,6 +3036,13 @@ fn read_afresh(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
             Topic::Ci { .. } | Topic::Landings { .. } | Topic::Pull { .. } | Topic::Participation { .. } => {}
         }
     }
+    let mut changes = List::with_capacity(env.limits.changes);
+    for (task, _) in &d.changes {
+        changes.push(*task).expect("change capacity");
+    }
+    for task in &changes {
+        topics::refresh(d, env, *task, out);
+    }
     for (repository, head) in &ci {
         ci_refresh(d, env, *repository, *head, out);
     }
@@ -3016,7 +3050,7 @@ fn read_afresh(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
 }
 
 fn read_afresh_complete(d: &mut Domain, out: &mut Queue<Request>) {
-    if d.restart_fresh == Some(true) && d.pending_ci.is_empty() {
+    if d.restart_fresh == Some(true) && d.pending_ci.is_empty() && d.goal_file_reads.is_empty() {
         d.restart_fresh = None;
         emit(out, Request::RestartDone { stage: RestartStage::ReadAfresh });
     }

@@ -15,5 +15,7 @@ mod domain;
 #[cfg(test)]
 mod tests;
 
-pub use boundary::{Decision, Effect, GoalView, Key, Limits, Milestone, MilestoneKey, PlanItem, Projected, Projection};
-pub use domain::project;
+pub use boundary::{
+    Decision, Effect, GoalView, Key, Limits, Milestone, MilestoneKey, Phase, PlanItem, Projected, Projection,
+};
+pub use domain::{gather, project};
