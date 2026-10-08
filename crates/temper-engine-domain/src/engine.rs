@@ -1076,6 +1076,9 @@ fn environment_core(env: &Env<Limits>) -> Env<jig_core::Limits> {
 
 fn core_limits(limits: &Limits) -> jig_core::Limits {
     jig_core::Limits {
+        connectors: 1,
+        resume_bytes: limits.journal.transcript_bytes,
+        run_bytes: limits.journal.run_bytes,
         policy_bytes: u64::from(limits.journal.transcript_bytes).min(row_bound(limits).expect("validated row bound")),
         escalation_reason_bytes: limits
             .tasks
@@ -1083,6 +1086,7 @@ fn core_limits(limits: &Limits) -> jig_core::Limits {
             .min(limits.journal.result_bytes)
             .min(limits.journal.transcript_bytes),
         tasks: limits.tasks,
+        authority: limits.authority,
         load_slots: limits.loads.loads,
         call_records: limits.call_records,
         people: limits.people,
