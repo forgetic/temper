@@ -370,7 +370,8 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 05.1 agent service | merged locally | smith f5b9f9f | fmt/clippy pass; 1,306 focused / 4.084 s; 15 fuzzy / 4.625 s. |
 | 05.2 configuration and startup | merged locally | smith 04d9357 | fmt/clippy pass; 1,311 focused / 4.909 s; 15 fuzzy / 5.099 s. |
 | 05.3 facts, traces, signals and end | merged locally | smith a5b0de7 | fmt/clippy pass; 1,319 focused / 5.017 s; 15 fuzzy / 5.662 s. |
-| 05.4 simulated agent process world | blocked | smith branch 3d8b795 | The simulated host observes the final Answer, but Skein IO leaves an inherited write pipe open if `Down::Finish` arrives while its write is in flight. The channel cannot emit Ended and the agent cannot exit. The reproducing world is checkpointed on an unmerged branch. |
+| 05.0 inherited-pipe finish skein repin | merged locally | smith c87a8a7 | Pinned Skein b1c9e90; fmt/clippy pass; 1,319 focused / 6.689 s; 15 fuzzy / 6.918 s. |
+| 05.4 simulated agent process world | merged locally | smith 08d53cd, 225bedf | TLS fake LLM and scripted host reach Answer and clean process exit; signal cancellation, startup errors, memory bound and 64 seeded runs covered. fmt/clippy pass; 1,323 focused / 4.019 s; 16 fuzzy / 4.670 s; world serial 3 focused / 0.027 s and one fuzzy / 0.224 s. |
 
 ## jig extraction
 
