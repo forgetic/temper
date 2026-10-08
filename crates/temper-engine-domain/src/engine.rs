@@ -25,29 +25,23 @@
 //! Root candidate/snapshot carriers are transient.
 //! Child facts are disposable observations; [`Domain::quiescent`] reports
 //! internal idleness, while an external referee establishes final story results.
-mod amendments;
 mod escalation;
 mod forge_route;
-mod goals;
 mod inbox;
 mod landing;
-mod policy;
 mod policy_translate;
 mod proposals;
 mod results;
 
-mod roles;
-
 use crate::{
     CallAnswer, CallKey, Decision, Delivery, Family, Journal, JournalLimits, Key, Output, Range, Record, RunProof,
-    TerminalRecord, TurnProof, TurnRecord, Write, loads,
+    Write, loads,
 };
 use alloc::boxed::Box;
 use jig_core::{
-    Core, GoalRoute, HistoricalResult, PendingRelay, PersonProposalRoute, PersonTaskRoute, RestoringProof, RoutedCall,
-    Transcript,
+    Core, HistoricalResult, PendingRelay, PersonProposalRoute, PersonTaskRoute, RestoringProof, RoutedCall, Transcript,
 };
-pub use jig_core::{Model, RunCharter, RunPolicy};
+pub use jig_core::{Delegate, Dependency, Model, ProcedureAction, RunCharter, RunPolicy};
 use jig_core_accounts as accounts;
 use jig_core_authority as authority;
 use jig_core_brief as brief;
@@ -56,7 +50,7 @@ use jig_core_notes as notes;
 use jig_core_people as people;
 use jig_core_tasks as tasks;
 use jig_core_views as views;
-use skein_lib::{Decimal, Env, Id, List, Map, Queue, ReplyTo, Slab, Token, Writer};
+use skein_lib::{Env, Id, List, Map, Queue, ReplyTo, Slab, Token};
 use temper_engine_domain_forge as forge;
 use temper_engine_domain_forge_change as forge_change;
 use temper_engine_domain_forge_client as forge_client;
@@ -176,7 +170,6 @@ pub struct Config {
 #[derive(Debug)]
 struct RootConfig {
     landing: LandingPolicy,
-    permission_roles: Map<u32, Box<[people::PermissionRole]>>,
     forge_connector: u16,
 }
 
@@ -210,6 +203,8 @@ fn split_config(config: Config, projects: List<u32>) -> (jig_core::Config, RootC
             owners,
             authority,
             projects,
+            permission_roles,
+            connectors: Box::new([forge_connector]),
             settings: jig_core::Settings {
                 deployment_provider,
                 recurring_connector,
@@ -225,7 +220,7 @@ fn split_config(config: Config, projects: List<u32>) -> (jig_core::Config, RootC
                 account_valid,
             },
         },
-        RootConfig { landing, permission_roles, forge_connector },
+        RootConfig { landing, forge_connector },
     )
 }
 
@@ -294,29 +289,6 @@ pub enum ForgeBriefKind {
 pub enum BriefBody {
     Text(Box<[u8]>),
     Missing(brief::GatherMissing),
-}
-
-/// A root-owned part of the task context rendered for a brief.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum TaskBriefPart {
-    Spec,
-    Dependencies,
-    Delegates,
-    Attempts,
-    TranscriptTail,
-}
-
-/// A bounded fragment and the amount its root renderer omitted.
-#[derive(Debug)]
-struct TaskBriefFragment {
-    bytes: Box<[u8]>,
-    left: u64,
-}
-
-/// The result of reading a root-owned part of a task.
-enum TaskBriefRead {
-    Got(Box<[TaskBriefFragment]>),
-    Failed,
 }
 
 /// A checkout's authoritative forge start, prepared afresh by the worker.
@@ -445,38 +417,6 @@ pub enum MessageForm {
     Words,
     Question,
     Answer { question: u64 },
-}
-
-/// A dependency named by a delegate call before the root allocates task IDs.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Dependency {
-    /// One member of the same batch, by zero-based position.
-    Batch(u32),
-    /// A live task already referenced by the creator.
-    Existing(u64),
-}
-
-/// One proposed direct child; the root supplies its ID, requester and funder.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Delegate {
-    pub executor: tasks::Executor,
-    pub spec: tasks::Spec,
-    pub contract: tasks::Contract,
-    pub authority: tasks::Authority,
-    /// Connector grants whose open terminal is narrowed with the new task number.
-    pub symbolic_grants: Box<[tasks::Grant]>,
-    pub dependencies: Box<[Dependency]>,
-    pub wake: tasks::WakePolicy,
-}
-
-/// One connector-owned procedure's chosen task action. The root supplies delegate numbers and
-/// checks batch authority before the tasks child admits it.
-#[derive(PartialEq, Eq, Debug)]
-pub enum ProcedureAction {
-    Delegate(Box<[Delegate]>),
-    Result(tasks::TaskResult),
-    Hold(tasks::Hold),
-    Wait,
 }
 
 /// A run-named tool call. The root fills the task and attempt from the
@@ -748,15 +688,13 @@ pub enum Request {
 
 #[derive(Debug)]
 enum Work {
+    Core(jig_core::Event),
     Tasks(tasks::Event),
-    PersonProposal(tasks::Event),
-    TaskEscalation(tasks::Event),
     People(people::Event),
     Fleet(fleet::Event),
     Brief(brief::GatherEvent),
     StartBrief { task: u64 },
     Forge(forge::Event),
-    TasksClaim { task: u64, attempt: u64, writes: Box<[tasks::Name]> },
     ProjectGoal(Box<tasks::TaskRecord>),
     GoalSubscribe(forge::Subscriber),
     Activate(Box<tasks::RunContext>),
@@ -764,8 +702,6 @@ enum Work {
     EscalationFailed { waiter: Token },
     ProposalLoaded { waiter: Token, rows: Box<[Record]> },
     ProposalFailed { waiter: Token },
-    DelegateValidated { to: Token, key: CallKey, batch: Box<[Delegate]>, stubs: Box<[tasks::Stub]> },
-    DelegateInputRefused { to: Token, key: CallKey },
 }
 
 #[derive(Debug)]
@@ -773,6 +709,12 @@ struct BriefConnector {
     task: u64,
     kind: ForgeBriefKind,
     cutting: bool,
+}
+
+#[derive(Debug)]
+struct PreparedWorkspace {
+    workspace: forge_route::RunWorkspace,
+    claim_names: Box<[forge::Name]>,
 }
 
 #[derive(Debug)]
@@ -845,6 +787,8 @@ pub struct Domain {
     door_count: u32,
     startup: Startup,
     brief_connectors: Slab<BriefConnector>,
+    brief_sections: Map<u64, Box<[BriefSection]>>,
+    run_workspaces: Map<u64, PreparedWorkspace>,
     forge: forge::Domain,
     forge_keys: Map<forge::Key, u64>,
     adoption_restore: Map<Token, Option<forge::Repository>>,
@@ -854,6 +798,7 @@ pub struct Domain {
     forge_effecting: Map<u64, (ReplyTo, CallKey)>,
     forge_projection_due: Map<u64, skein_lib::Wall>,
     forge_change_due: Map<u64, skein_lib::Wall>,
+    forge_delegating: Map<(u64, u64), forge_change::Delegate>,
     loads: loads::Loads,
     assignments: Map<u64, Assignment>,
     payloads: Slab<Option<Payload>>,
@@ -1000,8 +945,7 @@ impl Domain {
                         jig_core::Request::Write(_)
                         | jig_core::Request::Ask { .. }
                         | jig_core::Request::Held(_)
-                        | jig_core::Request::Now(_)
-                        | jig_core::Request::Route(_),
+                        | jig_core::Request::Now(_),
                     )
                     | None => unreachable!("configuration decides nothing"),
                 }
@@ -1024,6 +968,8 @@ impl Domain {
                     .checked_mul(2)
                     .expect("validated brief connector room"),
             ),
+            brief_sections: Map::with_capacity(limits.tasks.tasks),
+            run_workspaces: Map::with_capacity(limits.tasks.tasks),
             forge,
             forge_keys: Map::with_capacity(forge_route::rows(limits).expect("forge row capacity")),
             adoption_restore: Map::with_capacity(limits.forge.adoptions),
@@ -1033,6 +979,7 @@ impl Domain {
             forge_effecting: Map::with_capacity(limits.fleet.calls),
             forge_projection_due: Map::with_capacity(limits.forge.issues),
             forge_change_due: Map::with_capacity(limits.forge.changes),
+            forge_delegating: Map::with_capacity(limits.forge.changes),
             loads: loads::Loads::new(&limits.loads),
             assignments: Map::with_capacity(limits.tasks.tasks),
             payloads: Slab::with_capacity(payload_slots(limits).expect("valid payload room")),
@@ -1123,22 +1070,31 @@ fn root_journal_limits(limits: &Limits) -> skein_lib::JournalLimits {
     journal
 }
 
-fn environment_views(env: &Env<Limits>) -> Env<views::Limits> {
-    Env { now: env.now, wall: env.wall, limits: env.limits.views }
-}
-
 fn environment_core(env: &Env<Limits>) -> Env<jig_core::Limits> {
     Env { now: env.now, wall: env.wall, limits: core_limits(&env.limits) }
 }
 
 fn core_limits(limits: &Limits) -> jig_core::Limits {
     jig_core::Limits {
+        policy_bytes: u64::from(limits.journal.transcript_bytes).min(row_bound(limits).expect("validated row bound")),
+        escalation_reason_bytes: limits
+            .tasks
+            .result_bytes
+            .min(limits.journal.result_bytes)
+            .min(limits.journal.transcript_bytes),
         tasks: limits.tasks,
         load_slots: limits.loads.loads,
         call_records: limits.call_records,
         people: limits.people,
         fleet: limits.fleet,
         brief: brief_limits(&limits.brief),
+        brief_parts: limits.brief.parts,
+        brief_core_budgets: jig_core::CoreBriefBudgets {
+            task: limits.brief.budgets.task,
+            dependencies: limits.brief.budgets.dependencies,
+            attempts: limits.brief.budgets.attempts,
+            plan: limits.brief.budgets.plan,
+        },
         accounts: limits.accounts,
         notes: limits.notes,
         views: limits.views,
@@ -1166,15 +1122,38 @@ fn view_requests(routed: jig_core::Requests, room: u32) -> Queue<views::Request>
             jig_core::Request::Now(value) => match *value {
                 jig_core::Now::View(request) => child.push(request),
                 jig_core::Now::Account(_) => unreachable!("view route does not own account output"),
-                jig_core::Now::NotesIndexed { .. }
+                jig_core::Now::SignInRefused { .. }
+                | jig_core::Now::WatchRefused { .. }
+                | jig_core::Now::NotesIndexed { .. }
                 | jig_core::Now::NotesRecalled { .. }
-                | jig_core::Now::NotesRefused { .. } => unreachable!("view route owns its now output"),
+                | jig_core::Now::NotesRefused { .. }
+                | jig_core::Now::DropPayload { .. }
+                | jig_core::Now::DropAssignment { .. }
+                | jig_core::Now::TurnPayload { .. }
+                | jig_core::Now::AnswerPayload { .. }
+                | jig_core::Now::AcceptedTurn { .. }
+                | jig_core::Now::RefusedPayload { .. }
+                | jig_core::Now::Activate { .. }
+                | jig_core::Now::PrepareAgent { .. }
+                | jig_core::Now::StartPreparation { .. }
+                | jig_core::Now::HistoricalProposal { .. }
+                | jig_core::Now::BriefCorePlanned { .. }
+                | jig_core::Now::WorkspaceRequest { .. }
+                | jig_core::Now::RunPreparationFailed { .. }
+                | jig_core::Now::RunPrepared { .. }
+                | jig_core::Now::CompleteBrief { .. }
+                | jig_core::Now::HistoricalEscalation { .. }
+                | jig_core::Now::EscalationInspection { .. }
+                | jig_core::Now::EscalationReply { .. }
+                | jig_core::Now::EscalationRefused { .. }
+                | jig_core::Now::CallPayload { .. }
+                | jig_core::Now::ProcedureDelegateOutcome { .. }
+                | jig_core::Now::RestoreRefused => unreachable!("view route owns its now output"),
             },
             jig_core::Request::Decided => {}
-            jig_core::Request::Write(_)
-            | jig_core::Request::Ask { .. }
-            | jig_core::Request::Held(_)
-            | jig_core::Request::Route(_) => unreachable!("view route changes no decision"),
+            jig_core::Request::Write(_) | jig_core::Request::Ask { .. } | jig_core::Request::Held(_) => {
+                unreachable!("view route changes no decision")
+            }
         }
     }
     child
@@ -1195,42 +1174,8 @@ fn watch_subject(subject: views::Subject) -> people::WatchSubject {
     }
 }
 
-fn watched_project(domain: &Domain, subject: views::Subject) -> u32 {
-    match subject {
-        views::Subject::Run { task, .. } | views::Subject::Tree { task } => {
-            match domain.core.tasks.delegation(task.raw()) {
-                Some(context) => context.project,
-                None => 0,
-            }
-        }
-        views::Subject::Goals { project } => project,
-        views::Subject::Inbox { .. } => 0,
-    }
-}
-
-fn watch_views(subject: people::WatchSubject, project: u32) -> views::Subject {
-    match subject {
-        people::WatchSubject::Run { task, attempt } => {
-            views::Subject::Run { task: Token::new(task), attempt: Token::new(attempt) }
-        }
-        people::WatchSubject::Tree { task } => views::Subject::Tree { task: Token::new(task) },
-        people::WatchSubject::Goals => views::Subject::Goals { project },
-        people::WatchSubject::Inbox { party } => views::Subject::Inbox { party },
-    }
-}
-
-fn watch_authorized(domain: &Domain, project: u32, role: Option<people::Role>) -> bool {
-    domain.core.watch_authorized(project, role)
-}
-
-fn note_authorized(domain: &Domain, project: u32, role: Option<people::Role>, scope: &people::NoteScope) -> bool {
-    domain.core.note_authorized(project, role, scope)
-}
-
-/// A watch uses people's keyed admission, then opens a volatile view after the last commit is
-/// durable. Its key is retained only while the view is open (domain/people.md, 5.1; domain/root.md, 4).
+/// A volatile watch has no durable root decision; the core admits its party and opens its view.
 #[expect(clippy::too_many_arguments, reason = "watch admission carries the signed-in caller, key and subject")]
-#[expect(clippy::too_many_lines, reason = "one keyed watch admission owns the view opening and terminal answer")]
 fn open_watch(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -1241,260 +1186,54 @@ fn open_watch(
     subject: people::WatchSubject,
     out: &mut Queue<Request>,
 ) {
-    if !domain.ready() || !domain.core.counters.quiescent(domain.journal.idle()) || !domain.work.is_empty() {
-        out.push(Request::WatchRefused { watcher, refusal: people::Refusal::Busy });
-        return;
-    }
-    let ask = people::Ask::Watch { project, subject };
-    let mut admitted = Queue::with_capacity(people::max_out(&env.limits.people));
-    people::step(
-        &mut domain.core.people,
-        &environment_people(env),
-        people::Event::Ask { reply_to: ReplyTo::new(watcher), sign_in, key, ask },
-        &mut admitted,
+    let ready = domain.ready() && domain.core.counters.quiescent(domain.journal.idle()) && domain.work.is_empty();
+    let routed = jig_core::step(
+        &mut domain.core,
+        &environment_core(env),
+        jig_core::Event::Watch { watcher, sign_in, key, project, subject, ready },
     );
-    let mut opened = false;
-    for _ in 0..admitted.len() {
-        match admitted.pop().expect("watch admission output count") {
-            people::Request::Route { request, person, project, role, ask } => {
-                let people::Ask::Watch { subject, .. } = *ask else {
-                    unreachable!("watch admission routes only its watch ask")
-                };
-                let subject = watch_views(subject, project);
-                let actual = watched_project(domain, subject);
-                let inbox = match subject {
-                    views::Subject::Inbox { .. } => true,
-                    views::Subject::Run { .. } | views::Subject::Tree { .. } | views::Subject::Goals { .. } => false,
-                };
-                let outcome = if actual != project || (project == 0 && !inbox) {
-                    people::Outcome::Refused(people::Refusal::Unknown)
-                } else if project != 0 && !watch_authorized(domain, project, role) {
-                    people::Outcome::Refused(people::Refusal::Authority)
-                } else if domain.core.watching.contains_key(&watcher)
-                    || domain.core.watching.len() >= env.limits.views.watchers
-                {
-                    people::Outcome::Refused(people::Refusal::Busy)
-                } else {
-                    match view_snapshot(domain, subject, env.limits.views.snapshot_bytes) {
-                        Some(snapshot) => {
-                            let mut views_out = Queue::with_capacity(views::max_out(&env.limits.views));
-                            views::step(
-                                &mut domain.core.views,
-                                &environment_views(env),
-                                views::Event::Watch { watcher, subject, snapshot },
-                                &mut views_out,
-                            );
-                            let mut result = people::Outcome::Refused(people::Refusal::Unknown);
-                            for _ in 0..views_out.len() {
-                                match views_out.pop().expect("watch output count") {
-                                    views::Request::Watching { watcher: opened_watcher } => {
-                                        assert!(opened_watcher == watcher, "watch name is echoed");
-                                        out.push(Request::View(views::Request::Watching { watcher }));
-                                        result = people::Outcome::Watching { watcher };
-                                        opened = true;
-                                    }
-                                    request @ views::Request::Deliver { .. } => out.push(Request::View(request)),
-                                    views::Request::Refused { refusal, .. } => {
-                                        result = people::Outcome::Refused(match refusal {
-                                            views::Refusal::Busy => people::Refusal::Busy,
-                                            views::Refusal::Oversized => people::Refusal::Limit,
-                                            views::Refusal::Unknown | views::Refusal::Unfollowed => {
-                                                people::Refusal::Unknown
-                                            }
-                                        });
-                                    }
-                                    views::Request::Ended { .. } => {
-                                        unreachable!("a new watch cannot end before opening")
-                                    }
-                                }
-                            }
-                            result
-                        }
-                        None => people::Outcome::Refused(people::Refusal::Limit),
-                    }
-                };
-                if opened {
-                    let inserted = domain.core.watching.insert(watcher, person);
-                    assert!(inserted == Ok(None), "watch slot checked before opening");
+    let jig_core::Requests::Out(mut marked) = routed;
+    for _ in 0..marked.len() {
+        match marked.pop().expect("watch output count") {
+            jig_core::Request::Now(value) => match *value {
+                jig_core::Now::View(request) => out.push(Request::View(request)),
+                jig_core::Now::WatchRefused { watcher, refusal } => {
+                    out.push(Request::WatchRefused { watcher, refusal });
                 }
-                let mut decided = Queue::with_capacity(people::max_out(&env.limits.people));
-                people::step(
-                    &mut domain.core.people,
-                    &environment_people(env),
-                    people::Event::Decided { request, outcome },
-                    &mut decided,
-                );
-                while let Some(reply) = decided.pop() {
-                    match reply {
-                        people::Request::Reply { to, reply } => match reply {
-                            people::Reply::Outcome(people::Outcome::Watching { watcher: first }) => {
-                                if !opened {
-                                    out.push(Request::View(views::Request::Watching { watcher: first }));
-                                }
-                            }
-                            people::Reply::Outcome(people::Outcome::Refused(refusal))
-                            | people::Reply::Refused(refusal) => {
-                                out.push(Request::WatchRefused { watcher: to.into_token(), refusal });
-                            }
-                            people::Reply::Outcome(_) | people::Reply::SignedIn { .. } | people::Reply::SignedOut => {
-                                unreachable!("watch replies only with open or refusal")
-                            }
-                        },
-                        people::Request::Save { .. }
-                        | people::Request::Erase { .. }
-                        | people::Request::Route { .. }
-                        | people::Request::RolesApplied { .. }
-                        | people::Request::RolesRefused { .. }
-                        | people::Request::ServiceMade { .. }
-                        | people::Request::RestoreRefused { .. } => unreachable!("watch writes nothing"),
-                    }
-                }
-            }
-            people::Request::Reply { to, reply } => match reply {
-                people::Reply::Outcome(people::Outcome::Watching { watcher: first }) => {
-                    out.push(Request::View(views::Request::Watching { watcher: first }));
-                }
-                people::Reply::Outcome(people::Outcome::Refused(refusal)) | people::Reply::Refused(refusal) => {
-                    out.push(Request::WatchRefused { watcher: to.into_token(), refusal });
-                }
-                people::Reply::Outcome(_) | people::Reply::SignedIn { .. } | people::Reply::SignedOut => {
-                    unreachable!("watch admission reply shape")
-                }
+                jig_core::Now::SignInRefused { .. }
+                | jig_core::Now::Account(_)
+                | jig_core::Now::NotesIndexed { .. }
+                | jig_core::Now::NotesRecalled { .. }
+                | jig_core::Now::NotesRefused { .. }
+                | jig_core::Now::DropPayload { .. }
+                | jig_core::Now::DropAssignment { .. }
+                | jig_core::Now::TurnPayload { .. }
+                | jig_core::Now::AnswerPayload { .. }
+                | jig_core::Now::AcceptedTurn { .. }
+                | jig_core::Now::RefusedPayload { .. }
+                | jig_core::Now::Activate { .. }
+                | jig_core::Now::PrepareAgent { .. }
+                | jig_core::Now::StartPreparation { .. }
+                | jig_core::Now::HistoricalProposal { .. }
+                | jig_core::Now::BriefCorePlanned { .. }
+                | jig_core::Now::WorkspaceRequest { .. }
+                | jig_core::Now::RunPreparationFailed { .. }
+                | jig_core::Now::RunPrepared { .. }
+                | jig_core::Now::CompleteBrief { .. }
+                | jig_core::Now::HistoricalEscalation { .. }
+                | jig_core::Now::EscalationInspection { .. }
+                | jig_core::Now::EscalationReply { .. }
+                | jig_core::Now::EscalationRefused { .. }
+                | jig_core::Now::CallPayload { .. }
+                | jig_core::Now::ProcedureDelegateOutcome { .. }
+                | jig_core::Now::RestoreRefused => unreachable!("watch route has only volatile view outputs"),
             },
-            people::Request::Save { .. }
-            | people::Request::Erase { .. }
-            | people::Request::RolesApplied { .. }
-            | people::Request::RolesRefused { .. }
-            | people::Request::ServiceMade { .. }
-            | people::Request::RestoreRefused { .. } => unreachable!("watch admission writes nothing"),
-        }
-    }
-}
-
-fn view_byte(bytes: &mut List<u8>, value: &[u8]) -> Option<()> {
-    for byte in value {
-        bytes.push(*byte).ok()?;
-    }
-    Some(())
-}
-
-fn in_tree(rows: &[tasks::ViewTask], number: u64, ancestor: u64, depth: u32) -> bool {
-    let mut current = number;
-    for _ in 0..=depth {
-        if current == ancestor {
-            return true;
-        }
-        let mut next = None;
-        for row in rows {
-            if row.number == current {
-                next = match row.requester {
-                    tasks::Party::Task(parent) => Some(parent),
-                    tasks::Party::Person(_) | tasks::Party::Deployment { .. } => None,
-                };
-                break;
+            jig_core::Request::Decided => {}
+            jig_core::Request::Write(_) | jig_core::Request::Ask { .. } | jig_core::Request::Held(_) => {
+                unreachable!("watch route changes no store decision")
             }
         }
-        let Some(parent) = next else { return false };
-        current = parent;
     }
-    false
-}
-
-/// The snapshot's fixed rows carry task number, phase and priority in that order.
-/// A run snapshot carries its attempt and last committed turn.
-fn view_snapshot(domain: &Domain, subject: views::Subject, bound: u32) -> Option<Box<[u8]>> {
-    let mut bytes = List::with_capacity(bound);
-    match subject {
-        views::Subject::Run { task, attempt } => {
-            let proof = domain.core.proofs.get(&task.raw())?;
-            if proof.attempt != attempt.raw() {
-                return None;
-            }
-            view_byte(&mut bytes, &proof.attempt.to_be_bytes())?;
-            let turn = match proof.turn {
-                Some(turn) => turn.turn,
-                None => 0,
-            };
-            view_byte(&mut bytes, &turn.to_be_bytes())?;
-        }
-        views::Subject::Tree { task: ancestor } => {
-            let rows = domain.core.tasks.view_tasks();
-            for row in &rows {
-                if in_tree(&rows, row.number, ancestor.raw(), domain.limits.tasks.depth) {
-                    view_byte(&mut bytes, &row.number.to_be_bytes())?;
-                    view_byte(&mut bytes, &row.phase.to_be_bytes())?;
-                    view_byte(&mut bytes, &row.tracked.unwrap_or(0).to_be_bytes())?;
-                }
-            }
-        }
-        views::Subject::Goals { project } => {
-            let rows = domain.core.tasks.view_tasks();
-            for row in &rows {
-                if row.project == project && row.tracked.is_some() {
-                    view_byte(&mut bytes, &row.number.to_be_bytes())?;
-                    view_byte(&mut bytes, &row.phase.to_be_bytes())?;
-                    view_byte(&mut bytes, &row.tracked.unwrap_or(0).to_be_bytes())?;
-                }
-            }
-        }
-        views::Subject::Inbox { .. } => {}
-    }
-    Some(bytes.into_boxed())
-}
-
-fn view_task_saved(domain: &mut Domain, limits: &Limits, decision: &mut Decision, task: &tasks::TaskRecord) {
-    let phase = tasks::view_phase(&task.phase);
-    let current = (phase, task.tracked);
-    let changed = match domain.core.view_phases.get(&task.number) {
-        Some(previous) => *previous != current,
-        None => true,
-    };
-    if phase == 4 {
-        domain.core.view_phases.remove(&task.number);
-    } else {
-        domain.core.view_phases.insert(task.number, current).expect("one live phase per task");
-    }
-    if !changed || domain.core.watching.is_empty() {
-        return;
-    }
-    let mut trees = List::with_capacity(limits.tasks.depth.saturating_add(1));
-    trees.push(Token::new(task.number)).expect("self is in its own bounded tree");
-    let mut requester = task.requester;
-    for _ in 0..limits.tasks.depth {
-        requester = match requester {
-            tasks::Party::Task(parent) => {
-                trees.push(Token::new(parent)).expect("bounded ancestor depth");
-                match domain.core.tasks.delegation(parent) {
-                    Some(context) => context.requester,
-                    None => break,
-                }
-            }
-            tasks::Party::Person(_) | tasks::Party::Deployment { .. } => break,
-        };
-    }
-    emit(
-        decision,
-        limits,
-        Delivery::View(Box::new(views::Event::TaskPhase {
-            task: Token::new(task.number),
-            trees: trees.into_boxed(),
-            project: task.project,
-            phase,
-            priority: task.tracked,
-        })),
-    );
-}
-
-fn environment_tasks(env: &Env<Limits>) -> Env<tasks::Limits> {
-    Env { now: env.now, wall: env.wall, limits: env.limits.tasks }
-}
-
-fn environment_people(env: &Env<Limits>) -> Env<people::Limits> {
-    Env { now: env.now, wall: env.wall, limits: env.limits.people }
-}
-
-fn environment_fleet(env: &Env<Limits>) -> Env<fleet::Limits> {
-    Env { now: env.now, wall: env.wall, limits: env.limits.fleet }
 }
 
 fn brief_limits(limits: &BriefLimits) -> brief::Limits {
@@ -1558,7 +1297,7 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
             }
         }
         Event::Watch { watcher, sign_in, key, subject } => {
-            let project = watched_project(domain, subject);
+            let project = jig_core::watch_project(&domain.core, subject);
             open_watch(domain, env, watcher, sign_in, key, project, watch_subject(subject), out);
             return;
         }
@@ -1574,43 +1313,19 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
         }
         Event::StartRecurring { project, authority, template } => {
             if domain.ready() && admits(domain, &env.limits) {
-                start_recurring(domain, env, project, authority, template);
+                domain.work.push(Work::Core(jig_core::Event::StartRecurring { project, authority, template }));
             }
         }
         Event::Period { project, period, budget } => {
-            let allowed = match domain.core.authority.policy(project) {
-                Some(policy) => budget <= policy.period_spend,
-                None => false,
-            };
-            if domain.ready()
-                && admits(domain, &env.limits)
-                && period > 0
-                && period >= domain.core.settings.period
-                && allowed
-            {
-                domain.core.settings.period = period;
-                domain.core.settings.period_budget = budget;
-                if domain.core.tasks.funding(tasks::Funder::Period { project, period }).is_none() {
-                    domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
-                        reply_to: internal(u64::MAX - 2),
-                        project,
-                        period,
-                        budget,
-                    }));
-                }
-                for task in domain.core.tasks.recurring_tasks(project) {
-                    domain.work.push(Work::Tasks(tasks::Event::TickRecurring { task, period }));
-                }
-                for task in domain.core.tasks.standing_tasks(project) {
-                    domain.work.push(Work::Tasks(tasks::Event::RenewStanding { task, period }));
-                }
+            if domain.ready() && admits(domain, &env.limits) {
+                domain.work.push(Work::Core(jig_core::Event::Period { project, period, budget }));
             }
         }
         Event::ProcedureStep { task, step, connector, code, action } => {
             if !domain.ready() || !admits(domain, &env.limits) {
                 return;
             }
-            drop(procedure_step(domain, env, task, step, connector, code, action));
+            domain.work.push(Work::Core(jig_core::Event::ProcedureStep { task, step, connector, code, action }));
         }
         Event::Committed { number } => {
             crate::committed(&mut domain.journal, number);
@@ -1716,25 +1431,7 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 }));
                 return;
             }
-            if domain.core.counters.deployment().people == u64::MAX
-                || domain.core.counters.deployment().sign_ins == u64::MAX
-            {
-                out.push(Request::Deliver(Delivery::WebReply {
-                    to: reply_to,
-                    sign_in: None,
-                    reply: people::Reply::Refused(people::Refusal::Limit),
-                }));
-                return;
-            }
-            let person = crate::fresh(&mut domain.core.counters, Family::Person).expect("person counter available");
-            let sign_in = crate::fresh(&mut domain.core.counters, Family::SignIn).expect("sign-in counter available");
-            domain.core.signing_in = Some(sign_in);
-            let kind = if identity.key.provider == domain.core.settings.deployment_provider {
-                people::Kind::Service
-            } else {
-                people::Kind::Person
-            };
-            domain.work.push(Work::People(people::Event::SignedIn { reply_to, person, sign_in, identity, kind }));
+            domain.work.push(Work::Core(jig_core::Event::SignIn { reply_to, identity }));
         }
         Event::Ask { reply_to, sign_in, key, ask } => {
             if let people::Ask::Watch { project, subject } = &ask {
@@ -1881,15 +1578,6 @@ fn admits(domain: &Domain, limits: &Limits) -> bool {
             writes: 0,
             held: limits.journal.deliveries.checked_mul(3).expect("root held reserve bounded"),
         })
-}
-
-fn remember_due(domain: &mut Domain, context: Box<tasks::RunContext>) {
-    for task in &domain.core.due {
-        if task.task == context.task {
-            return;
-        }
-    }
-    domain.core.due.push(context);
 }
 
 fn lose_channel(domain: &mut Domain, env: &Env<Limits>, channel: Token) {
@@ -2099,7 +1787,7 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
             Output::Deliver(Delivery::ReadEscalationDecision { waiter }) => {
                 let Some(Some(read)) = domain.result_reads.get(Id::from_token(waiter)) else { return };
                 let (task, revision) = match read {
-                    Read::Escalation(escalation::Query::Decide { task, revision, .. }) => (*task, *revision),
+                    Read::Escalation(escalation::Query::Historical { task, revision, .. }) => (*task, *revision),
                     Read::Result(_)
                     | Read::Inbox(_)
                     | Read::Transcript { .. }
@@ -2197,9 +1885,8 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
             return;
         }
         let mut decision = route_decision(domain, &env.limits).expect("journal room checked before fleet continuation");
-        let mut fleet_out = Queue::with_capacity(fleet::max_out(&env.limits.fleet));
-        fleet::resume(&mut domain.core.fleet, &environment_fleet(env), &mut fleet_out);
-        fleet_outputs(domain, env, &mut decision, &mut fleet_out);
+        let routed = jig_core::resume_fleet(&mut domain.core, &environment_core(env));
+        route_core_requests(domain, env, &mut decision, routed);
         route_into(domain, env, &mut decision);
         close(domain, env, decision, out);
     }
@@ -2270,11 +1957,11 @@ fn fire_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>)
     forge::fire(&mut domain.forge, &environment_forge(env), &mut forge_out);
     forge_route::outputs(domain, env, &mut decision, &mut forge_out);
     let routed = jig_core::fire(&mut domain.core, &environment_core(env), jig_core::Timer::Tasks);
-    route_core_requests(domain, env, &mut decision, routed, false, false);
+    route_core_requests(domain, env, &mut decision, routed);
     let routed = jig_core::fire(&mut domain.core, &environment_core(env), jig_core::Timer::Fleet);
-    route_core_requests(domain, env, &mut decision, routed, false, false);
+    route_core_requests(domain, env, &mut decision, routed);
     let routed = jig_core::fire(&mut domain.core, &environment_core(env), jig_core::Timer::Brief);
-    route_core_requests(domain, env, &mut decision, routed, false, false);
+    route_core_requests(domain, env, &mut decision, routed);
     route_into(domain, env, &mut decision);
     close(domain, env, decision, out);
 }
@@ -2285,31 +1972,77 @@ fn route(domain: &mut Domain, env: &Env<Limits>) -> Decision {
     decision
 }
 
-fn route_core_requests(
-    domain: &mut Domain,
-    env: &Env<Limits>,
-    decision: &mut Decision,
-    requests: jig_core::Requests,
-    person_proposal: bool,
-    task_escalation: bool,
-) {
+fn forge_release_ending(ending: tasks::Ending) -> forge::ReleaseEnding {
+    match ending {
+        tasks::Ending::Done(_) => forge::ReleaseEnding::Done,
+        tasks::Ending::Failed { .. } => forge::ReleaseEnding::Failed,
+        tasks::Ending::Cancelled { .. } => forge::ReleaseEnding::Cancelled,
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the root translates each closed core request variant for its connector and journal"
+)]
+fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, requests: jig_core::Requests) {
     match requests {
         jig_core::Requests::Out(mut output) => {
             for _ in 0..output.len() {
                 match output.pop().expect("core output count") {
                     jig_core::Request::Write(write) => match write {
                         jig_core::Write::Save(record) => match record {
+                            jig_core::Record::Core(jig_core::CoreRecord::Call(row)) => {
+                                let answer =
+                                    CallAnswer::from_core(&row.part).expect("core call owns its complete answer");
+                                save(
+                                    decision,
+                                    &env.limits,
+                                    Write::Save(Record::Call(crate::CallRecord { key: row.key, answer })),
+                                );
+                            }
+                            jig_core::Record::Core(jig_core::CoreRecord::RunProof(proof)) => {
+                                save(decision, &env.limits, Write::Save(Record::RunProof(proof)));
+                            }
+                            jig_core::Record::Core(jig_core::CoreRecord::Terminal(terminal)) => {
+                                save(decision, &env.limits, Write::Save(Record::Terminal(terminal)));
+                            }
+                            jig_core::Record::Core(jig_core::CoreRecord::Turn(turn)) => {
+                                save(decision, &env.limits, Write::Save(Record::Turn(turn)));
+                            }
+                            jig_core::Record::Core(jig_core::CoreRecord::ProposalDecision(archive)) => {
+                                save(decision, &env.limits, Write::Save(Record::ProposalDecision(archive)));
+                            }
+                            jig_core::Record::Core(jig_core::CoreRecord::EscalationDecision(archive)) => {
+                                save(decision, &env.limits, Write::Save(Record::EscalationDecision(archive)));
+                            }
                             jig_core::Record::People(row) => {
                                 save(decision, &env.limits, Write::Save(Record::People(row)));
                             }
-                            jig_core::Record::Core(_) | jig_core::Record::Tasks(_) | jig_core::Record::Notes(_) => {
+                            jig_core::Record::Tasks(row) => {
+                                save(decision, &env.limits, Write::Save(Record::Tasks(row)));
+                            }
+                            jig_core::Record::Core(_) | jig_core::Record::Notes(_) => {
                                 unreachable!("the core route owns its write family")
                             }
                         },
                         jig_core::Write::Erase(key) => match key {
                             jig_core::Key::People(key) => save(decision, &env.limits, Write::Erase(Key::People(key))),
                             jig_core::Key::Tasks(key) => save(decision, &env.limits, Write::Erase(Key::Tasks(key))),
-                            jig_core::Key::Core(_) | jig_core::Key::Notes(_) => {
+                            jig_core::Key::Core(jig_core::CoreKey::Call(key)) => {
+                                drop(domain.connector_calls.remove(&key));
+                                save(decision, &env.limits, Write::Erase(Key::Call(key)));
+                            }
+                            jig_core::Key::Core(jig_core::CoreKey::RunProof(task)) => {
+                                save(decision, &env.limits, Write::Erase(Key::RunProof { task }));
+                            }
+                            jig_core::Key::Core(
+                                jig_core::CoreKey::Deployment
+                                | jig_core::CoreKey::Turn { .. }
+                                | jig_core::CoreKey::Terminal { .. }
+                                | jig_core::CoreKey::ProposalDecision(_)
+                                | jig_core::CoreKey::EscalationDecision { .. },
+                            )
+                            | jig_core::Key::Notes(_) => {
                                 unreachable!("the core route owns its erase family")
                             }
                         },
@@ -2317,39 +2050,306 @@ fn route_core_requests(
                     jig_core::Request::Ask { connector, ask } => {
                         let request = match ask {
                             jig_core::Ask::Gather { section, budget } => {
-                                brief::GatherRequest::Gather { connector, section, budget }
+                                Some(brief::GatherRequest::Gather { connector, section, budget })
                             }
                             jig_core::Ask::CutTo { section, size } => {
-                                brief::GatherRequest::CutTo { connector, section, size }
+                                Some(brief::GatherRequest::CutTo { connector, section, size })
                             }
-                            jig_core::Ask::Drop { section } => brief::GatherRequest::Drop { connector, section },
+                            jig_core::Ask::Drop { section } => Some(brief::GatherRequest::Drop { connector, section }),
+                            jig_core::Ask::Hold { task, resource } => {
+                                if connector == domain.config.forge_connector
+                                    && let Some(name) = forge_route::forge_name(
+                                        domain.config.forge_connector,
+                                        &resource,
+                                        env.limits.forge.name_bytes,
+                                    )
+                                {
+                                    let from = match domain.forge.hold(&name) {
+                                        Some(row) if row.task != task => Some(row.task),
+                                        Some(_) | None => None,
+                                    };
+                                    domain.work.push(Work::Forge(forge::Event::Hold { task, resource: name, from }));
+                                }
+                                None
+                            }
+                            jig_core::Ask::EndTopic { task, subscription } => {
+                                if connector == domain.config.forge_connector
+                                    && let Some(topic) = domain.forge.subscription(task, subscription)
+                                {
+                                    domain.work.push(Work::Forge(forge::Event::Unsubscribe { task, topic }));
+                                }
+                                None
+                            }
+                            jig_core::Ask::Adopt { request, project, adoption } => {
+                                let parsed = if connector == domain.config.forge_connector {
+                                    forge_route::parse_adoption(project, adoption, connector)
+                                } else {
+                                    None
+                                };
+                                match parsed {
+                                    Some(adoption) if domain.adoption_restore.len() < env.limits.forge.adoptions => {
+                                        let previous = domain.forge.repository(adoption.provider).cloned();
+                                        assert!(
+                                            domain.adoption_restore.insert(request, previous) == Ok(None),
+                                            "one keyed adoption flight"
+                                        );
+                                        domain
+                                            .work
+                                            .push(Work::Forge(forge::Event::Adopt { reply_to: request, adoption }));
+                                    }
+                                    Some(_) => domain.work.push(Work::People(people::Event::Decided {
+                                        request,
+                                        outcome: people::Outcome::Refused(people::Refusal::Busy),
+                                    })),
+                                    None => domain.work.push(Work::People(people::Event::Decided {
+                                        request,
+                                        outcome: people::Outcome::Refused(people::Refusal::Unknown),
+                                    })),
+                                }
+                                None
+                            }
+                            jig_core::Ask::Close { task, root, ending } => {
+                                if connector == domain.config.forge_connector {
+                                    domain.work.push(Work::Forge(forge::Event::SettleEffects {
+                                        task,
+                                        root,
+                                        ending: forge_release_ending(ending),
+                                    }));
+                                }
+                                None
+                            }
+                            jig_core::Ask::Release { task, root, ending, entry } => {
+                                if connector == domain.config.forge_connector {
+                                    domain.work.push(Work::Forge(forge::Event::Release {
+                                        task,
+                                        root,
+                                        ending: forge_release_ending(ending),
+                                        entry,
+                                    }));
+                                }
+                                None
+                            }
+                            jig_core::Ask::Lost { task, attempt } => {
+                                if connector == domain.config.forge_connector {
+                                    domain.work.push(Work::Forge(forge::Event::Lost { task, attempt }));
+                                }
+                                None
+                            }
+                            jig_core::Ask::TaskHoldings { request, project, root, number, executor, spec } => {
+                                let holdings = if connector == domain.config.forge_connector {
+                                    forge_route::task_holdings(
+                                        domain, env, project, root, number, executor, &spec, None,
+                                    )
+                                } else {
+                                    None
+                                };
+                                domain.work.push(Work::Core(jig_core::Event::Holdings {
+                                    request,
+                                    connector,
+                                    holdings,
+                                }));
+                                None
+                            }
+                            jig_core::Ask::DelegateHoldings { request, from, members } => {
+                                let holdings = if connector == domain.config.forge_connector {
+                                    let mut collected = List::with_capacity(
+                                        u32::try_from(members.len()).expect("bounded delegate batch"),
+                                    );
+                                    let mut failed = false;
+                                    for member in members {
+                                        match forge_route::task_holdings(
+                                            domain,
+                                            env,
+                                            member.project,
+                                            member.root,
+                                            member.number,
+                                            member.executor,
+                                            &member.spec,
+                                            Some(from),
+                                        ) {
+                                            Some(holdings) => collected.push(holdings).expect("one per member"),
+                                            None => failed = true,
+                                        }
+                                    }
+                                    if failed { None } else { Some(collected.into_boxed()) }
+                                } else {
+                                    None
+                                };
+                                domain.work.push(Work::Core(jig_core::Event::DelegateHoldings {
+                                    request,
+                                    connector,
+                                    holdings,
+                                }));
+                                None
+                            }
+                            jig_core::Ask::ProcedureHoldings { task, step, members } => {
+                                let holdings = if connector == domain.config.forge_connector {
+                                    let mut collected = List::with_capacity(
+                                        u32::try_from(members.len()).expect("bounded procedure batch"),
+                                    );
+                                    let mut failed = false;
+                                    for member in members {
+                                        match forge_route::task_holdings(
+                                            domain,
+                                            env,
+                                            member.project,
+                                            member.root,
+                                            member.number,
+                                            member.executor,
+                                            &member.spec,
+                                            Some(task),
+                                        ) {
+                                            Some(holdings) => collected.push(holdings).expect("one per member"),
+                                            None => failed = true,
+                                        }
+                                    }
+                                    if failed { None } else { Some(collected.into_boxed()) }
+                                } else {
+                                    None
+                                };
+                                domain.work.push(Work::Core(jig_core::Event::ProcedureHoldings {
+                                    task,
+                                    step,
+                                    connector,
+                                    holdings,
+                                }));
+                                None
+                            }
+                            jig_core::Ask::ProjectGoal { goal } => {
+                                if connector == domain.config.forge_connector
+                                    && domain.forge.home(goal.project).is_some()
+                                {
+                                    domain.work.push(Work::ProjectGoal(goal));
+                                }
+                                None
+                            }
+                            jig_core::Ask::SubscriptionDone { request, key, subscription } => {
+                                if connector == domain.config.forge_connector {
+                                    if let Some(pending) = domain.forge_subscribing.remove(&request) {
+                                        let names = forge_route::watch_names(domain, &env.limits, &pending)
+                                            .expect("connector names preflighted at subscription");
+                                        let owner = pending.task;
+                                        domain
+                                            .work
+                                            .push(Work::Forge(forge::Event::Subscribe { subscription: pending }));
+                                        domain
+                                            .work
+                                            .push(Work::Forge(forge::Event::Names { task: owner, resources: names }));
+                                    }
+                                    decide_call(
+                                        domain,
+                                        &env.limits,
+                                        decision,
+                                        ReplyTo::new(request),
+                                        key,
+                                        CallAnswer::Subscribed { subscription },
+                                    );
+                                }
+                                None
+                            }
+                            jig_core::Ask::UnsubscriptionDone { request, key } => {
+                                if connector == domain.config.forge_connector {
+                                    if let Some((owner, topic)) = domain.forge_unsubscribing.remove(&request) {
+                                        domain.work.push(Work::Forge(forge::Event::Unsubscribe { task: owner, topic }));
+                                    }
+                                    decide_call(
+                                        domain,
+                                        &env.limits,
+                                        decision,
+                                        ReplyTo::new(request),
+                                        key,
+                                        CallAnswer::Unsubscribed,
+                                    );
+                                }
+                                None
+                            }
+                            jig_core::Ask::ClaimDone { task, attempt } => {
+                                if connector == domain.config.forge_connector {
+                                    let (writes, holders) = forge_route::claimed_writes(domain, env, task)
+                                        .expect("the admitted assignment retains its bounded held forge writes");
+                                    if !writes.is_empty() {
+                                        domain.work.push(Work::Forge(forge::Event::Claim {
+                                            task,
+                                            attempt,
+                                            writes,
+                                            holders,
+                                        }));
+                                    }
+                                    let key = &domain.assignments.get(&task).expect("claimed assignment").workspace.key;
+                                    let workstream =
+                                        u64::from_be_bytes(key.as_ref().try_into().expect("task-number workstream"));
+                                    emit(
+                                        decision,
+                                        &env.limits,
+                                        Delivery::Fleet(fleet::Event::Start {
+                                            kinds: fleet::Kinds::Workers,
+                                            reply_to: internal(task),
+                                            run: Token::new(task),
+                                            attempt: Token::new(attempt),
+                                            workstream,
+                                        }),
+                                    );
+                                }
+                                None
+                            }
+                            jig_core::Ask::DropSubscription { request } => {
+                                if connector == domain.config.forge_connector {
+                                    drop(domain.forge_subscribing.remove(&request));
+                                    drop(domain.forge_unsubscribing.remove(&request));
+                                }
+                                None
+                            }
+                            jig_core::Ask::RepairRefused { repair } => {
+                                if connector == domain.config.forge_connector
+                                    && let Some(repair) = repair
+                                    && let Some(owner) = domain.forge.queue_repair_owner(repair)
+                                {
+                                    domain.work.push(Work::Tasks(tasks::Event::Hold {
+                                        task: owner,
+                                        why: tasks::Hold::Effects,
+                                    }));
+                                }
+                                None
+                            }
+                            jig_core::Ask::DelegateRefused { task } => {
+                                if connector == domain.config.forge_connector
+                                    && let Some(task) = task
+                                    && let Some(row) = domain.forge.change(task)
+                                    && let Some((child, _)) = row.delegate
+                                {
+                                    domain.work.push(Work::Forge(forge::Event::DelegateRefused { task, child }));
+                                    domain
+                                        .work
+                                        .push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Procedure }));
+                                }
+                                None
+                            }
+                            jig_core::Ask::StartProcedure { context, step } => {
+                                let task = context.task;
+                                let code = match context.executor {
+                                    tasks::Executor::Procedure { code, .. } => code,
+                                    tasks::Executor::Agent { .. } | tasks::Executor::Person(_) => {
+                                        unreachable!("procedure route owns a procedure context")
+                                    }
+                                };
+                                if connector == domain.config.forge_connector && code == 2 {
+                                    if !forge_route::start_change(domain, env, &context) {
+                                        domain
+                                            .work
+                                            .push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
+                                    }
+                                } else {
+                                    emit(decision, &env.limits, Delivery::Procedure { task, step, connector, code });
+                                }
+                                None
+                            }
                         };
-                        let mut child = Queue::with_capacity(1);
-                        child.push(request);
-                        brief_outputs(domain, env, decision, &mut child);
-                    }
-                    jig_core::Request::Route(route) => match *route {
-                        jig_core::Route::Tasks(request) => {
-                            let mut child = Queue::with_capacity(1);
-                            child.push(*request);
-                            tasks_outputs(domain, env, decision, &mut child, person_proposal, task_escalation);
-                        }
-                        jig_core::Route::People(request) => {
+                        if let Some(request) = request {
                             let mut child = Queue::with_capacity(1);
                             child.push(request);
-                            people_outputs(domain, env, decision, &mut child);
-                        }
-                        jig_core::Route::Brief(request) => {
-                            let mut child = Queue::with_capacity(1);
-                            child.push(*request);
                             brief_outputs(domain, env, decision, &mut child);
                         }
-                        jig_core::Route::Fleet(request) => {
-                            let mut child = Queue::with_capacity(1);
-                            child.push(*request);
-                            fleet_outputs(domain, env, decision, &mut child);
-                        }
-                    },
+                    }
                     jig_core::Request::Held(held) => match *held {
                         jig_core::Held::Relay { task, attempt, previous, word } => {
                             emit(decision, &env.limits, Delivery::Relay { task, attempt, previous, word });
@@ -2357,13 +2357,420 @@ fn route_core_requests(
                         jig_core::Held::PeopleReply { to, sign_in, reply } => {
                             emit(decision, &env.limits, Delivery::WebReply { to, sign_in, reply });
                         }
+                        jig_core::Held::CallAnswer { to, key: _, part } => {
+                            let answer = CallAnswer::from_core(&part).expect("core call owns its complete answer");
+                            relay_call(domain, &env.limits, decision, to, answer);
+                        }
+                        jig_core::Held::ViewStart { run, attempt } => {
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::View(Box::new(views::Event::Started { task: run, attempt })),
+                            );
+                        }
+                        jig_core::Held::ViewFinished { task } => {
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::View(Box::new(views::Event::Finished { task: Token::new(task) })),
+                            );
+                        }
+                        jig_core::Held::ViewTaskPhase { task, trees, project, phase, priority } => {
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::View(Box::new(views::Event::TaskPhase {
+                                    task,
+                                    trees,
+                                    project,
+                                    phase,
+                                    priority,
+                                })),
+                            );
+                        }
+                        jig_core::Held::Result { person, task, words } => {
+                            emit(decision, &env.limits, Delivery::Result { person, task, words });
+                        }
+                        jig_core::Held::Assign { channel, run, attempt } => {
+                            let assignment =
+                                domain.assignments.remove(&run.raw()).expect("durable claim has prepared assignment");
+                            assert!(assignment.attempt == attempt.raw(), "assignment names current attempt");
+                            emit(decision, &env.limits, Delivery::Assigned { channel, assignment });
+                        }
+                        jig_core::Held::Acknowledge { channel, run, attempt } => {
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::Acknowledge { channel, task: run.raw(), attempt: attempt.raw() },
+                            );
+                        }
+                        jig_core::Held::TaskTerminalAcknowledged { task, attempt } => {
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::Fleet(fleet::Event::Acknowledge {
+                                    run: Token::new(task),
+                                    attempt: Token::new(attempt),
+                                }),
+                            );
+                        }
+                        jig_core::Held::TaskTurnKept { task, attempt, turn } => {
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::Fleet(fleet::Event::TurnKept {
+                                    run: Token::new(task),
+                                    attempt: Token::new(attempt),
+                                    turn,
+                                }),
+                            );
+                        }
+                        jig_core::Held::ViewTurn { task, attempt, turn } => {
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::View(Box::new(views::Event::Turn {
+                                    task: Token::new(task),
+                                    attempt: Token::new(attempt),
+                                    number: turn,
+                                })),
+                            );
+                        }
+                        jig_core::Held::AcknowledgeTurn { channel, run, attempt, turn } => {
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::AcknowledgeTurn { channel, task: run.raw(), attempt: attempt.raw(), turn },
+                            );
+                        }
+                        jig_core::Held::Cancel { channel, run, attempt } => {
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::Cancel { channel, task: run.raw(), attempt: attempt.raw() },
+                            );
+                        }
+                        jig_core::Held::Refuse { channel } => emit(decision, &env.limits, Delivery::Refuse { channel }),
+                        jig_core::Held::TurnBusy { channel, run, attempt, turn } => {
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::TurnBusy { channel, task: run.raw(), attempt: attempt.raw(), turn },
+                            );
+                        }
+                        jig_core::Held::Relayed { channel, run, attempt, call, answer } => {
+                            let Some(Payload::CallAnswer(answer)) = take_payload(domain, answer) else {
+                                unreachable!("fleet relays an owned call answer")
+                            };
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::CallAnswer { channel, task: run.raw(), attempt: attempt.raw(), call, answer },
+                            );
+                        }
+                        jig_core::Held::Inbound { channel, run, attempt, word } => {
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::Inbound { channel, task: run.raw(), attempt: attempt.raw(), word },
+                            );
+                        }
+                        jig_core::Held::StopRun { task, attempt } => {
+                            emit(decision, &env.limits, Delivery::Fleet(Core::stop_run(task, attempt)));
+                        }
                         jig_core::Held::NotesLoad { .. }
                         | jig_core::Held::NotesWritten { .. }
                         | jig_core::Held::NotesDeleted { .. } => {
                             unreachable!("the current application has no note caller")
                         }
                     },
-                    jig_core::Request::Now(_) => unreachable!("the current application has no immediate core route"),
+                    jig_core::Request::Now(now) => match *now {
+                        jig_core::Now::SignInRefused { to } => {
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::WebReply {
+                                    to,
+                                    sign_in: None,
+                                    reply: people::Reply::Refused(people::Refusal::Limit),
+                                },
+                            );
+                        }
+                        jig_core::Now::WatchRefused { .. } => {
+                            unreachable!("volatile watch route handles its own refusal")
+                        }
+                        jig_core::Now::DropPayload { payload } => drop(take_payload(domain, payload)),
+                        jig_core::Now::TurnPayload { run, attempt, turn, body } => {
+                            let payload = domain.payloads.get(Id::from_token(body)).expect("fleet returns owned token");
+                            let payload = match payload.as_ref().expect("fleet returns owned payload") {
+                                Payload::Turn { body: payload, .. } => payload,
+                                Payload::Answer { .. } | Payload::Call { .. } | Payload::CallAnswer(_) => {
+                                    unreachable!("fleet returns turn family")
+                                }
+                            };
+                            domain.work.push(Work::Core(jig_core::Event::TurnPayload {
+                                run,
+                                attempt,
+                                turn,
+                                body,
+                                read: payload.read,
+                                cumulative: payload.cumulative,
+                            }));
+                        }
+                        jig_core::Now::AnswerPayload { run, attempt, payload } => {
+                            let body = domain.payloads.get(Id::from_token(payload)).expect("fleet returns owned token");
+                            let (cumulative, end, saved) = match body.as_ref().expect("fleet returns owned payload") {
+                                Payload::Answer { cumulative, end, saved, .. } => {
+                                    (*cumulative, end.clone(), saved.clone())
+                                }
+                                Payload::Turn { .. } | Payload::Call { .. } | Payload::CallAnswer(_) => {
+                                    unreachable!("fleet returns answer family")
+                                }
+                            };
+                            let (saved, invalid_saved) = match saved {
+                                Some(tags) => {
+                                    match forge_route::saved_resources(domain.config.forge_connector, &tags) {
+                                        Some(resources) => (Some(resources), false),
+                                        None => (None, true),
+                                    }
+                                }
+                                None => (None, false),
+                            };
+                            domain.work.push(Work::Core(jig_core::Event::AnswerPayload {
+                                run,
+                                attempt,
+                                payload,
+                                cumulative,
+                                end,
+                                saved,
+                                invalid_saved,
+                            }));
+                        }
+                        jig_core::Now::AcceptedTurn { payload, task, attempt, turn, accepted } => {
+                            let payload = take_payload(domain, payload).expect("charged turn owns payload");
+                            let body = match payload {
+                                Payload::Turn { body, .. } => body,
+                                Payload::Answer { .. } | Payload::Call { .. } | Payload::CallAnswer(_) => {
+                                    unreachable!("turn family")
+                                }
+                            };
+                            domain.work.push(Work::Core(jig_core::Event::AcceptedTurn {
+                                task,
+                                attempt,
+                                turn,
+                                accepted,
+                                cumulative: body.cumulative,
+                                read: body.read,
+                                transcript: body.transcript,
+                            }));
+                        }
+                        jig_core::Now::RefusedPayload { request, problem } => {
+                            let payload = match take_payload(domain, request) {
+                                Some(Payload::Turn { task, attempt, body }) => {
+                                    Some(jig_core::PayloadRefusal::Turn { task, attempt, turn: body.number })
+                                }
+                                Some(Payload::Answer { task, attempt, .. }) => {
+                                    Some(jig_core::PayloadRefusal::Answer { task, attempt })
+                                }
+                                Some(Payload::Call { .. } | Payload::CallAnswer(_)) => {
+                                    unreachable!("task refusal owns a task payload")
+                                }
+                                None => None,
+                            };
+                            domain.work.push(Work::Core(jig_core::Event::RefusedPayload { request, problem, payload }));
+                        }
+                        jig_core::Now::Activate { context } => {
+                            let ready = domain.ready();
+                            domain.work.push(Work::Core(jig_core::Event::Activate { context, ready }));
+                        }
+                        jig_core::Now::PrepareAgent { context } => {
+                            let (transcript_waiter, busy) = if context.ever_turned {
+                                match domain.result_reads.insert(Some(Read::Transcript { task: context.task })) {
+                                    Ok(waiter) => (Some(waiter.token()), false),
+                                    Err(_) => (None, true),
+                                }
+                            } else {
+                                (None, false)
+                            };
+                            domain.work.push(Work::Core(jig_core::Event::PreparedAgent {
+                                context,
+                                transcript_waiter,
+                                busy,
+                            }));
+                        }
+                        jig_core::Now::StartPreparation { task, transcript_waiter } => {
+                            domain.work.push(Work::Tasks(tasks::Event::Prepare { reply_to: internal(task), task }));
+                            match transcript_waiter {
+                                Some(waiter) => emit(
+                                    decision,
+                                    &env.limits,
+                                    Delivery::Load { waiter, range: Range::TaskTranscript { task }, after: None },
+                                ),
+                                None => {
+                                    if let Some((waiter, first)) = begin_dependency_read(domain, task) {
+                                        emit(
+                                            decision,
+                                            &env.limits,
+                                            Delivery::Load {
+                                                waiter,
+                                                range: Range::TaskResult { task: first },
+                                                after: None,
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        jig_core::Now::HistoricalProposal { request, person, project, proposer, proposal } => {
+                            proposals::historical_begin(
+                                domain, env, decision, request, person, project, proposer, proposal,
+                            );
+                        }
+                        jig_core::Now::BriefCorePlanned { task, parent, sections } => {
+                            finish_brief_plan(domain, env, task, parent, sections);
+                        }
+                        jig_core::Now::WorkspaceRequest { task, attempt, context } => {
+                            let workspace = forge_route::run_workspace(domain, env, &context, attempt);
+                            let writes = match workspace {
+                                Some(workspace) => {
+                                    match forge_route::claim_names(domain, &env.limits, task, &workspace.names) {
+                                        Some(claim_names) => {
+                                            let writes = workspace.writes.clone();
+                                            let inserted = match domain
+                                                .run_workspaces
+                                                .insert(task, PreparedWorkspace { workspace, claim_names })
+                                            {
+                                                Ok(None) => true,
+                                                Ok(Some(_)) | Err(_) => false,
+                                            };
+                                            assert!(inserted, "one workspace flight per task");
+                                            Some(writes)
+                                        }
+                                        None => None,
+                                    }
+                                }
+                                None => None,
+                            };
+                            domain.work.push(Work::Core(jig_core::Event::WorkspacePrepared { task, attempt, writes }));
+                        }
+                        jig_core::Now::RunPreparationFailed { task } => {
+                            drop(domain.brief_sections.remove(&task));
+                            drop(domain.run_workspaces.remove(&task));
+                        }
+                        jig_core::Now::RunPrepared {
+                            task,
+                            attempt,
+                            charter,
+                            run,
+                            inbox,
+                            saved,
+                            transcript,
+                            answered,
+                            grant,
+                        } => {
+                            let sections = domain.brief_sections.remove(&task).expect("prepared brief sections");
+                            let PreparedWorkspace { workspace, claim_names } =
+                                domain.run_workspaces.remove(&task).expect("prepared connector workspace");
+                            let mut records = List::with_capacity(domain.limits.call_records);
+                            for key in answered {
+                                let answer = call_answer(domain, key).expect("live call part has its connector answer");
+                                records.push(crate::CallRecord { key, answer }).expect("retained call bound");
+                            }
+                            let assignment = Assignment {
+                                task,
+                                attempt,
+                                charter,
+                                run,
+                                sections,
+                                inbox,
+                                saved: forge_route::saved_tags(&saved, domain.config.forge_connector)
+                                    .expect("task saved names were admitted by the root"),
+                                workspace: workspace.workspace.clone(),
+                                transcript,
+                                answered: records.into_boxed(),
+                                grant,
+                            };
+                            let budget = assignment.run.budget;
+                            assert!(
+                                domain.assignments.insert(task, assignment).is_ok(),
+                                "assignment fits live task room"
+                            );
+                            if workspace.names.is_empty() {
+                                domain.work.push(Work::Core(jig_core::Event::ClaimPrepared {
+                                    task,
+                                    attempt,
+                                    budget,
+                                    writes: Box::new([]),
+                                }));
+                            } else {
+                                let mut hub_writes = List::with_capacity(env.limits.tasks.holdings);
+                                for name in &workspace.names {
+                                    let resource =
+                                        forge_route::hub_name(domain.config.forge_connector, name, &env.limits.tasks)
+                                            .expect("admitted forge branch name fits the hub's bound");
+                                    hub_writes.push(resource).expect("workspace write bound fits hub");
+                                }
+                                domain.work.push(Work::Forge(forge::Event::Names { task, resources: claim_names }));
+                                for name in workspace.own_holds {
+                                    domain.work.push(Work::Forge(forge::Event::Hold {
+                                        task,
+                                        resource: name,
+                                        from: None,
+                                    }));
+                                }
+                                domain.work.push(Work::Core(jig_core::Event::ClaimPrepared {
+                                    task,
+                                    attempt,
+                                    budget,
+                                    writes: hub_writes.into_boxed(),
+                                }));
+                            }
+                        }
+                        jig_core::Now::CompleteBrief { brief, order } => {
+                            let mut child = Queue::with_capacity(1);
+                            child.push(brief::GatherRequest::Complete { brief, order });
+                            brief_outputs(domain, env, decision, &mut child);
+                        }
+                        jig_core::Now::ProcedureDelegateOutcome { task, step, child } => {
+                            if let Some(kind) = domain.forge_delegating.remove(&(task, step))
+                                && let Some(child) = child
+                            {
+                                domain.work.push(Work::Forge(forge::Event::Delegated { task, child, kind }));
+                            }
+                        }
+                        jig_core::Now::HistoricalEscalation { request, person, project, task, revision } => {
+                            escalation::historical_begin(
+                                domain, env, decision, request, person, project, task, revision,
+                            );
+                        }
+                        jig_core::Now::EscalationInspection { waiter, context } => {
+                            escalation::inspected(domain, waiter, context);
+                        }
+                        jig_core::Now::EscalationReply { to, person, context } => {
+                            emit(decision, &env.limits, Delivery::EscalationReply { to, person, context });
+                        }
+                        jig_core::Now::EscalationRefused { to, why } => {
+                            emit(
+                                decision,
+                                &env.limits,
+                                Delivery::WebReply { to, sign_in: None, reply: people::Reply::Refused(why) },
+                            );
+                        }
+                        jig_core::Now::CallPayload { to, run, attempt, body } => {
+                            relay_payload(domain, env, decision, to, run, attempt, body);
+                        }
+                        jig_core::Now::DropAssignment { task } => {
+                            drop(domain.assignments.remove(&task));
+                        }
+                        jig_core::Now::RestoreRefused => domain.startup = Startup::Failed,
+                        jig_core::Now::Account(_)
+                        | jig_core::Now::View(_)
+                        | jig_core::Now::NotesIndexed { .. }
+                        | jig_core::Now::NotesRecalled { .. }
+                        | jig_core::Now::NotesRefused { .. } => {
+                            unreachable!("the current application has no immediate core route")
+                        }
+                    },
                     jig_core::Request::Decided => {}
                 }
             }
@@ -2377,579 +2784,50 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
             break;
         };
         match work {
+            Work::Core(event) => {
+                let routed = jig_core::step(&mut domain.core, &environment_core(env), event);
+                route_core_requests(domain, env, decision, routed);
+            }
             Work::Tasks(event) => {
                 let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::Tasks(event));
-                route_core_requests(domain, env, decision, routed, false, false);
-            }
-            Work::PersonProposal(event) => {
-                let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::Tasks(event));
-                route_core_requests(domain, env, decision, routed, true, false);
-            }
-            Work::TaskEscalation(event) => {
-                let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::Tasks(event));
-                route_core_requests(domain, env, decision, routed, false, true);
+                route_core_requests(domain, env, decision, routed);
             }
             Work::People(event) => {
                 let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::People(event));
-                route_core_requests(domain, env, decision, routed, false, false);
+                route_core_requests(domain, env, decision, routed);
             }
             Work::Fleet(event) => {
                 let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::Fleet(event));
-                route_core_requests(domain, env, decision, routed, false, false);
+                route_core_requests(domain, env, decision, routed);
             }
             Work::Brief(event) => {
                 let routed = jig_core::step(&mut domain.core, &environment_core(env), jig_core::Event::Brief(event));
-                route_core_requests(domain, env, decision, routed, false, false);
+                route_core_requests(domain, env, decision, routed);
             }
-            Work::StartBrief { task } => start_brief(domain, env, task),
+            Work::StartBrief { task } => domain.work.push(Work::Core(jig_core::Event::StartBrief { task })),
             Work::Forge(event) => {
                 let mut out = Queue::with_capacity(forge::max_out(&env.limits.forge));
                 forge::step(&mut domain.forge, &environment_forge(env), event, &mut out);
                 forge_route::outputs(domain, env, decision, &mut out);
             }
-            Work::TasksClaim { task, attempt, writes } => {
-                if domain.core.claiming.get(&task) == Some(&attempt) {
-                    let budget = domain.assignments.get(&task).expect("claim has assignment").run.budget;
-                    domain.work.push(Work::Tasks(tasks::Event::Claim {
-                        reply_to: internal(task),
-                        task,
-                        attempt,
-                        budget,
-                        writes,
-                    }));
-                }
-            }
             Work::ProjectGoal(goal) => forge_route::project_goal(domain, env, &goal),
             Work::GoalSubscribe(subscriber) => forge_route::goal_subscribed(domain, env, subscriber),
-            Work::Activate(task) => activate(domain, env, decision, task),
+            Work::Activate(context) => {
+                let ready = domain.ready();
+                let routed = jig_core::step(
+                    &mut domain.core,
+                    &environment_core(env),
+                    jig_core::Event::Activate { context, ready },
+                );
+                route_core_requests(domain, env, decision, routed);
+            }
             Work::EscalationLoaded { waiter, rows } => escalation::loaded(domain, env, waiter, rows),
             Work::EscalationFailed { waiter } => escalation::failed(domain, waiter),
             Work::ProposalLoaded { waiter, rows } => proposals::historical_loaded(domain, waiter, rows),
             Work::ProposalFailed { waiter } => proposals::historical_failed(domain, waiter),
-            Work::DelegateValidated { to, key, batch, stubs } => {
-                delegate_call(domain, env, decision, ReplyTo::new(to), key, batch, true, stubs);
-            }
-            Work::DelegateInputRefused { to, key } => decide_call(
-                domain,
-                &env.limits,
-                decision,
-                ReplyTo::new(to),
-                key,
-                CallAnswer::DelegationRefused(tasks::Problem {
-                    task: Some(key.task),
-                    why: tasks::Refusal::Inputs,
-                    blocked_by: None,
-                }),
-            ),
         }
     }
     assert!(domain.work.is_empty(), "finite synchronous root handoffs finish within the configured route bound");
-}
-
-#[expect(clippy::too_many_arguments, reason = "one authenticated message route with optional question identity")]
-fn route_person_message(
-    domain: &mut Domain,
-    env: &Env<Limits>,
-    request: Token,
-    person: u64,
-    project: u32,
-    task: u64,
-    question: Option<u64>,
-    words: Box<[u8]>,
-) {
-    match domain.core.person_message(jig_core::PersonMessage {
-        request,
-        person,
-        project,
-        task,
-        question,
-        words,
-        at: env.wall,
-    }) {
-        Ok(event) => domain.work.push(Work::Tasks(event)),
-        Err(why) => {
-            domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Refused(why) }));
-        }
-    }
-}
-
-fn route_person_priorities(
-    domain: &mut Domain,
-    request: Token,
-    person: u64,
-    project: u32,
-    role: Option<people::Role>,
-    goals: Box<[(u64, u32)]>,
-) {
-    let event = match domain.core.prioritise(request, person, project, role, goals, domain.limits.tasks.tasks) {
-        Ok(event) => event,
-        Err(why) => return person_control_refused(domain, request, why),
-    };
-    domain.work.push(Work::Tasks(event));
-}
-
-#[expect(clippy::too_many_lines, reason = "the keyed people routes each retain an exhaustive typed branch")]
-fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<people::Request>) {
-    for _ in 0..out.len() {
-        match out.pop().expect("people output count") {
-            people::Request::ServiceMade { request, outcome } => {
-                domain.work.push(Work::People(people::Event::Decided { request, outcome }));
-            }
-            people::Request::Save { .. } | people::Request::Erase { .. } | people::Request::Reply { .. } => {
-                unreachable!("the core marks party writes and held replies")
-            }
-            people::Request::Route { request, person, project, role, ask } => match *ask {
-                people::Ask::Watch { .. } => unreachable!("watch routes before the decision loop"),
-                people::Ask::EditNote { scope, .. } => {
-                    let allowed = note_authorized(domain, project, role, &scope);
-                    domain.work.push(Work::People(people::Event::Decided {
-                        request,
-                        outcome: people::Outcome::Refused(if allowed {
-                            people::Refusal::NotOffered
-                        } else {
-                            people::Refusal::Authority
-                        }),
-                    }));
-                }
-                people::Ask::MakeService { role: service_role, .. } => {
-                    let outcome = match roles::allowed(domain, person, project) {
-                        Ok(())
-                            if domain.core.authority.role(project, escalation::role_number(service_role)).is_some() =>
-                        {
-                            match crate::fresh(&mut domain.core.counters, Family::Person) {
-                                Some(candidate) => {
-                                    domain
-                                        .work
-                                        .push(Work::People(people::Event::MakeService { request, person: candidate }));
-                                    None
-                                }
-                                None => Some(people::Outcome::Refused(people::Refusal::Limit)),
-                            }
-                        }
-                        Ok(()) => Some(people::Outcome::Refused(people::Refusal::Unknown)),
-                        Err(refusal) => Some(people::Outcome::Refused(refusal)),
-                    };
-                    if let Some(outcome) = outcome {
-                        domain.work.push(Work::People(people::Event::Decided { request, outcome }));
-                    }
-                }
-                people::Ask::Adopt { adoption, .. } => {
-                    let parsed = match roles::allowed(domain, person, project) {
-                        Ok(()) => Ok(forge_route::parse_adoption(project, adoption, domain.config.forge_connector)),
-                        Err(refusal) => Err(refusal),
-                    };
-                    match parsed {
-                        Ok(Some(adoption)) if domain.adoption_restore.len() < env.limits.forge.adoptions => {
-                            let previous = domain.forge.repository(adoption.provider).cloned();
-                            assert!(
-                                domain.adoption_restore.insert(request, previous) == Ok(None),
-                                "one keyed adoption flight"
-                            );
-                            domain.work.push(Work::Forge(forge::Event::Adopt { reply_to: request, adoption }));
-                        }
-                        Ok(Some(_)) => domain.work.push(Work::People(people::Event::Decided {
-                            request,
-                            outcome: people::Outcome::Refused(people::Refusal::Busy),
-                        })),
-                        Ok(None) => domain.work.push(Work::People(people::Event::Decided {
-                            request,
-                            outcome: people::Outcome::Refused(people::Refusal::Unknown),
-                        })),
-                        Err(refusal) => domain.work.push(Work::People(people::Event::Decided {
-                            request,
-                            outcome: people::Outcome::Refused(refusal),
-                        })),
-                    }
-                }
-                people::Ask::SetGoal { spec, charter, budget, priority, .. } => {
-                    goals::start(
-                        domain,
-                        env,
-                        request,
-                        person,
-                        project,
-                        role.expect("goal membership admitted"),
-                        spec,
-                        charter,
-                        budget,
-                        priority,
-                    );
-                }
-                control @ (people::Ask::Stop { .. } | people::Ask::Cancel { .. } | people::Ask::Release { .. }) => {
-                    route_person_control(domain, request, person, project, role, control);
-                }
-                task_ask @ (people::Ask::TakePerson { .. }
-                | people::Ask::HandBackPerson { .. }
-                | people::Ask::AnswerPerson { .. }) => {
-                    route_person_task(domain, request, person, project, role, task_ask);
-                }
-                people::Ask::Say { task, words, .. } => {
-                    route_person_message(domain, env, request, person, project, task, None, words);
-                }
-                people::Ask::AnswerQuestion { task, question, words, .. } => {
-                    route_person_message(domain, env, request, person, project, task, Some(question), words);
-                }
-                people::Ask::Prioritise { goals, .. } => {
-                    route_person_priorities(domain, request, person, project, role, goals);
-                }
-                people::Ask::Amend { task, amendment, .. } => {
-                    amendments::begin(domain, env, request, person, role, project, task, amendment);
-                }
-                chat_ask @ people::Ask::StartChat { .. } => {
-                    let Some(role) = role else { unreachable!("chat membership admitted") };
-                    make_chat(domain, env, request, person, project, role, chat_ask);
-                }
-                people::Ask::SetRoles { holdings, .. } => {
-                    roles::begin(domain, env, decision, request, person, project, holdings);
-                }
-                people::Ask::ChangePolicy { change, .. } => {
-                    policy::change(domain, env, decision, request, person, project, change);
-                }
-                people::Ask::SetPool { person: beneficiary, budget, .. } => {
-                    policy::pool(domain, env, decision, request, person, project, beneficiary, budget);
-                }
-                people::Ask::Move { task, reason, .. } => {
-                    move_for_person(domain, env, request, person, role, project, task, reason);
-                }
-                people::Ask::DecideEscalation { task, revision, decision, .. } => {
-                    escalation::begin(domain, request, person, role, project, task, revision, decision);
-                }
-                people::Ask::DecideProposal { proposer, proposal, decision: choice, .. } => {
-                    if domain.core.tasks.person_proposal(proposer, proposal).is_some() {
-                        goals::decide(domain, env, request, person, role, project, proposer, proposal, choice);
-                    } else if domain.core.tasks.proposal(proposer, proposal).is_some() {
-                        proposals::person_decide(
-                            domain, env, decision, request, person, role, project, proposer, proposal, choice,
-                        );
-                    } else {
-                        proposals::historical_begin(
-                            domain, env, decision, request, person, project, proposer, proposal,
-                        );
-                    }
-                }
-            },
-            people::Request::RolesApplied { .. } => {
-                unreachable!("serialized roles route consumes application terminal")
-            }
-            people::Request::RolesRefused { .. } | people::Request::RestoreRefused { .. } => {
-                domain.startup = Startup::Failed;
-            }
-        }
-    }
-}
-
-fn route_person_task(
-    domain: &mut Domain,
-    request: Token,
-    person: u64,
-    project: u32,
-    role: Option<people::Role>,
-    ask: people::Ask,
-) {
-    match domain.core.person_task(request, person, project, role, ask) {
-        Ok(event) => domain.work.push(Work::Tasks(event)),
-        Err(why) => {
-            domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Refused(why) }));
-        }
-    }
-}
-
-fn person_control_refused(domain: &mut Domain, request: Token, why: people::Refusal) {
-    domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Refused(why) }));
-}
-
-fn route_person_control(
-    domain: &mut Domain,
-    request: Token,
-    person: u64,
-    project: u32,
-    role: Option<people::Role>,
-    ask: people::Ask,
-) {
-    let task = match domain.core.control_admit(
-        &ask,
-        person,
-        project,
-        role,
-        domain.limits.tasks.depth,
-        domain.limits.tasks.result_bytes,
-    ) {
-        Ok(task) => task,
-        Err(why) => return person_control_refused(domain, request, why),
-    };
-    match ask {
-        people::Ask::Stop { .. } => {
-            domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::StoppedBy { party: person } }));
-            domain
-                .work
-                .push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Stopped { task } }));
-        }
-        people::Ask::Cancel { reason, .. } => {
-            assert!(
-                domain.core.person_tasks.insert(request, PersonTaskRoute::Cancel(task)) == Ok(None),
-                "one cancel route"
-            );
-            domain.work.push(Work::Tasks(tasks::Event::Control {
-                reply_to: ReplyTo::new(request),
-                by: tasks::Party::Person(person),
-                task,
-                control: tasks::Control::Cancel { reason },
-            }));
-        }
-        people::Ask::Release { .. } => {
-            assert!(
-                domain.core.person_tasks.insert(request, PersonTaskRoute::Release(task)) == Ok(None),
-                "one release route"
-            );
-            domain.work.push(Work::Tasks(tasks::Event::Control {
-                reply_to: ReplyTo::new(request),
-                by: tasks::Party::Person(person),
-                task,
-                control: tasks::Control::Release,
-            }));
-        }
-        people::Ask::TakePerson { .. }
-        | people::Ask::HandBackPerson { .. }
-        | people::Ask::AnswerPerson { .. }
-        | people::Ask::Move { .. }
-        | people::Ask::DecideProposal { .. }
-        | people::Ask::Say { .. }
-        | people::Ask::AnswerQuestion { .. }
-        | people::Ask::Prioritise { .. }
-        | people::Ask::Amend { .. }
-        | people::Ask::Watch { .. }
-        | people::Ask::EditNote { .. }
-        | people::Ask::MakeService { .. }
-        | people::Ask::SetRoles { .. }
-        | people::Ask::Adopt { .. }
-        | people::Ask::ChangePolicy { .. }
-        | people::Ask::SetPool { .. }
-        | people::Ask::DecideEscalation { .. }
-        | people::Ask::StartChat { .. }
-        | people::Ask::SetGoal { .. } => {
-            unreachable!("control route owns its ask")
-        }
-    }
-}
-
-#[expect(clippy::too_many_arguments, reason = "one authenticated keyed move carries its person, project and target")]
-fn move_for_person(
-    domain: &mut Domain,
-    env: &Env<Limits>,
-    request: Token,
-    person: u64,
-    role: Option<people::Role>,
-    project: u32,
-    task: u64,
-    reason: Box<[u8]>,
-) {
-    if let Err(why) =
-        domain.core.move_admit(person, role, project, task, env.limits.tasks.tree_tasks, env.limits.tasks.depth)
-    {
-        domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Refused(why) }));
-        return;
-    }
-    assert!(domain.core.moving.insert(request, task) == Ok(None), "one move flight per keyed request");
-    domain.work.push(Work::Tasks(tasks::Event::Move {
-        reply_to: ReplyTo::new(request),
-        task,
-        person,
-        period: domain.core.settings.period,
-        pool_budget: domain.core.settings.person_budget,
-        period_budget: domain.core.settings.period_budget,
-        reason,
-    }));
-}
-
-fn make_chat(
-    domain: &mut Domain,
-    env: &Env<Limits>,
-    request: Token,
-    person: u64,
-    project: u32,
-    role: people::Role,
-    ask: people::Ask,
-) {
-    if let Err(why) = domain.core.chat_admit(project, person, role, env.limits.tasks.tree_tasks) {
-        domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Refused(why) }));
-        return;
-    }
-    let pool = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
-    let period = tasks::Funder::Period { project, period: domain.core.settings.period };
-    if domain.core.tasks.funding(period).is_none() {
-        domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
-            reply_to: internal(0),
-            project,
-            period: domain.core.settings.period,
-            budget: domain.core.settings.period_budget,
-        }));
-    }
-    if domain.core.tasks.funding(pool).is_none() {
-        domain.work.push(Work::Tasks(tasks::Event::CarvePool {
-            reply_to: internal(0),
-            project,
-            person,
-            period: domain.core.settings.period,
-            budget: domain.core.settings.person_budget,
-        }));
-    }
-    let Some(number) = crate::fresh(&mut domain.core.counters, Family::Task) else {
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Limit),
-        }));
-        return;
-    };
-    assert!(domain.core.made.insert(request, (number, false)) == Ok(None), "people route has unique pending key");
-    let words = match ask {
-        people::Ask::StartChat { words, .. } => words,
-        people::Ask::DecideEscalation { .. }
-        | people::Ask::DecideProposal { .. }
-        | people::Ask::Watch { .. }
-        | people::Ask::EditNote { .. }
-        | people::Ask::MakeService { .. }
-        | people::Ask::SetRoles { .. }
-        | people::Ask::Adopt { .. }
-        | people::Ask::ChangePolicy { .. }
-        | people::Ask::SetPool { .. }
-        | people::Ask::Say { .. }
-        | people::Ask::AnswerQuestion { .. }
-        | people::Ask::Prioritise { .. }
-        | people::Ask::Amend { .. }
-        | people::Ask::Move { .. }
-        | people::Ask::TakePerson { .. }
-        | people::Ask::HandBackPerson { .. }
-        | people::Ask::AnswerPerson { .. }
-        | people::Ask::Stop { .. }
-        | people::Ask::Cancel { .. }
-        | people::Ask::Release { .. }
-        | people::Ask::SetGoal { .. } => {
-            unreachable!("other asks routed separately")
-        }
-    };
-    let spec = tasks::Spec { words, parameters: Box::new([]), inputs: Box::new([]) };
-    let Some(holdings) = forge_route::task_holdings(
-        domain,
-        env,
-        project,
-        number,
-        number,
-        tasks::Executor::Agent { charter: domain.core.settings.charter },
-        &spec,
-        None,
-    ) else {
-        let _: Option<(u64, bool)> = domain.core.made.remove(&request);
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Limit),
-        }));
-        return;
-    };
-    domain.work.push(Work::Tasks(tasks::Event::Make {
-        reply_to: ReplyTo::new(request),
-        creator: tasks::Party::Person(person),
-        batch: Box::new([tasks::New {
-            number,
-            project,
-            executor: tasks::Executor::Agent { charter: domain.core.settings.charter },
-            spec,
-            contract: tasks::Contract::Report { words: env.limits.tasks.result_bytes },
-            authority: task_authority(&domain.core.settings.chat_authority),
-            numbers: tasks::Numbers {
-                budget: domain.core.settings.chat_authority.budget.spend,
-                spent: 0,
-                spent_below: 0,
-                reserved: 0,
-            },
-            funder: pool,
-            dependencies: Box::new([]),
-            holdings,
-            wake: tasks::WakePolicy::DEFAULT,
-            recurring: None,
-            tracked: None,
-        }]),
-    }));
-}
-
-/// Consume the actual child activation context for authority/account readiness and the person-chat
-/// brief; retain only credential waits and drop the context on claim/failure.
-fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, task: Box<tasks::RunContext>) {
-    let number = task.task;
-    if !domain.ready() {
-        remember_due(domain, task);
-        return;
-    }
-    if domain.core.tasks.recurring_template(number).is_some() {
-        return;
-    }
-    match task.executor {
-        tasks::Executor::Person(_) => return,
-        tasks::Executor::Procedure { connector, code: 2 } if connector == domain.config.forge_connector => {
-            if !forge_route::start_change(domain, env, &task) {
-                domain.work.push(Work::Tasks(tasks::Event::Hold { task: number, why: tasks::Hold::Effects }));
-            }
-            return;
-        }
-        tasks::Executor::Procedure { connector, code } => {
-            let Some(step) = task.previous_attempt.checked_add(1) else {
-                domain.work.push(Work::Tasks(tasks::Event::Hold { task: number, why: tasks::Hold::Effects }));
-                return;
-            };
-            emit(decision, &env.limits, Delivery::Procedure { task: number, step, connector, code });
-            return;
-        }
-        tasks::Executor::Agent { .. } => {}
-    }
-    match domain.core.run_admission(&task, env.wall, Box::new([])) {
-        jig_core::RunAdmission::Allow => {}
-        jig_core::RunAdmission::Account => {
-            remember_due(domain, task);
-            return;
-        }
-        jig_core::RunAdmission::Hold(why) => {
-            domain.work.push(Work::Tasks(tasks::Event::Hold { task: number, why }));
-            return;
-        }
-    }
-    let previous_attempt = task.previous_attempt;
-    let has_transcript = task.ever_turned;
-    let waiter = if has_transcript {
-        match domain.result_reads.insert(Some(Read::Transcript { task: number })) {
-            Ok(waiter) => Some(waiter),
-            Err(_) => {
-                remember_due(domain, task);
-                return;
-            }
-        }
-    } else {
-        None
-    };
-    assert!(domain.core.contexts.insert(number, task).is_ok(), "bounded activation context");
-    domain.core.begin_transcript(number, previous_attempt);
-    domain.work.push(Work::Tasks(tasks::Event::Prepare { reply_to: internal(number), task: number }));
-    match waiter {
-        Some(waiter) => emit(
-            decision,
-            &env.limits,
-            Delivery::Load { waiter: waiter.token(), range: Range::TaskTranscript { task: number }, after: None },
-        ),
-        None => {
-            if let Some((waiter, first)) = begin_dependency_read(domain, number) {
-                emit(
-                    decision,
-                    &env.limits,
-                    Delivery::Load { waiter, range: Range::TaskResult { task: first }, after: None },
-                );
-            }
-        }
-    }
-}
-
-fn retire_calls(domain: &mut Domain, limits: &Limits, decision: &mut Decision, task: u64, attempt: u64, turn: u32) {
-    for key in domain.core.retire_calls(task, attempt, turn, limits.call_records) {
-        let _connector = domain.connector_calls.remove(&key);
-        save(decision, limits, Write::Erase(Key::Call(key)));
-    }
 }
 
 fn call_answer(domain: &Domain, key: CallKey) -> Option<CallAnswer> {
@@ -3176,213 +3054,6 @@ fn decide_call(
     relay_call(domain, limits, decision, to, answer);
 }
 
-#[expect(clippy::too_many_arguments, reason = "the named message route carries root, call and whole words")]
-fn message_call(
-    domain: &mut Domain,
-    env: &Env<Limits>,
-    decision: &mut Decision,
-    to: ReplyTo,
-    key: CallKey,
-    target: u64,
-    form: MessageForm,
-    words: Box<[u8]>,
-) {
-    let Some(context) = domain.core.tasks.delegation(key.task) else {
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::MessageRefused(tasks::Problem {
-                task: Some(key.task),
-                why: tasks::Refusal::Unknown,
-                blocked_by: None,
-            }),
-        );
-        return;
-    };
-    let Some(number) = crate::fresh(&mut domain.core.counters, Family::Message) else {
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::MessageRefused(tasks::Problem {
-                task: Some(target),
-                why: tasks::Refusal::Busy,
-                blocked_by: None,
-            }),
-        );
-        return;
-    };
-    let token = to.into_token();
-    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
-    assert!(domain.core.routing_calls.insert(token, RoutedCall::Message(key)) == Ok(None), "one live routed call");
-    domain.work.push(Work::Tasks(tasks::Event::Message {
-        reply_to: ReplyTo::new(token),
-        project: context.project,
-        task: target,
-        word: tasks::Word {
-            number,
-            from: tasks::Party::Task(key.task),
-            kind: match form {
-                MessageForm::Words => tasks::MessageKind::Words,
-                MessageForm::Question => tasks::MessageKind::Question,
-                MessageForm::Answer { question } => tasks::MessageKind::Answer { question },
-            },
-            words,
-            at: env.wall,
-            hits: 1,
-            eligible: false,
-        },
-    }));
-}
-
-fn introduce_call(domain: &mut Domain, to: ReplyTo, key: CallKey, left: u64, right: u64) {
-    let token = to.into_token();
-    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
-    assert!(domain.core.routing_calls.insert(token, RoutedCall::Introduce(key)) == Ok(None), "one live routed call");
-    domain.work.push(Work::Tasks(tasks::Event::Introduce { reply_to: ReplyTo::new(token), by: key.task, left, right }));
-}
-
-fn subscribe_call(
-    domain: &mut Domain,
-    env: &Env<Limits>,
-    decision: &mut Decision,
-    to: ReplyTo,
-    key: CallKey,
-    kind: tasks::SubscriptionKind,
-) {
-    let Some(subscription) = crate::fresh(&mut domain.core.counters, Family::Message) else {
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::SubscriptionRefused(tasks::Problem {
-                task: Some(key.task),
-                why: tasks::Refusal::Busy,
-                blocked_by: None,
-            }),
-        );
-        return;
-    };
-    let token = to.into_token();
-    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
-    assert!(
-        domain.core.routing_calls.insert(token, RoutedCall::Subscribe { key, subscription }) == Ok(None),
-        "one live routed call"
-    );
-    domain.work.push(Work::Tasks(tasks::Event::Subscribe {
-        reply_to: ReplyTo::new(token),
-        task: key.task,
-        subscription: tasks::Subscription { number: subscription, kind },
-    }));
-}
-
-fn unsubscribe_call(domain: &mut Domain, to: ReplyTo, key: CallKey, subscription: u64) {
-    let token = to.into_token();
-    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
-    assert!(domain.core.routing_calls.insert(token, RoutedCall::Unsubscribe(key)) == Ok(None), "one live routed call");
-    if let Some(topic) = domain.forge.subscription(key.task, subscription) {
-        assert!(domain.forge_unsubscribing.insert(token, (key.task, topic)) == Ok(None), "one connector unsubscribe");
-    }
-    domain.work.push(Work::Tasks(tasks::Event::Unsubscribe {
-        reply_to: ReplyTo::new(token),
-        task: key.task,
-        subscription,
-    }));
-}
-
-fn control_call(domain: &mut Domain, to: ReplyTo, key: CallKey, target: u64, control: tasks::Control) {
-    let token = to.into_token();
-    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
-    assert!(domain.core.routing_calls.insert(token, RoutedCall::Control(key)) == Ok(None), "one live routed call");
-    domain.work.push(Work::Tasks(tasks::Event::Control {
-        reply_to: ReplyTo::new(token),
-        by: tasks::Party::Task(key.task),
-        task: target,
-        control,
-    }));
-}
-
-fn amend_call(
-    domain: &mut Domain,
-    env: &Env<Limits>,
-    decision: &mut Decision,
-    to: ReplyTo,
-    key: CallKey,
-    target: u64,
-    amendment: tasks::Amendment,
-) {
-    let stop_run = match domain.core.task_amend_admit(key.task, target, &amendment, env.limits.tasks.depth) {
-        Ok(stop_run) => stop_run,
-        Err(jig_core::TaskAmendDenied::Refused { task, why }) => {
-            return decide_call(
-                domain,
-                &env.limits,
-                decision,
-                to,
-                key,
-                CallAnswer::ControlRefused(tasks::Problem { task: Some(task), why, blocked_by: None }),
-            );
-        }
-        Err(jig_core::TaskAmendDenied::Denied(answer)) => {
-            return decide_call(domain, &env.limits, decision, to, key, CallAnswer::ControlDenied { answer });
-        }
-    };
-    let Some(message) = crate::fresh(&mut domain.core.counters, Family::Message) else {
-        return decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::ControlRefused(tasks::Problem {
-                task: Some(target),
-                why: tasks::Refusal::Busy,
-                blocked_by: None,
-            }),
-        );
-    };
-    let token = to.into_token();
-    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
-    assert!(domain.core.routing_calls.insert(token, RoutedCall::Control(key)) == Ok(None), "one amendment route");
-    domain.work.push(Work::Tasks(tasks::Event::Amend {
-        reply_to: ReplyTo::new(token),
-        by: tasks::Party::Task(key.task),
-        task: target,
-        message,
-        stop_run,
-        amendment,
-    }));
-}
-
-fn delegation_executor(domain: &Domain, project: u32, executor: tasks::Executor) -> Option<authority::Executor> {
-    match executor {
-        tasks::Executor::Agent { charter } => Some(authority::Executor::Charter(charter)),
-        tasks::Executor::Procedure { code, .. } => Some(authority::Executor::Procedure(code)),
-        tasks::Executor::Person(tasks::PersonAddress::Role(role)) => {
-            if role <= 3 {
-                Some(authority::Executor::Role(role))
-            } else {
-                None
-            }
-        }
-        tasks::Executor::Person(tasks::PersonAddress::Person(person)) => {
-            let holding = domain.core.people.role(person, project)?;
-            Some(authority::Executor::Role(escalation::role_number(holding)))
-        }
-    }
-}
-
-#[expect(
-    clippy::too_many_lines,
-    reason = "one delegated call checks authority, inputs and the atomic batch before routing"
-)]
 #[expect(clippy::too_many_arguments, reason = "validated historical input pointers travel with the delegated call")]
 fn delegate_call(
     domain: &mut Domain,
@@ -3394,158 +3065,36 @@ fn delegate_call(
     validated: bool,
     stubs: Box<[tasks::Stub]>,
 ) {
-    if !current_proof(domain, key.task, key.attempt) {
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::DelegationRefused(tasks::Problem {
-                task: Some(key.task),
-                why: tasks::Refusal::State,
-                blocked_by: None,
-            }),
-        );
-        return;
-    }
-    let Some(context) = domain.core.tasks.delegation(key.task) else {
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::DelegationRefused(tasks::Problem {
-                task: Some(key.task),
-                why: tasks::Refusal::Unknown,
-                blocked_by: None,
-            }),
-        );
-        return;
-    };
-    if batch.is_empty() || batch.len() > usize::try_from(env.limits.tasks.batch).expect("u32 fits usize") {
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::DelegationRefused(tasks::Problem { task: None, why: tasks::Refusal::Batch, blocked_by: None }),
-        );
-        return;
-    }
-    let mut asked = List::with_capacity(env.limits.tasks.batch);
-    for member in &batch {
-        let Some(executor) = delegation_executor(domain, context.project, member.executor) else {
-            decide_call(
-                domain,
-                &env.limits,
-                decision,
-                to,
-                key,
-                CallAnswer::DelegationRefused(tasks::Problem {
-                    task: None,
-                    why: tasks::Refusal::Executor,
-                    blocked_by: None,
-                }),
-            );
-            return;
-        };
-        let Some(symbolic) = symbolic_grants(&member.symbolic_grants, env.limits.authority.grants) else {
-            decide_call(
-                domain,
-                &env.limits,
-                decision,
-                to,
-                key,
-                CallAnswer::DelegationRefused(tasks::Problem {
-                    task: None,
-                    why: tasks::Refusal::AuthorityShape,
-                    blocked_by: None,
-                }),
-            );
-            return;
-        };
-        asked
-            .push(authority::Delegate { executor, authority: authority_value(&member.authority), symbolic })
-            .expect("bounded delegation request");
-    }
-    let mut findings =
-        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("findings bound"));
-    let checked = domain.core.connector_batch_admit(
-        context.project,
-        &context.authority,
-        context.numbers,
-        context.tasks_left,
-        asked.into_boxed(),
-        &mut findings,
-    );
-    if checked.answer != authority::Answer::Allow {
-        let mut found =
-            List::with_capacity(authority::max_out(domain.core.authority.limits()).expect("findings bound"));
-        for _ in 0..findings.len() {
-            found.push(findings.pop().expect("finding count")).expect("finding bound");
-        }
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::DelegationDenied { answer: checked.answer, findings: found.into_boxed() },
-        );
+    if let Err(part) = domain.core.delegate_preflight(&env.limits.tasks, key, &batch) {
+        domain.work.push(Work::Core(jig_core::Event::NamedAnswer { to, key, part }));
         return;
     }
     if !validated {
-        let capacity = batch
-            .len()
-            .checked_mul(usize::try_from(env.limits.tasks.inputs).expect("u32 fits usize"))
-            .expect("bounded batch input count");
-        let mut ids = List::with_capacity(u32::try_from(capacity).expect("bounded input IDs"));
-        for member in &batch {
-            if member.spec.inputs.len() > usize::try_from(env.limits.tasks.inputs).expect("u32 fits usize") {
-                decide_call(
-                    domain,
-                    &env.limits,
-                    decision,
-                    to,
-                    key,
-                    CallAnswer::DelegationRefused(tasks::Problem {
-                        task: None,
-                        why: tasks::Refusal::Inputs,
-                        blocked_by: None,
-                    }),
-                );
+        let (project, ids) = match domain.core.delegate_inputs(&env.limits.tasks, key, &batch) {
+            Ok(value) => value,
+            Err(part) => {
+                domain.work.push(Work::Core(jig_core::Event::NamedAnswer { to, key, part }));
                 return;
             }
-            for &input in &member.spec.inputs {
-                let mut known = false;
-                for &id in &ids {
-                    if id == input {
-                        known = true;
-                    }
-                }
-                if !known {
-                    ids.push(input).expect("bounded input ID count");
-                }
-            }
-        }
-        if !ids.is_empty() {
-            let first = *ids.get(0).expect("nonempty input IDs");
+        };
+        if let Some(&first) = ids.first() {
+            let capacity = batch
+                .len()
+                .checked_mul(usize::try_from(env.limits.tasks.inputs).expect("u32 fits usize"))
+                .expect("bounded batch input count");
             let to = to.into_token();
             let read = InputCheck {
                 to,
                 key,
                 batch,
-                ids: ids.into_boxed(),
+                ids,
                 at: 0,
-                project: context.project,
+                project,
                 stubs: List::with_capacity(u32::try_from(capacity).expect("bounded input IDs")),
             };
             let waiter =
                 domain.result_reads.insert(Some(Read::InputCheck(read))).expect("preflighted input read slot").token();
-            assert!(domain.core.pending_calls.insert(key, true).is_ok(), "reserved call record room");
+            assert!(domain.core.reserve_connector_call(key), "reserved call record room");
             emit(
                 decision,
                 &env.limits,
@@ -3554,1130 +3103,9 @@ fn delegate_call(
             return;
         }
     }
-    let mut numbers = List::with_capacity(env.limits.tasks.batch);
-    for _ in &batch {
-        let Some(number) = crate::fresh(&mut domain.core.counters, Family::Task) else {
-            decide_call(
-                domain,
-                &env.limits,
-                decision,
-                to,
-                key,
-                CallAnswer::DelegationRefused(tasks::Problem {
-                    task: None,
-                    why: tasks::Refusal::Live,
-                    blocked_by: None,
-                }),
-            );
-            return;
-        };
-        numbers.push(number).expect("bounded delegation IDs");
-    }
-    let mut created = List::with_capacity(env.limits.tasks.batch);
-    for (index, member) in batch.into_iter().enumerate() {
-        let index = u32::try_from(index).expect("batch length fits u32");
-        let mut dependencies = List::with_capacity(env.limits.tasks.dependencies);
-        for dependency in member.dependencies {
-            let number = match dependency {
-                Dependency::Batch(at) => match numbers.get(at) {
-                    Some(number) => *number,
-                    None => {
-                        decide_call(
-                            domain,
-                            &env.limits,
-                            decision,
-                            to,
-                            key,
-                            CallAnswer::DelegationRefused(tasks::Problem {
-                                task: numbers.get(index).copied(),
-                                why: tasks::Refusal::Dependencies,
-                                blocked_by: None,
-                            }),
-                        );
-                        return;
-                    }
-                },
-                Dependency::Existing(number) => number,
-            };
-            if dependencies.push(number).is_err() {
-                decide_call(
-                    domain,
-                    &env.limits,
-                    decision,
-                    to,
-                    key,
-                    CallAnswer::DelegationRefused(tasks::Problem {
-                        task: numbers.get(index).copied(),
-                        why: tasks::Refusal::Dependencies,
-                        blocked_by: None,
-                    }),
-                );
-                return;
-            }
-        }
-        let number = *numbers.get(index).expect("one ID per member");
-        let Some(authority) =
-            resolved_delegate_authority(&member.authority, &member.symbolic_grants, number, &env.limits)
-        else {
-            decide_call(
-                domain,
-                &env.limits,
-                decision,
-                to,
-                key,
-                CallAnswer::DelegationRefused(tasks::Problem {
-                    task: Some(number),
-                    why: tasks::Refusal::AuthorityShape,
-                    blocked_by: None,
-                }),
-            );
-            return;
-        };
-        let root = domain.core.tasks.root(key.task).expect("delegator live");
-        let Some(holdings) = forge_route::task_holdings(
-            domain,
-            env,
-            context.project,
-            root,
-            number,
-            member.executor,
-            &member.spec,
-            Some(key.task),
-        ) else {
-            decide_call(
-                domain,
-                &env.limits,
-                decision,
-                to,
-                key,
-                CallAnswer::DelegationRefused(tasks::Problem {
-                    task: Some(number),
-                    why: tasks::Refusal::Holds,
-                    blocked_by: None,
-                }),
-            );
-            return;
-        };
-        created
-            .push(tasks::New {
-                number,
-                project: context.project,
-                executor: member.executor,
-                spec: member.spec,
-                contract: member.contract,
-                authority,
-                numbers: tasks::Numbers {
-                    budget: member.authority.budget.spend,
-                    spent: 0,
-                    spent_below: 0,
-                    reserved: 0,
-                },
-                funder: tasks::Funder::Task(key.task),
-                dependencies: dependencies.into_boxed(),
-                holdings,
-                wake: member.wake,
-                recurring: None,
-                tracked: None,
-            })
-            .expect("bounded delegation batch");
-    }
-    let token = to.into_token();
-    if !validated {
-        assert!(domain.core.pending_calls.insert(key, true).is_ok(), "reserved call record room");
-    }
-    assert!(domain.core.delegating.insert(token, (key, stubs)) == Ok(None), "one pending delegated call");
-    domain.work.push(Work::Tasks(tasks::Event::Make {
-        reply_to: ReplyTo::new(token),
-        creator: tasks::Party::Task(key.task),
-        batch: created.into_boxed(),
-    }));
+    domain.work.push(Work::Core(jig_core::Event::DelegateValidated { to, key, batch, stubs }));
 }
 
-/// Route a connector-owned step through current task authority and the tasks hub in one root
-/// decision. Invalid or stale owner inputs make no change; the owner retries from current facts.
-fn procedure_step(
-    domain: &mut Domain,
-    env: &Env<Limits>,
-    task: u64,
-    step: u64,
-    connector: u16,
-    code: u32,
-    action: ProcedureAction,
-) -> Option<Box<[u64]>> {
-    if domain.core.tasks.procedure_due(task) != Some((connector, code, step)) {
-        return None;
-    }
-    let mut delegated = None;
-    let decision = match action {
-        ProcedureAction::Delegate(batch) => {
-            let context = domain.core.tasks.delegation(task)?;
-            if batch.is_empty() || batch.len() > usize::try_from(env.limits.tasks.batch).expect("bounded batch") {
-                return None;
-            }
-            let mut asked = List::with_capacity(env.limits.tasks.batch);
-            for member in &batch {
-                if !member.spec.inputs.is_empty() {
-                    return None;
-                }
-                let executor = delegation_executor(domain, context.project, member.executor)?;
-                let symbolic = symbolic_grants(&member.symbolic_grants, env.limits.authority.grants)?;
-                asked
-                    .push(authority::Delegate { executor, authority: authority_value(&member.authority), symbolic })
-                    .expect("bounded procedure batch");
-            }
-            let mut findings = Queue::with_capacity(
-                authority::max_out(domain.core.authority.limits()).expect("authority finding bound"),
-            );
-            let checked = domain.core.connector_batch_admit(
-                context.project,
-                &context.authority,
-                context.numbers,
-                context.tasks_left,
-                asked.into_boxed(),
-                &mut findings,
-            );
-            if checked.answer != authority::Answer::Allow {
-                return None;
-            }
-            let mut numbers = List::with_capacity(env.limits.tasks.batch);
-            for _ in &batch {
-                let number = crate::fresh(&mut domain.core.counters, Family::Task)?;
-                numbers.push(number).expect("bounded procedure task IDs");
-            }
-            let mut created = List::with_capacity(env.limits.tasks.batch);
-            for (index, member) in batch.into_iter().enumerate() {
-                let at = u32::try_from(index).expect("bounded batch index");
-                let mut dependencies = List::with_capacity(env.limits.tasks.dependencies);
-                for dependency in member.dependencies {
-                    let number = match dependency {
-                        Dependency::Batch(index) => match numbers.get(index) {
-                            Some(number) => *number,
-                            None => return None,
-                        },
-                        Dependency::Existing(number) => number,
-                    };
-                    if dependencies.push(number).is_err() {
-                        return None;
-                    }
-                }
-                let budget = member.authority.budget.spend;
-                let number = *numbers.get(at).expect("one ID per member");
-                let authority =
-                    resolved_delegate_authority(&member.authority, &member.symbolic_grants, number, &env.limits)?;
-                let root = domain.core.tasks.root(task)?;
-                let holdings = forge_route::task_holdings(
-                    domain,
-                    env,
-                    context.project,
-                    root,
-                    number,
-                    member.executor,
-                    &member.spec,
-                    Some(task),
-                )?;
-                created
-                    .push(tasks::New {
-                        number,
-                        project: context.project,
-                        executor: member.executor,
-                        spec: member.spec,
-                        contract: member.contract,
-                        authority,
-                        numbers: tasks::Numbers { budget, spent: 0, spent_below: 0, reserved: 0 },
-                        funder: tasks::Funder::Task(task),
-                        dependencies: dependencies.into_boxed(),
-                        holdings,
-                        wake: member.wake,
-                        recurring: None,
-                        tracked: None,
-                    })
-                    .expect("bounded procedure batch");
-            }
-            delegated = Some(numbers.into_boxed());
-            tasks::ProcedureDecision::Delegate(created.into_boxed())
-        }
-        ProcedureAction::Result(result) => tasks::ProcedureDecision::Result(result),
-        ProcedureAction::Hold(why) => tasks::ProcedureDecision::Hold(why),
-        ProcedureAction::Wait => tasks::ProcedureDecision::Wait,
-    };
-    domain.work.push(Work::Tasks(tasks::Event::Procedure { reply_to: internal(u64::MAX), task, step, decision }));
-    delegated
-}
-
-/// Admit a configured core procedure through the same durable task creation route as other roots.
-fn start_recurring(
-    domain: &mut Domain,
-    _env: &Env<Limits>,
-    project: u32,
-    authority: tasks::Authority,
-    template: tasks::RecurringTemplate,
-) {
-    if !domain.core.recurring_admit(project, &authority, &template) {
-        return;
-    }
-    let period = domain.core.settings.period;
-    if domain.core.tasks.funding(tasks::Funder::Period { project, period }).is_none() {
-        domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
-            reply_to: internal(u64::MAX - 2),
-            project,
-            period,
-            budget: domain.core.settings.period_budget,
-        }));
-    }
-    let Some(number) = crate::fresh(&mut domain.core.counters, Family::Task) else { return };
-    domain.work.push(Work::Tasks(tasks::Event::Make {
-        reply_to: internal(u64::MAX - 2),
-        creator: tasks::Party::Deployment { project },
-        batch: Box::new([tasks::New {
-            number,
-            project,
-            executor: tasks::Executor::Procedure { connector: domain.core.settings.recurring_connector, code: 1 },
-            spec: tasks::Spec { words: b"recurring".as_slice().into(), parameters: Box::new([]), inputs: Box::new([]) },
-            contract: tasks::Contract::Report { words: 0 },
-            numbers: tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
-            authority,
-            funder: tasks::Funder::Period { project, period },
-            dependencies: Box::new([]),
-            holdings: Box::new([]),
-            wake: tasks::WakePolicy::DEFAULT,
-            recurring: Some(Box::new(template)),
-            tracked: None,
-        }]),
-    }));
-    domain.work.push(Work::Tasks(tasks::Event::TickRecurring { task: number, period }));
-}
-
-#[expect(clippy::too_many_lines, reason = "the closed child vocabulary is routed exhaustively inside one decision")]
-fn tasks_outputs(
-    domain: &mut Domain,
-    env: &Env<Limits>,
-    decision: &mut Decision,
-    out: &mut Queue<tasks::Request>,
-    person_proposal: bool,
-    task_escalation: bool,
-) {
-    for _ in 0..out.len() {
-        match out.pop().expect("tasks output count") {
-            tasks::Request::PersonProposed { reply_to, proposal } => {
-                let request = reply_to.into_token();
-                domain.work.push(Work::People(domain.core.person_proposed(request, proposal)));
-            }
-            tasks::Request::PersonProposalDecided { reply_to, proposer, number, outcome } => {
-                let request = reply_to.into_token();
-                domain.work.push(Work::People(domain.core.person_proposal_decided(request, proposer, number, outcome)));
-            }
-            tasks::Request::RecurringDue { task, period, members } => {
-                let Some(context) = domain.core.tasks.delegation(task) else { continue };
-                let Some(template) = domain.core.tasks.recurring_template(task) else { continue };
-                if members != u32::try_from(template.batch.len()).expect("bounded template") {
-                    continue;
-                }
-                let mut asked = List::with_capacity(env.limits.tasks.batch);
-                for member in &template.batch {
-                    let executor = match member.executor {
-                        tasks::Executor::Agent { charter } => authority::Executor::Charter(charter),
-                        tasks::Executor::Procedure { code, .. } => authority::Executor::Procedure(code),
-                        tasks::Executor::Person(_) => unreachable!("person template refused at root admission"),
-                    };
-                    asked
-                        .push(authority::Delegate {
-                            executor,
-                            authority: authority_value(&member.authority),
-                            symbolic: Box::new([]),
-                        })
-                        .expect("bounded template");
-                }
-                let checked = domain.core.connector_batch_admit(
-                    context.project,
-                    &context.authority,
-                    tasks::Numbers { budget: context.authority.budget.spend, spent: 0, spent_below: 0, reserved: 0 },
-                    context.tasks_left,
-                    asked.into_boxed(),
-                    &mut Queue::with_capacity(
-                        authority::max_out(domain.core.authority.limits()).expect("bounded authority findings"),
-                    ),
-                );
-                if checked.answer != authority::Answer::Allow {
-                    continue;
-                }
-                let mut numbers = List::with_capacity(env.limits.tasks.batch);
-                for _ in 0..members {
-                    let Some(number) = crate::fresh(&mut domain.core.counters, Family::Task) else { break };
-                    numbers.push(number).expect("bounded recurring batch");
-                }
-                if numbers.len() == members {
-                    domain.work.push(Work::Tasks(tasks::Event::RecurringBatch {
-                        task,
-                        period,
-                        numbers: numbers.into_boxed(),
-                    }));
-                }
-            }
-            tasks::Request::EscalationStalled { task, revision, holder } => {
-                escalation::stalled(domain, task, revision, holder);
-            }
-            tasks::Request::Notify { task, subscription, target, state, words } => {
-                domain.work.push(Work::Tasks(domain.core.notice(task, subscription, target, state, words, env.wall)));
-            }
-            tasks::Request::Timer { task, subscription } => {
-                domain.work.push(Work::Tasks(domain.core.notice_timer(task, subscription, env.wall)));
-            }
-            tasks::Request::EndTopic { task, subscription, connector } => {
-                if connector == domain.config.forge_connector
-                    && let Some(topic) = domain.forge.subscription(task, subscription)
-                {
-                    domain.work.push(Work::Forge(forge::Event::Unsubscribe { task, topic }));
-                }
-            }
-            tasks::Request::Sent { reply_to, task, word } => {
-                let request = reply_to.into_token();
-                match domain.core.sent(request, task, &word, env.limits.tasks.inbox_messages, env.limits.tasks.tasks) {
-                    jig_core::SentRoute::Call { key, message } => decide_call(
-                        domain,
-                        &env.limits,
-                        decision,
-                        ReplyTo::new(request),
-                        key,
-                        CallAnswer::Sent { message },
-                    ),
-                    jig_core::SentRoute::Person(event) => domain.work.push(Work::People(*event)),
-                }
-            }
-            tasks::Request::Relay { .. } => unreachable!("the core marks committed relays held"),
-            tasks::Request::EscalationsInspected { .. } | tasks::Request::EscalationsRechecked { .. } => {
-                unreachable!("serialized roles route consumes project terminals")
-            }
-            tasks::Request::EscalationNeeded { context } => escalation::needed(domain, context),
-            tasks::Request::EscalationInspected { reply_to, context } => {
-                escalation::inspected(domain, env, decision, reply_to.into_token(), context);
-            }
-            tasks::Request::EscalationDecided { reply_to, task, revision, outcome } => {
-                if task_escalation {
-                    let token = reply_to.into_token();
-                    let route = domain.core.routing_calls.remove(&token).expect("task escalation decision route");
-                    let (key, named, current) = match route {
-                        RoutedCall::Escalation { key, task, revision } => (key, task, revision),
-                        RoutedCall::Propose { .. }
-                        | RoutedCall::Decide { .. }
-                        | RoutedCall::Withdraw { .. }
-                        | RoutedCall::Accepting { .. }
-                        | RoutedCall::Message(_)
-                        | RoutedCall::Introduce(_)
-                        | RoutedCall::Subscribe { .. }
-                        | RoutedCall::Unsubscribe(_)
-                        | RoutedCall::Control(_) => unreachable!("task escalation route kind"),
-                    };
-                    assert!(task == named && revision == current, "exact task escalation terminal");
-                    decide_call(
-                        domain,
-                        &env.limits,
-                        decision,
-                        ReplyTo::new(token),
-                        key,
-                        CallAnswer::EscalationDecided { task, revision, outcome },
-                    );
-                } else {
-                    escalation::completed(domain, env, decision, reply_to.into_token(), task, revision, outcome);
-                }
-            }
-            tasks::Request::ProposalDecided { reply_to, proposer, number, outcome } => {
-                let token = reply_to.into_token();
-                if let Some(event) =
-                    domain.core.task_proposal_decided_for_person(token, proposer, number, outcome, person_proposal)
-                {
-                    domain.work.push(Work::People(event));
-                    continue;
-                }
-                let route = domain.core.routing_calls.remove(&token).expect("pending proposal decision route");
-                let key = match route {
-                    RoutedCall::Decide { key, proposal } | RoutedCall::Withdraw { key, proposal }
-                        if proposal == number =>
-                    {
-                        key
-                    }
-                    RoutedCall::Propose { .. }
-                    | RoutedCall::Accepting { .. }
-                    | RoutedCall::Decide { .. }
-                    | RoutedCall::Escalation { .. }
-                    | RoutedCall::Withdraw { .. }
-                    | RoutedCall::Message(_)
-                    | RoutedCall::Introduce(_)
-                    | RoutedCall::Subscribe { .. }
-                    | RoutedCall::Unsubscribe(_)
-                    | RoutedCall::Control(_) => unreachable!("matching proposal decision"),
-                };
-                assert!(key.task == proposer || outcome != tasks::ProposalOutcome::Withdrawn, "withdrawal by proposer");
-                decide_call(
-                    domain,
-                    &env.limits,
-                    decision,
-                    ReplyTo::new(token),
-                    key,
-                    CallAnswer::ProposalDecided { proposal: number, outcome },
-                );
-            }
-            tasks::Request::ProposalStalled { proposer, proposal, holder } => {
-                if let Some(pending) = domain.core.tasks.proposal(proposer, proposal) {
-                    match pending.state {
-                        tasks::ProposalState::Pending { holder: current, .. } if current == holder => {
-                            if let Some(next) = proposals::holder(domain, proposer, &pending.action, Some(holder)) {
-                                let revision =
-                                    domain.core.tasks.task(proposer).expect("pending proposer remains live").revision;
-                                domain.work.push(Work::Tasks(tasks::Event::StalledProposal {
-                                    proposer,
-                                    proposal,
-                                    from: holder,
-                                    revision,
-                                    holder: next,
-                                }));
-                            }
-                        }
-                        tasks::ProposalState::Pending { .. }
-                        | tasks::ProposalState::Accepted { .. }
-                        | tasks::ProposalState::Rejected { .. }
-                        | tasks::ProposalState::Withdrawn => {}
-                    }
-                }
-            }
-            tasks::Request::ProposalRerouteNeeded { proposer, proposal } => {
-                if let Some(pending) = domain.core.tasks.proposal(proposer, proposal) {
-                    match pending.state {
-                        tasks::ProposalState::Pending { holder: current, .. } => {
-                            if let Some(next) = proposals::holder(domain, proposer, &pending.action, None)
-                                && current != next
-                            {
-                                let revision =
-                                    domain.core.tasks.task(proposer).expect("pending proposer remains live").revision;
-                                domain.work.push(Work::Tasks(tasks::Event::StalledProposal {
-                                    proposer,
-                                    proposal,
-                                    from: current,
-                                    revision,
-                                    holder: next,
-                                }));
-                            }
-                        }
-                        tasks::ProposalState::Accepted { .. }
-                        | tasks::ProposalState::Rejected { .. }
-                        | tasks::ProposalState::Withdrawn => {}
-                    }
-                }
-            }
-            tasks::Request::Save { record } => {
-                if let Some(archive) = proposals::decision_record(&record) {
-                    save(decision, &env.limits, Write::Save(Record::ProposalDecision(archive)));
-                }
-                match &record {
-                    tasks::Stored::Live(task) | tasks::Stored::Ended(task) => {
-                        let stale = match domain.core.contexts.get(&task.number) {
-                            Some(context) => {
-                                task.phase != tasks::Phase::Active(tasks::Active::Preparing)
-                                    || task.last_message != context.last_message
-                            }
-                            None => false,
-                        };
-                        if stale {
-                            drop(domain.core.contexts.remove(&task.number));
-                            drop(domain.core.dependency_results.remove(&task.number));
-                            drop(domain.core.transcripts.remove(&task.number));
-                            domain
-                                .work
-                                .push(Work::Brief(brief::GatherEvent::Abandon { brief: Token::new(task.number) }));
-                            if task.phase == tasks::Phase::Active(tasks::Active::Preparing) {
-                                domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task: task.number }));
-                            }
-                        }
-                        view_task_saved(domain, &env.limits, decision, task);
-                        if task.tracked.is_some() && domain.forge.home(task.project).is_some() {
-                            domain.work.push(Work::ProjectGoal(task.clone()));
-                        }
-                        domain.work.push(Work::People(people::Event::Waiting {
-                            task: task.number,
-                            entries: inbox::entries(domain, task),
-                        }));
-                    }
-                    tasks::Stored::PersonProposal(row) => {
-                        domain.work.push(Work::People(people::Event::Waiting {
-                            task: row.goal.number,
-                            entries: inbox::person_proposal_entries(domain, row),
-                        }));
-                    }
-                    tasks::Stored::Ledger(_)
-                    | tasks::Stored::Writer(_)
-                    | tasks::Stored::Pool(_)
-                    | tasks::Stored::History(_)
-                    | tasks::Stored::Stub(_) => {}
-                }
-                let record = match record {
-                    tasks::Stored::Ended(mut task) => {
-                        let position = crate::fresh(&mut domain.core.counters, Family::Message)
-                            .expect("ending position preflighted before mutation");
-                        task.result_position = position;
-                        assert!(
-                            domain.core.ending_positions.insert(task.number, position) == Ok(None),
-                            "one ending position per ended task"
-                        );
-                        match task.requester {
-                            tasks::Party::Person(person) => {
-                                domain.core.people.remember_result(
-                                    &env.limits.people,
-                                    person,
-                                    people::ResultRef { task: task.number, position },
-                                );
-                            }
-                            tasks::Party::Task(_) | tasks::Party::Deployment { .. } => {}
-                        }
-                        tasks::Stored::Ended(task)
-                    }
-                    tasks::Stored::Live(_)
-                    | tasks::Stored::Writer(_)
-                    | tasks::Stored::Pool(_)
-                    | tasks::Stored::Ledger(_)
-                    | tasks::Stored::History(_)
-                    | tasks::Stored::Stub(_)
-                    | tasks::Stored::PersonProposal(_) => record,
-                };
-                save(decision, &env.limits, Write::Save(Record::Tasks(record)));
-            }
-            tasks::Request::Erase { key } => save(decision, &env.limits, Write::Erase(Key::Tasks(key))),
-            tasks::Request::Made { reply_to, tasks } => {
-                let request = reply_to.into_token();
-                match domain.core.made(request, tasks, person_proposal) {
-                    jig_core::MadeRoute::Internal => {}
-                    jig_core::MadeRoute::Tasks(event) => domain.work.push(Work::Tasks(event)),
-                    jig_core::MadeRoute::PersonProposal(event) => domain.work.push(Work::PersonProposal(event)),
-                    jig_core::MadeRoute::Person(event) => domain.work.push(Work::People(*event)),
-                    jig_core::MadeRoute::Delegated { key, tasks, stubs } => {
-                        for stub in stubs {
-                            domain.work.push(Work::Tasks(tasks::Event::RememberStub { stub }));
-                        }
-                        decide_call(
-                            domain,
-                            &env.limits,
-                            decision,
-                            ReplyTo::new(request),
-                            key,
-                            CallAnswer::Delegated(tasks),
-                        );
-                    }
-                }
-            }
-            tasks::Request::Refused { reply_to, problem } => {
-                let token = reply_to.into_token();
-                if token.raw() == u64::MAX - 3 {
-                    if let Some(repair) = problem.task
-                        && let Some(owner) = domain.forge.queue_repair_owner(repair)
-                    {
-                        domain.work.push(Work::Tasks(tasks::Event::Hold { task: owner, why: tasks::Hold::Effects }));
-                    }
-                    continue;
-                }
-                if token.raw() == u64::MAX
-                    && let Some(task) = problem.task
-                    && let Some(row) = domain.forge.change(task)
-                    && let Some((child, _)) = row.delegate
-                {
-                    domain.work.push(Work::Forge(forge::Event::DelegateRefused { task, child }));
-                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Procedure }));
-                    continue;
-                }
-                if let Some(event) = domain.core.goal_refused(token, problem.why) {
-                    domain.work.push(Work::People(event));
-                    continue;
-                }
-                if domain.core.person_tasks.remove(&token).is_some() {
-                    let why = match problem.why {
-                        tasks::Refusal::Busy | tasks::Refusal::NotReady => people::Refusal::Busy,
-                        tasks::Refusal::Unknown => people::Refusal::Ended,
-                        tasks::Refusal::State | tasks::Refusal::Executor | tasks::Refusal::Reference => {
-                            people::Refusal::Standing
-                        }
-                        tasks::Refusal::Funding | tasks::Refusal::AuthorityShape => people::Refusal::Authority,
-                        tasks::Refusal::Duplicate
-                        | tasks::Refusal::Empty
-                        | tasks::Refusal::Batch
-                        | tasks::Refusal::Live
-                        | tasks::Refusal::Project
-                        | tasks::Refusal::Tree
-                        | tasks::Refusal::Depth
-                        | tasks::Refusal::Delegates
-                        | tasks::Refusal::Subscription
-                        | tasks::Refusal::Dependencies
-                        | tasks::Refusal::Cycle
-                        | tasks::Refusal::Spec
-                        | tasks::Refusal::Contract
-                        | tasks::Refusal::Inputs
-                        | tasks::Refusal::Attempt
-                        | tasks::Refusal::LiveDelegates
-                        | tasks::Refusal::Restore
-                        | tasks::Refusal::Read
-                        | tasks::Refusal::Turn
-                        | tasks::Refusal::HoldKind
-                        | tasks::Refusal::HoldTaken
-                        | tasks::Refusal::Holds => people::Refusal::Limit,
-                    };
-                    domain.work.push(Work::People(people::Event::Decided {
-                        request: token,
-                        outcome: people::Outcome::Refused(why),
-                    }));
-                    continue;
-                }
-                if domain.core.moving.remove(&token).is_some() {
-                    domain.work.push(Work::People(people::Event::Decided {
-                        request: token,
-                        outcome: people::Outcome::Refused(match problem.why {
-                            tasks::Refusal::Busy | tasks::Refusal::NotReady => people::Refusal::Busy,
-                            tasks::Refusal::Unknown => people::Refusal::Ended,
-                            tasks::Refusal::Reference | tasks::Refusal::State => people::Refusal::Standing,
-                            tasks::Refusal::Funding => people::Refusal::Authority,
-                            tasks::Refusal::Duplicate
-                            | tasks::Refusal::Empty
-                            | tasks::Refusal::Batch
-                            | tasks::Refusal::Live
-                            | tasks::Refusal::Project
-                            | tasks::Refusal::Tree
-                            | tasks::Refusal::Depth
-                            | tasks::Refusal::Delegates
-                            | tasks::Refusal::Subscription
-                            | tasks::Refusal::Dependencies
-                            | tasks::Refusal::Cycle
-                            | tasks::Refusal::Executor
-                            | tasks::Refusal::Spec
-                            | tasks::Refusal::Contract
-                            | tasks::Refusal::AuthorityShape
-                            | tasks::Refusal::Inputs
-                            | tasks::Refusal::Attempt
-                            | tasks::Refusal::LiveDelegates
-                            | tasks::Refusal::Restore
-                            | tasks::Refusal::Read
-                            | tasks::Refusal::Turn
-                            | tasks::Refusal::HoldKind
-                            | tasks::Refusal::HoldTaken
-                            | tasks::Refusal::Holds => people::Refusal::Limit,
-                        }),
-                    }));
-                    continue;
-                }
-                let person_route =
-                    if person_proposal { domain.core.routing_people_proposals.remove(&token) } else { None };
-                if let Some(route) = person_route {
-                    let request = match route {
-                        PersonProposalRoute::Deciding { request, .. }
-                        | PersonProposalRoute::Accepting { request, .. } => request,
-                    };
-                    domain.work.push(Work::People(people::Event::Decided {
-                        request,
-                        outcome: people::Outcome::Refused(match problem.why {
-                            tasks::Refusal::Busy | tasks::Refusal::NotReady => people::Refusal::Busy,
-                            tasks::Refusal::Reference | tasks::Refusal::State => people::Refusal::Standing,
-                            tasks::Refusal::Unknown => people::Refusal::Ended,
-                            tasks::Refusal::Funding => people::Refusal::Authority,
-                            tasks::Refusal::Duplicate
-                            | tasks::Refusal::Empty
-                            | tasks::Refusal::Batch
-                            | tasks::Refusal::Live
-                            | tasks::Refusal::Project
-                            | tasks::Refusal::Tree
-                            | tasks::Refusal::Depth
-                            | tasks::Refusal::Delegates
-                            | tasks::Refusal::Subscription
-                            | tasks::Refusal::Dependencies
-                            | tasks::Refusal::Cycle
-                            | tasks::Refusal::Executor
-                            | tasks::Refusal::Spec
-                            | tasks::Refusal::Contract
-                            | tasks::Refusal::AuthorityShape
-                            | tasks::Refusal::Inputs
-                            | tasks::Refusal::Attempt
-                            | tasks::Refusal::LiveDelegates
-                            | tasks::Refusal::Restore
-                            | tasks::Refusal::Read
-                            | tasks::Refusal::Turn
-                            | tasks::Refusal::HoldKind
-                            | tasks::Refusal::HoldTaken
-                            | tasks::Refusal::Holds => people::Refusal::Limit,
-                        }),
-                    }));
-                    continue;
-                }
-                if let Some(route) = domain.core.routing_calls.remove(&token) {
-                    drop(domain.forge_subscribing.remove(&token));
-                    drop(domain.forge_unsubscribing.remove(&token));
-                    let (key, answer) = match route {
-                        RoutedCall::Message(key) | RoutedCall::Introduce(key) => {
-                            (key, CallAnswer::MessageRefused(problem))
-                        }
-                        RoutedCall::Subscribe { key, .. } | RoutedCall::Unsubscribe(key) => {
-                            (key, CallAnswer::SubscriptionRefused(problem))
-                        }
-                        RoutedCall::Control(key) => (key, CallAnswer::ControlRefused(problem)),
-                        RoutedCall::Escalation { key, .. } => (key, CallAnswer::EscalationRefused(problem)),
-                        RoutedCall::Propose { key, .. }
-                        | RoutedCall::Decide { key, .. }
-                        | RoutedCall::Withdraw { key, .. }
-                        | RoutedCall::Accepting { key, .. } => (key, CallAnswer::ProposalRefused(problem)),
-                    };
-                    decide_call(domain, &env.limits, decision, ReplyTo::new(token), key, answer);
-                } else if let Some((key, _)) = domain.core.delegating.remove(&token) {
-                    decide_call(
-                        domain,
-                        &env.limits,
-                        decision,
-                        ReplyTo::new(token),
-                        key,
-                        CallAnswer::DelegationRefused(problem),
-                    );
-                } else if domain.core.made.remove(&token).is_some() {
-                    domain.work.push(Work::People(people::Event::Decided {
-                        request: token,
-                        outcome: people::Outcome::Refused(people::Refusal::Limit),
-                    }));
-                } else if domain.core.saying.remove(&token).is_some() {
-                    domain.work.push(Work::People(people::Event::Decided {
-                        request: token,
-                        outcome: people::Outcome::Refused(match problem.why {
-                            tasks::Refusal::Busy | tasks::Refusal::NotReady => people::Refusal::Busy,
-                            tasks::Refusal::Unknown => people::Refusal::Unknown,
-                            tasks::Refusal::State => people::Refusal::Standing,
-                            tasks::Refusal::Duplicate
-                            | tasks::Refusal::Empty
-                            | tasks::Refusal::Batch
-                            | tasks::Refusal::Live
-                            | tasks::Refusal::Project
-                            | tasks::Refusal::Tree
-                            | tasks::Refusal::Depth
-                            | tasks::Refusal::Delegates
-                            | tasks::Refusal::Reference
-                            | tasks::Refusal::Subscription
-                            | tasks::Refusal::Dependencies
-                            | tasks::Refusal::Cycle
-                            | tasks::Refusal::Executor
-                            | tasks::Refusal::Spec
-                            | tasks::Refusal::Contract
-                            | tasks::Refusal::AuthorityShape
-                            | tasks::Refusal::Inputs
-                            | tasks::Refusal::Attempt
-                            | tasks::Refusal::LiveDelegates
-                            | tasks::Refusal::Restore
-                            | tasks::Refusal::Read
-                            | tasks::Refusal::Turn
-                            | tasks::Refusal::Funding
-                            | tasks::Refusal::HoldKind
-                            | tasks::Refusal::HoldTaken
-                            | tasks::Refusal::Holds => people::Refusal::Limit,
-                        }),
-                    }));
-                } else if domain.core.claiming.remove(&token.raw()).is_some() {
-                    drop(domain.assignments.remove(&token.raw()));
-                    drop(domain.core.proofs.remove(&token.raw()));
-                    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task: token.raw() }));
-                } else if let Some(payload) = take_payload(domain, token) {
-                    match payload {
-                        Payload::Turn { task, attempt, body: turn } => {
-                            if problem.task == Some(task) {
-                                domain.work.push(Work::Fleet(fleet::Event::TurnBusy {
-                                    run: Token::new(task),
-                                    attempt: Token::new(attempt),
-                                    turn: turn.number,
-                                }));
-                            }
-                        }
-                        Payload::Answer { task, attempt, .. } => {
-                            if problem.task == Some(task) {
-                                let proof = domain.core.proofs.get_mut(&task).expect("answer proof reserved");
-                                proof.terminal = Some(TerminalRecord {
-                                    task,
-                                    attempt,
-                                    cumulative: match proof.turn {
-                                        Some(turn) => turn.cumulative,
-                                        None => 0,
-                                    },
-                                    end: tasks::End::Failed(tasks::Class::Invalid),
-                                });
-                                domain.work.push(Work::Tasks(tasks::Event::Activation {
-                                    reply_to: ReplyTo::new(token),
-                                    task,
-                                    attempt,
-                                    end: tasks::End::Failed(tasks::Class::Invalid),
-                                    saved: None,
-                                    cause: tasks::Cause::Unpriced,
-                                }));
-                            }
-                        }
-                        Payload::Call { .. } | Payload::CallAnswer(_) => {
-                            unreachable!("task refusal owns a task payload")
-                        }
-                    }
-                }
-            }
-            tasks::Request::TurnAcknowledged { reply_to, task, attempt, turn, accepted } => {
-                let token = reply_to.into_token();
-                let payload = take_payload(domain, token).expect("charged turn owns payload");
-                let body = match payload {
-                    Payload::Turn { body, .. } => body,
-                    Payload::Answer { .. } | Payload::Call { .. } | Payload::CallAnswer(_) => {
-                        unreachable!("turn family")
-                    }
-                };
-                let proof = domain.core.proofs.get_mut(&task).expect("turn proof reserved before child mutation");
-                assert!(proof.attempt == attempt, "turn callback retains its actual claim");
-                proof.turn = Some(TurnProof { turn, cumulative: body.cumulative, read: body.read });
-                save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
-                match accepted {
-                    tasks::Accepted::New => save(
-                        decision,
-                        &env.limits,
-                        Write::Save(Record::Turn(TurnRecord {
-                            task,
-                            attempt,
-                            turn,
-                            spent: body.cumulative,
-                            read: body.read,
-                            at: env.wall,
-                            transcript: body.transcript,
-                        })),
-                    ),
-                    tasks::Accepted::Already => {}
-                }
-                if accepted == tasks::Accepted::New {
-                    retire_calls(domain, &env.limits, decision, task, attempt, turn);
-                    emit(
-                        decision,
-                        &env.limits,
-                        Delivery::View(Box::new(views::Event::Turn {
-                            task: Token::new(task),
-                            attempt: Token::new(attempt),
-                            number: turn,
-                        })),
-                    );
-                }
-                emit(
-                    decision,
-                    &env.limits,
-                    Delivery::Fleet(fleet::Event::TurnKept {
-                        run: Token::new(task),
-                        attempt: Token::new(attempt),
-                        turn,
-                    }),
-                );
-            }
-            tasks::Request::Acknowledged { reply_to, task, attempt, .. } => {
-                let token = reply_to.into_token();
-                if token.raw() != u64::MAX {
-                    drop(take_payload(domain, token));
-                }
-                if let Some(proof) = domain.core.proofs.get(&task) {
-                    if let Some(terminal) = &proof.terminal {
-                        save(decision, &env.limits, Write::Save(Record::Terminal(terminal.clone())));
-                    }
-                    save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
-                }
-                emit(
-                    decision,
-                    &env.limits,
-                    Delivery::Fleet(fleet::Event::Acknowledge { run: Token::new(task), attempt: Token::new(attempt) }),
-                );
-                domain.work.push(Work::Forge(forge::Event::Lost { task, attempt }));
-            }
-            tasks::Request::Activate { context } => domain.work.push(Work::Activate(context)),
-            tasks::Request::Adopt { task, attempt, kept } => {
-                domain.core.adopt(&environment_core(env), task, attempt, kept);
-            }
-            tasks::Request::Stop { task, attempt } => {
-                emit(decision, &env.limits, Delivery::Fleet(Core::stop_run(task, attempt)));
-            }
-            tasks::Request::Close { task, ending } => {
-                let root = domain.core.tasks.root(task).unwrap_or(task);
-                let ending = match ending {
-                    tasks::Ending::Done(_) => forge::ReleaseEnding::Done,
-                    tasks::Ending::Failed { .. } => forge::ReleaseEnding::Failed,
-                    tasks::Ending::Cancelled { .. } => forge::ReleaseEnding::Cancelled,
-                };
-                domain.work.push(Work::Forge(forge::Event::SettleEffects { task, root, ending }));
-            }
-            tasks::Request::Release { task, ending } => {
-                let root = domain.core.tasks.root(task).unwrap_or(task);
-                let ending = match ending {
-                    tasks::Ending::Done(_) => forge::ReleaseEnding::Done,
-                    tasks::Ending::Failed { .. } => forge::ReleaseEnding::Failed,
-                    tasks::Ending::Cancelled { .. } => forge::ReleaseEnding::Cancelled,
-                };
-                if let Some(entry) = crate::fresh(&mut domain.core.counters, Family::ConnectorRow) {
-                    domain.work.push(Work::Forge(forge::Event::Release { task, root, ending, entry }));
-                } else {
-                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Budget }));
-                }
-            }
-            tasks::Request::Ended { task, requester, ending } => {
-                let position =
-                    domain.core.ending_positions.remove(&task).expect("ended row assigned its result position");
-                emit(
-                    decision,
-                    &env.limits,
-                    Delivery::View(Box::new(views::Event::Finished { task: Token::new(task) })),
-                );
-                retire_calls(domain, &env.limits, decision, task, u64::MAX, u32::MAX);
-                drop(domain.core.proofs.remove(&task));
-                save(decision, &env.limits, Write::Erase(Key::RunProof { task }));
-                match requester {
-                    tasks::Party::Person(person) => {
-                        emit(decision, &env.limits, Delivery::Result { person, task, words: ending_words(ending) });
-                    }
-                    tasks::Party::Task(parent) => {
-                        let (kind, words) = result_notice(ending);
-                        let word = tasks::Word {
-                            number: position,
-                            from: tasks::Party::Task(task),
-                            kind: tasks::MessageKind::Result(kind),
-                            words,
-                            at: env.wall,
-                            hits: 1,
-                            eligible: false,
-                        };
-                        domain.work.push(Work::Tasks(tasks::Event::DelegateResult { task: parent, word }));
-                    }
-                    tasks::Party::Deployment { .. } => {}
-                }
-            }
-            tasks::Request::Done { reply_to } => {
-                let task = reply_to.into_token().raw();
-                if let Some(route) = domain.core.person_tasks.remove(&Token::new(task)) {
-                    let outcome = match route {
-                        PersonTaskRoute::Take(task) => people::Outcome::PersonTaken { task },
-                        PersonTaskRoute::PoolSet { project, person } => people::Outcome::PoolSet { project, person },
-                        PersonTaskRoute::HandBack(task) => people::Outcome::PersonHandedBack { task },
-                        PersonTaskRoute::Answer(task) => people::Outcome::PersonAnswered { task },
-                        PersonTaskRoute::Cancel(task) => people::Outcome::Cancelled { task },
-                        PersonTaskRoute::Release(task) => people::Outcome::Released { task },
-                        PersonTaskRoute::Prioritised(project) => people::Outcome::Prioritised { project },
-                        PersonTaskRoute::Amended(task) => people::Outcome::Amended { task },
-                        PersonTaskRoute::AmendProposed { task, proposal } => {
-                            people::Outcome::AmendProposed { task, proposal }
-                        }
-                    };
-                    domain.work.push(Work::People(people::Event::Decided { request: Token::new(task), outcome }));
-                    continue;
-                }
-                if let Some(moved) = domain.core.moving.remove(&Token::new(task)) {
-                    domain.work.push(Work::People(people::Event::Decided {
-                        request: Token::new(task),
-                        outcome: people::Outcome::Moved { task: moved },
-                    }));
-                    continue;
-                }
-                let person_route =
-                    if person_proposal { domain.core.routing_people_proposals.remove(&Token::new(task)) } else { None };
-                if let Some(PersonProposalRoute::Accepting { request, person, proposer, proposal, message }) =
-                    person_route
-                {
-                    domain
-                        .core
-                        .routing_people_proposals
-                        .insert(request, PersonProposalRoute::Deciding { request, proposer, proposal, by: person })
-                        .expect("person acceptance route room");
-                    domain.work.push(Work::PersonProposal(tasks::Event::DecideProposal {
-                        reply_to: ReplyTo::new(request),
-                        proposer,
-                        proposal,
-                        message: Some(message),
-                        by: tasks::Party::Person(person),
-                        decision: tasks::ProposalDecision::Accept,
-                    }));
-                    continue;
-                }
-                if let Some(route) = domain.core.routing_calls.remove(&Token::new(task)) {
-                    if let Some(subscription) = domain.forge_subscribing.remove(&Token::new(task)) {
-                        let names = forge_route::watch_names(domain, &env.limits, &subscription)
-                            .expect("connector names preflighted at subscription");
-                        let owner = subscription.task;
-                        domain.work.push(Work::Forge(forge::Event::Subscribe { subscription }));
-                        domain.work.push(Work::Forge(forge::Event::Names { task: owner, resources: names }));
-                    }
-                    if let Some((owner, topic)) = domain.forge_unsubscribing.remove(&Token::new(task)) {
-                        domain.work.push(Work::Forge(forge::Event::Unsubscribe { task: owner, topic }));
-                    }
-                    let (key, answer) = match route {
-                        RoutedCall::Propose { key, proposal } => (key, CallAnswer::Proposed { proposal }),
-                        RoutedCall::Accepting { key, proposer, proposal, message } => {
-                            domain
-                                .core
-                                .routing_calls
-                                .insert(Token::new(task), RoutedCall::Decide { key, proposal })
-                                .expect("acceptance route room");
-                            domain.work.push(Work::Tasks(tasks::Event::DecideProposal {
-                                reply_to: ReplyTo::new(Token::new(task)),
-                                proposer,
-                                proposal,
-                                message: Some(message),
-                                by: tasks::Party::Task(key.task),
-                                decision: tasks::ProposalDecision::Accept,
-                            }));
-                            continue;
-                        }
-                        RoutedCall::Introduce(key) => (key, CallAnswer::Introduced),
-                        RoutedCall::Subscribe { key, subscription } => (key, CallAnswer::Subscribed { subscription }),
-                        RoutedCall::Unsubscribe(key) => (key, CallAnswer::Unsubscribed),
-                        RoutedCall::Control(key) => (key, CallAnswer::Controlled),
-                        RoutedCall::Message(_) => unreachable!("message calls produce Sent"),
-                        RoutedCall::Decide { .. } | RoutedCall::Withdraw { .. } | RoutedCall::Escalation { .. } => {
-                            unreachable!("proposal decisions produce their own terminal")
-                        }
-                    };
-                    decide_call(domain, &env.limits, decision, ReplyTo::new(Token::new(task)), key, answer);
-                } else if let Some(attempt) = domain.core.claiming.remove(&task) {
-                    let (writes, holders) = forge_route::claimed_writes(domain, env, task)
-                        .expect("the admitted assignment retains its bounded held forge writes");
-                    if !writes.is_empty() {
-                        domain.work.push(Work::Forge(forge::Event::Claim { task, attempt, writes, holders }));
-                    }
-                    let proof = domain.core.proofs.get(&task).expect("claim proof pre-reserved");
-                    save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
-                    let key = &domain.assignments.get(&task).expect("claimed assignment").workspace.key;
-                    let workstream = u64::from_be_bytes(key.as_ref().try_into().expect("task-number workstream"));
-                    emit(
-                        decision,
-                        &env.limits,
-                        Delivery::Fleet(fleet::Event::Start {
-                            kinds: fleet::Kinds::Workers,
-                            reply_to: internal(task),
-                            run: Token::new(task),
-                            attempt: Token::new(attempt),
-                            workstream,
-                        }),
-                    );
-                }
-            }
-            tasks::Request::WriterWaiting { task: Some(task), .. } => {
-                if domain.core.claiming.remove(&task).is_some() {
-                    drop(domain.assignments.remove(&task));
-                    drop(domain.core.proofs.remove(&task));
-                    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
-                }
-            }
-            tasks::Request::WriterWaiting { task: None, .. } | tasks::Request::Waiting { .. } => {}
-            tasks::Request::Taken { task, holdings } => {
-                for holding in holdings {
-                    if let tasks::Holding::Write { resource, .. } = holding
-                        && let Some(name) = forge_route::forge_name(
-                            domain.config.forge_connector,
-                            &resource,
-                            env.limits.forge.name_bytes,
-                        )
-                    {
-                        let from = match domain.forge.hold(&name) {
-                            Some(row) if row.task != task => Some(row.task),
-                            Some(_) | None => None,
-                        };
-                        domain.work.push(Work::Forge(forge::Event::Hold { task, resource: name, from }));
-                    }
-                }
-            }
-            tasks::Request::RestoreRefused { .. } => domain.startup = Startup::Failed,
-        }
-    }
-}
-
-#[expect(clippy::too_many_lines, reason = "the brief route consumes every child request and prepares the claimed run")]
 fn brief_outputs(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -4715,28 +3143,6 @@ fn brief_outputs(
             | brief::GatherRequest::Drop { .. } => unreachable!("temper's sole connector is numbered zero"),
             brief::GatherRequest::Complete { brief, order } => {
                 let task = brief.raw();
-                let current = match domain.core.contexts.get(&task) {
-                    Some(context) => match domain.core.tasks.task(task) {
-                        Some(row) => {
-                            row.phase == tasks::Phase::Active(tasks::Active::Preparing)
-                                && row.last_message == context.last_message
-                        }
-                        None => false,
-                    },
-                    None => false,
-                };
-                if !current {
-                    for placed in order {
-                        if let brief::GatherPlaced::Connector { token, .. } = placed {
-                            let id = Id::from_token(token);
-                            if domain.brief_connectors.get(id).is_some() {
-                                domain.brief_connectors.retire(id);
-                                domain.work.push(Work::Forge(forge::Event::DropBrief { section: token }));
-                            }
-                        }
-                    }
-                    continue;
-                }
                 let mut sections = List::with_capacity(u32::try_from(order.len()).expect("bounded section count"));
                 let mut missing_owner = false;
                 for placed in order {
@@ -4774,106 +3180,14 @@ fn brief_outputs(
                     sections.push(section).expect("bounded brief sections");
                 }
                 if missing_owner {
-                    drop(domain.core.contexts.remove(&task));
-                    drop(domain.core.dependency_results.remove(&task));
-                    drop(domain.core.transcripts.remove(&task));
-                    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+                    domain.work.push(Work::Core(jig_core::Event::BriefAssembled { task, ready: false }));
                     continue;
                 }
-                let sections = sections.into_boxed();
-                let context = domain.core.contexts.remove(&task).expect("rendered task owns context");
-                drop(domain.core.dependency_results.remove(&task));
-                let transcript = domain.core.transcripts.remove(&task).expect("rendered task owns loaded transcript");
-                let Some(attempt) = crate::fresh(&mut domain.core.counters, Family::Run) else {
-                    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
-                    continue;
-                };
-                let Some(workspace) = forge_route::run_workspace(domain, env, &context, attempt) else {
-                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
-                    continue;
-                };
-                let Some(claim_names) = forge_route::claim_names(domain, &env.limits, task, &workspace.names) else {
-                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
-                    continue;
-                };
-                if domain.core.run_admission(&context, env.wall, workspace.writes.clone())
-                    != jig_core::RunAdmission::Allow
-                {
-                    domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
-                    continue;
-                }
-                let Some(grant) = domain.core.accounts.grant(domain.core.settings.account, env.now) else {
-                    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
-                    continue;
-                };
-                if !domain.core.proofs.contains_key(&task) && domain.core.proofs.len() == domain.core.proofs.capacity()
-                {
-                    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
-                    continue;
-                }
-                let offered = if context.last_message == 0 { None } else { Some(context.last_message) };
-                assert!(
-                    domain
-                        .core
-                        .proofs
-                        .insert(task, RunProof { task, attempt, offered, turn: None, terminal: None })
-                        .is_ok(),
-                    "claim proof reserved before child mutation"
-                );
-                let turns = domain.core.resumed_turns(transcript);
-                let assignment = Assignment {
-                    task,
-                    attempt,
-                    charter: domain.core.settings.charter,
-                    run: Box::new(RunCharter {
-                        policy: domain.core.settings.run.clone(),
-                        contract: context.contract,
-                        authority: context.authority,
-                        budget: authority::left(authority_numbers(context.numbers))
-                            .min(domain.core.authority.rules().maximum_run_spend),
-                    }),
-                    sections,
-                    inbox: context.inbox,
-                    saved: forge_route::saved_tags(&context.saved, domain.config.forge_connector)
-                        .expect("task saved names were admitted by the root"),
-                    workspace: workspace.workspace.clone(),
-                    transcript: turns,
-                    answered: {
-                        let mut answered = List::with_capacity(domain.limits.call_records);
-                        for (&key, _) in &domain.core.call_parts {
-                            if key.task == task && key.attempt < attempt {
-                                let answer = call_answer(domain, key).expect("live call part has its connector answer");
-                                answered.push(crate::CallRecord { key, answer }).expect("retained call bound");
-                            }
-                        }
-                        answered.into_boxed()
-                    },
-                    grant,
-                };
-                assert!(domain.assignments.insert(task, assignment).is_ok(), "assignment fits live task room");
-                assert!(domain.core.claiming.insert(task, attempt) == Ok(None), "one pending claim per task");
-                if workspace.names.is_empty() {
-                    domain.work.push(Work::TasksClaim { task, attempt, writes: Box::new([]) });
-                } else {
-                    let mut hub_writes = List::with_capacity(env.limits.tasks.holdings);
-                    for name in &workspace.names {
-                        let resource = forge_route::hub_name(domain.config.forge_connector, name, &env.limits.tasks)
-                            .expect("admitted forge branch name fits the hub's bound");
-                        hub_writes.push(resource).expect("workspace write bound fits hub");
-                    }
-                    domain.work.push(Work::Forge(forge::Event::Names { task, resources: claim_names }));
-                    for name in workspace.own_holds {
-                        domain.work.push(Work::Forge(forge::Event::Hold { task, resource: name, from: None }));
-                    }
-                    domain.work.push(Work::TasksClaim { task, attempt, writes: hub_writes.into_boxed() });
-                }
+                assert!(domain.brief_sections.insert(task, sections.into_boxed()) == Ok(None), "one brief assembly");
+                domain.work.push(Work::Core(jig_core::Event::BriefAssembled { task, ready: true }));
             }
-            brief::GatherRequest::Failed { brief, .. } | brief::GatherRequest::Refused { brief } => {
-                let task = brief.raw();
-                drop(domain.core.contexts.remove(&task));
-                drop(domain.core.dependency_results.remove(&task));
-                drop(domain.core.transcripts.remove(&task));
-                domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+            brief::GatherRequest::Failed { .. } | brief::GatherRequest::Refused { .. } => {
+                unreachable!("the core abandons refused brief preparation")
             }
         }
     }
@@ -4897,276 +3211,164 @@ fn take_payload(domain: &mut Domain, token: Token) -> Option<Payload> {
 
 #[expect(
     clippy::too_many_lines,
-    reason = "the closed fleet output vocabulary remains exhaustive within one root decision"
+    reason = "the root translates every temper host tool into core or connector vocabulary"
 )]
-fn fleet_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, out: &mut Queue<fleet::Request>) {
-    for _ in 0..out.len() {
-        match out.pop().expect("fleet output count") {
-            fleet::Request::Assign { channel, kind: _, run, attempt } => {
-                let assignment = domain.assignments.remove(&run.raw()).expect("durable claim has prepared assignment");
-                assert!(assignment.attempt == attempt.raw(), "assignment names current attempt");
-                emit(decision, &env.limits, Delivery::View(Box::new(views::Event::Started { task: run, attempt })));
-                emit(decision, &env.limits, Delivery::Assigned { channel, assignment });
-            }
-            fleet::Request::Placed { run, attempt } => {
-                if domain.core.unreported_restored.get(&run.raw()) == Some(&attempt.raw()) {
-                    let _: Option<u64> = domain.core.unreported_restored.remove(&run.raw());
-                }
-                domain.work.push(Work::Tasks(tasks::Event::Started { task: run.raw(), attempt: attempt.raw() }));
-            }
-            fleet::Request::Turned { run, attempt, turn, body } => {
-                assert!(
-                    current_proof(domain, run.raw(), attempt.raw()),
-                    "actual current turn has reserved root proof before child mutation"
-                );
-                let payload = domain.payloads.get(Id::from_token(body)).expect("fleet returns owned token");
-                let payload = match payload.as_ref().expect("fleet returns owned payload") {
-                    Payload::Turn { body: payload, .. } => payload,
-                    Payload::Answer { .. } | Payload::Call { .. } | Payload::CallAnswer(_) => {
-                        unreachable!("fleet returns turn family")
-                    }
-                };
-                domain.work.push(Work::Tasks(tasks::Event::Turn {
-                    reply_to: ReplyTo::new(body),
-                    task: run.raw(),
-                    attempt: attempt.raw(),
-                    turn,
-                    read: payload.read,
-                    offered: domain.core.proofs.get(&run.raw()).expect("current proof").offered,
-                    cumulative: payload.cumulative,
+fn relay_payload(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    decision: &mut Decision,
+    reply_to: ReplyTo,
+    run: Token,
+    attempt: Token,
+    body: Token,
+) {
+    let Some(Payload::Call { key, body }) = take_payload(domain, body) else {
+        unreachable!("fleet returns admitted call payload")
+    };
+    assert!(key.task == run.raw() && key.attempt == attempt.raw(), "fleet call envelope is unchanged");
+    assert!(current_proof(domain, key.task, key.attempt), "fleet only relays a current claim");
+    match call_answer(domain, key) {
+        Some(answer) => relay_call(domain, &env.limits, decision, reply_to, answer),
+        None => match body.tool {
+            Tool::Unavailable => {
+                domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
+                    to: reply_to,
+                    key,
+                    part: jig_core::CallPart::Unavailable,
                 }));
             }
-            fleet::Request::Answered { run, attempt, payload, to, .. } => {
-                let _: Option<u64> = domain.core.unreported_restored.remove(&run.raw());
-                assert!(
-                    current_proof(domain, run.raw(), attempt.raw()),
-                    "actual current answer has reserved root proof before child mutation"
-                );
-                let _answered = to.into_token();
-                let body = domain.payloads.get_mut(Id::from_token(payload)).expect("fleet returns owned token");
-                let (cumulative, end, saved) = match body.as_mut().expect("fleet returns owned payload") {
-                    Payload::Answer { cumulative, end, saved, .. } => (*cumulative, end.clone(), saved.clone()),
-                    Payload::Turn { .. } | Payload::Call { .. } | Payload::CallAnswer(_) => {
-                        unreachable!("fleet returns answer family")
-                    }
-                };
-                let (end, saved) = match saved {
-                    Some(tags) => match forge_route::saved_resources(domain.config.forge_connector, &tags) {
-                        Some(resources) => (end, Some(resources)),
-                        None => (tasks::End::Failed(tasks::Class::Invalid), None),
+            Tool::Rejected(why) => domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
+                to: reply_to,
+                key,
+                part: jig_core::CallPart::DelegationRefused(tasks::Problem { task: None, why, blocked_by: None }),
+            })),
+            Tool::RejectedMessage(why) => domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
+                to: reply_to,
+                key,
+                part: jig_core::CallPart::MessageRefused(tasks::Problem { task: None, why, blocked_by: None }),
+            })),
+            Tool::RejectedControl(why) => domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
+                to: reply_to,
+                key,
+                part: jig_core::CallPart::ControlRefused(tasks::Problem { task: None, why, blocked_by: None }),
+            })),
+            Tool::RejectedProposal(why) => domain.work.push(Work::Core(jig_core::Event::NamedAnswer {
+                to: reply_to,
+                key,
+                part: jig_core::CallPart::ProposalRefused(tasks::Problem { task: None, why, blocked_by: None }),
+            })),
+            Tool::Delegate { batch } => {
+                delegate_call(domain, env, decision, reply_to, key, batch, false, Box::new([]));
+            }
+            Tool::Propose { action, reason, as_holder } => {
+                proposals::propose_call(domain, reply_to, key, action, reason, as_holder);
+            }
+            Tool::Decide { proposer, proposal, decision: choice } => {
+                domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                    to: reply_to,
+                    key,
+                    action: jig_core::NamedAction::DecideProposal {
+                        proposer,
+                        proposal,
+                        choice: match choice {
+                            ProposalChoice::Accept => jig_core::ProposalChoice::Accept,
+                            ProposalChoice::Reject { reason } => jig_core::ProposalChoice::Reject { reason },
+                            ProposalChoice::Pass => jig_core::ProposalChoice::Pass,
+                        },
                     },
-                    None => (end, None),
+                }));
+            }
+            Tool::Withdraw { proposal } => {
+                domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                    to: reply_to,
+                    key,
+                    action: jig_core::NamedAction::WithdrawProposal { proposal },
+                }));
+            }
+            Tool::DecideEscalation { task, revision, decision: choice } => {
+                domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                    to: reply_to,
+                    key,
+                    action: jig_core::NamedAction::DecideEscalation {
+                        task,
+                        revision,
+                        choice: match choice {
+                            EscalationChoice::Release => jig_core::EscalationChoice::Release,
+                            EscalationChoice::Reject { reason } => jig_core::EscalationChoice::Reject { reason },
+                            EscalationChoice::Pass => jig_core::EscalationChoice::Pass,
+                        },
+                    },
+                }));
+            }
+            Tool::Amend { target, amendment } => {
+                domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                    to: reply_to,
+                    key,
+                    action: jig_core::NamedAction::Amend { target, amendment },
+                }));
+            }
+            Tool::Cancel { target, reason } => {
+                domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                    to: reply_to,
+                    key,
+                    action: jig_core::NamedAction::Control { target, control: tasks::Control::Cancel { reason } },
+                }));
+            }
+            Tool::Release { target } => {
+                domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                    to: reply_to,
+                    key,
+                    action: jig_core::NamedAction::Control { target, control: tasks::Control::Release },
+                }));
+            }
+            Tool::Message { target, form, words } => {
+                let kind = match form {
+                    MessageForm::Words => tasks::MessageKind::Words,
+                    MessageForm::Question => tasks::MessageKind::Question,
+                    MessageForm::Answer { question } => tasks::MessageKind::Answer { question },
                 };
-                let proof = domain.core.proofs.get_mut(&run.raw()).expect("terminal proof pre-reserved");
-                assert!(proof.attempt == attempt.raw(), "terminal callback belongs to current proof");
-                proof.terminal =
-                    Some(TerminalRecord { task: run.raw(), attempt: attempt.raw(), cumulative, end: end.clone() });
-                domain.work.push(Work::Tasks(tasks::Event::Activation {
-                    reply_to: ReplyTo::new(payload),
-                    task: run.raw(),
-                    attempt: attempt.raw(),
-                    cause: tasks::Cause::Priced { cumulative },
-                    end,
-                    saved,
+                domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                    to: reply_to,
+                    key,
+                    action: jig_core::NamedAction::Message { target, kind, words },
                 }));
             }
-            fleet::Request::Acknowledge { channel, run, attempt } => {
-                emit(decision, &env.limits, Delivery::Acknowledge { channel, task: run.raw(), attempt: attempt.raw() });
-            }
-            fleet::Request::AcknowledgeTurn { channel, run, attempt, turn } => emit(
-                decision,
-                &env.limits,
-                Delivery::AcknowledgeTurn { channel, task: run.raw(), attempt: attempt.raw(), turn },
-            ),
-            fleet::Request::Cancel { channel, run, attempt } => {
-                emit(decision, &env.limits, Delivery::Cancel { channel, task: run.raw(), attempt: attempt.raw() });
-            }
-            fleet::Request::Refuse { channel } => emit(decision, &env.limits, Delivery::Refuse { channel }),
-            fleet::Request::Drop { payload } => drop(take_payload(domain, payload)),
-            fleet::Request::Listed { .. } => {}
-            fleet::Request::TurnBusy { channel, run, attempt, turn } => emit(
-                decision,
-                &env.limits,
-                Delivery::TurnBusy { channel, task: run.raw(), attempt: attempt.raw(), turn },
-            ),
-            fleet::Request::Lost { to, run, attempt } => {
-                let _answered = to.into_token();
-                let proof = domain.core.proofs.get(&run.raw()).expect("lost claim has reserved durable evidence");
-                assert!(proof.attempt == attempt.raw(), "lost callback belongs to current proof");
-                let never_reported = domain.core.unreported_restored.remove(&run.raw()) == Some(attempt.raw());
-                let mut committed_call = false;
-                for (key, _) in &domain.core.call_parts {
-                    if key.task == run.raw() && key.attempt == attempt.raw() {
-                        committed_call = true;
-                        break;
-                    }
-                }
-                let end = if never_reported && proof.turn.is_none() && !committed_call {
-                    tasks::End::Refused
-                } else {
-                    tasks::End::Failed(tasks::Class::Lost)
-                };
-                remember_unpriced_terminal(domain, run, attempt, end.clone());
-                domain.work.push(Work::Tasks(tasks::Event::Activation {
-                    reply_to: internal(u64::MAX),
-                    task: run.raw(),
-                    attempt: attempt.raw(),
-                    end,
-                    saved: None,
-                    cause: tasks::Cause::Unpriced,
-                }));
-                domain.work.push(Work::Forge(forge::Event::Lost { task: run.raw(), attempt: attempt.raw() }));
-            }
-            fleet::Request::NotStarted { to, run, attempt }
-            | fleet::Request::Withdrawn { to, run, attempt, .. }
-            | fleet::Request::Refused { to, run, attempt, .. } => {
-                let _answered = to.into_token();
-                let _: Option<u64> = domain.core.unreported_restored.remove(&run.raw());
-                drop(domain.assignments.remove(&run.raw()));
-                remember_unpriced_terminal(domain, run, attempt, tasks::End::Refused);
-                domain.work.push(Work::Tasks(tasks::Event::Activation {
-                    reply_to: internal(u64::MAX),
-                    task: run.raw(),
-                    attempt: attempt.raw(),
-                    end: tasks::End::Refused,
-                    saved: None,
-                    cause: tasks::Cause::Unpriced,
+            Tool::Introduce { left, right } => {
+                domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                    to: reply_to,
+                    key,
+                    action: jig_core::NamedAction::Introduce { left, right },
                 }));
             }
-            fleet::Request::Inbound { channel, run, attempt, event } => {
-                let relay = domain.core.relaying.take().expect("fleet inbound follows committed word");
-                assert!(event.raw() == relay.word.number, "relay event identifies word");
-                if let Some(proof) = domain.core.proofs.get_mut(&run.raw())
-                    && proof.attempt == attempt.raw()
-                    && proof.offered == relay.previous
-                {
-                    proof.offered = Some(match proof.offered {
-                        Some(previous) => previous.max(relay.word.number),
-                        None => relay.word.number,
-                    });
-                    save(decision, &env.limits, Write::Save(Record::RunProof(proof.clone())));
-                    emit(
-                        decision,
-                        &env.limits,
-                        Delivery::Inbound { channel, task: run.raw(), attempt: attempt.raw(), word: relay.word },
+            Tool::Subscribe { kind } => domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                to: reply_to,
+                key,
+                action: jig_core::NamedAction::Subscribe { kind },
+            })),
+            Tool::SubscribeForge { topic, own_change, paths } => {
+                forge_route::subscribe_call(domain, env, decision, reply_to, key, topic, own_change, paths);
+            }
+            Tool::ReadForge { repository, read } => {
+                forge_route::read_call(domain, env, decision, reply_to, key, repository, read);
+            }
+            Tool::EffectForge { repository, resource, write } => {
+                forge_route::effect_call(domain, env, decision, reply_to, key, repository, resource, *write);
+            }
+            Tool::Unsubscribe { subscription } => {
+                let token = reply_to.into_token();
+                if let Some(topic) = domain.forge.subscription(key.task, subscription) {
+                    assert!(
+                        domain.forge_unsubscribing.insert(token, (key.task, topic)) == Ok(None),
+                        "one connector unsubscribe"
                     );
                 }
+                domain.work.push(Work::Core(jig_core::Event::NamedAction {
+                    to: ReplyTo::new(token),
+                    key,
+                    action: jig_core::NamedAction::Unsubscribe { subscription },
+                }));
             }
-            fleet::Request::Undelivered { .. } => {
-                drop(domain.core.relaying.take());
-            }
-            fleet::Request::Relay { reply_to, run, attempt, body } => {
-                let Some(Payload::Call { key, body }) = take_payload(domain, body) else {
-                    unreachable!("fleet returns admitted call payload")
-                };
-                assert!(key.task == run.raw() && key.attempt == attempt.raw(), "fleet call envelope is unchanged");
-                assert!(current_proof(domain, key.task, key.attempt), "fleet only relays a current claim");
-                match call_answer(domain, key) {
-                    Some(answer) => relay_call(domain, &env.limits, decision, reply_to, answer),
-                    None => match body.tool {
-                        Tool::Unavailable => {
-                            decide_call(domain, &env.limits, decision, reply_to, key, CallAnswer::Unavailable);
-                        }
-                        Tool::Rejected(why) => decide_call(
-                            domain,
-                            &env.limits,
-                            decision,
-                            reply_to,
-                            key,
-                            CallAnswer::DelegationRefused(tasks::Problem { task: None, why, blocked_by: None }),
-                        ),
-                        Tool::RejectedMessage(why) => decide_call(
-                            domain,
-                            &env.limits,
-                            decision,
-                            reply_to,
-                            key,
-                            CallAnswer::MessageRefused(tasks::Problem { task: None, why, blocked_by: None }),
-                        ),
-                        Tool::RejectedControl(why) => decide_call(
-                            domain,
-                            &env.limits,
-                            decision,
-                            reply_to,
-                            key,
-                            CallAnswer::ControlRefused(tasks::Problem { task: None, why, blocked_by: None }),
-                        ),
-                        Tool::RejectedProposal(why) => decide_call(
-                            domain,
-                            &env.limits,
-                            decision,
-                            reply_to,
-                            key,
-                            CallAnswer::ProposalRefused(tasks::Problem { task: None, why, blocked_by: None }),
-                        ),
-                        Tool::Delegate { batch } => {
-                            delegate_call(domain, env, decision, reply_to, key, batch, false, Box::new([]));
-                        }
-                        Tool::Propose { action, reason, as_holder } => {
-                            proposals::propose_call(domain, env, decision, reply_to, key, action, reason, as_holder);
-                        }
-                        Tool::Decide { proposer, proposal, decision: choice } => {
-                            proposals::decide_call(domain, env, decision, reply_to, key, proposer, proposal, choice);
-                        }
-                        Tool::Withdraw { proposal } => {
-                            proposals::withdraw_call(domain, env, decision, reply_to, key, proposal);
-                        }
-                        Tool::DecideEscalation { task, revision, decision: choice } => {
-                            escalation::task_decide(domain, env, decision, reply_to, key, task, revision, choice);
-                        }
-                        Tool::Amend { target, amendment } => {
-                            amend_call(domain, env, decision, reply_to, key, target, amendment);
-                        }
-                        Tool::Cancel { target, reason } => {
-                            control_call(domain, reply_to, key, target, tasks::Control::Cancel { reason });
-                        }
-                        Tool::Release { target } => {
-                            control_call(domain, reply_to, key, target, tasks::Control::Release);
-                        }
-                        Tool::Message { target, form, words } => {
-                            message_call(domain, env, decision, reply_to, key, target, form, words);
-                        }
-                        Tool::Introduce { left, right } => {
-                            introduce_call(domain, reply_to, key, left, right);
-                        }
-                        Tool::Subscribe { kind } => subscribe_call(domain, env, decision, reply_to, key, kind),
-                        Tool::SubscribeForge { topic, own_change, paths } => {
-                            forge_route::subscribe_call(domain, env, decision, reply_to, key, topic, own_change, paths);
-                        }
-                        Tool::ReadForge { repository, read } => {
-                            forge_route::read_call(domain, env, decision, reply_to, key, repository, read);
-                        }
-                        Tool::EffectForge { repository, resource, write } => {
-                            forge_route::effect_call(
-                                domain, env, decision, reply_to, key, repository, resource, *write,
-                            );
-                        }
-                        Tool::Unsubscribe { subscription } => unsubscribe_call(domain, reply_to, key, subscription),
-                    },
-                }
-            }
-            fleet::Request::Relayed { channel, run, attempt, call, answer } => {
-                let Some(Payload::CallAnswer(answer)) = take_payload(domain, answer) else {
-                    unreachable!("fleet relays an owned call answer")
-                };
-                emit(
-                    decision,
-                    &env.limits,
-                    Delivery::CallAnswer { channel, task: run.raw(), attempt: attempt.raw(), call, answer },
-                );
-            }
-            fleet::Request::AssignTyped { .. }
-            | fleet::Request::InboundTyped { .. }
-            | fleet::Request::RelayTyped { .. }
-            | fleet::Request::RelayedTyped { .. }
-            | fleet::Request::DropTyped { .. }
-            | fleet::Request::UndeliveredTyped { .. }
-            | fleet::Request::Grant { .. }
-            | fleet::Request::Rejected { .. }
-            | fleet::Request::Exhausted { .. }
-            | fleet::Request::Bounced { .. }
-            | fleet::Request::Told { .. } => unreachable!("06a does not route tool/credential worker messages"),
-        }
+        },
     }
 }
 
@@ -5328,7 +3530,7 @@ fn input_waiter(domain: &Domain, waiter: Token) -> bool {
 fn input_failed(domain: &mut Domain, waiter: Token) {
     let Some(Read::InputCheck(read)) = take_read(domain, waiter) else { return };
     domain.result_reads.retire(Id::from_token(waiter));
-    domain.work.push(Work::DelegateInputRefused { to: read.to, key: read.key });
+    domain.work.push(Work::Core(jig_core::Event::DelegateInputFailed { to: ReplyTo::new(read.to), key: read.key }));
 }
 
 fn input_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: Option<Key>, out: &mut Queue<Request>) {
@@ -5356,33 +3558,14 @@ fn input_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: O
             return;
         }
     };
-    if row.number != wanted
-        || row.project != project
-        || row.requester != tasks::Party::Task(creator)
-        || !match &row.phase {
-            tasks::Phase::Ended(_) => true,
-            tasks::Phase::Waiting | tasks::Phase::Active(_) | tasks::Phase::Closing(_) | tasks::Phase::Held { .. } => {
-                false
-            }
-        }
-    {
+    let Some(stub) = domain.core.input_stub(creator, project, wanted, row) else {
         input_failed(domain, waiter);
         return;
-    }
+    };
     let Some(Some(Read::InputCheck(read))) = domain.result_reads.get_mut(Id::from_token(waiter)) else {
         unreachable!("input read survives validation")
     };
-    let phase = match &row.phase {
-        tasks::Phase::Ended(tasks::Ending::Done(_)) => tasks::Status::Done,
-        tasks::Phase::Ended(tasks::Ending::Failed { .. }) => tasks::Status::Failed,
-        tasks::Phase::Ended(tasks::Ending::Cancelled { .. }) => tasks::Status::Cancelled,
-        tasks::Phase::Waiting | tasks::Phase::Active(_) | tasks::Phase::Closing(_) | tasks::Phase::Held { .. } => {
-            unreachable!("validated historical input")
-        }
-    };
-    read.stubs
-        .push(tasks::Stub { task: wanted, phase, result: Token::new(wanted) })
-        .expect("bounded historical input count");
+    read.stubs.push(stub).expect("bounded historical input count");
     read.at = read.at.checked_add(1).expect("bounded input index");
     if let Some(&next) = read.ids.get(usize::try_from(read.at).expect("bounded input index")) {
         request_load(domain, waiter, Range::TaskResult { task: next }, None, out);
@@ -5390,12 +3573,12 @@ fn input_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: O
     }
     let Some(Read::InputCheck(read)) = take_read(domain, waiter) else { unreachable!("completed input read") };
     domain.result_reads.retire(Id::from_token(waiter));
-    domain.work.push(Work::DelegateValidated {
-        to: read.to,
+    domain.work.push(Work::Core(jig_core::Event::DelegateValidated {
+        to: ReplyTo::new(read.to),
         key: read.key,
         batch: read.batch,
         stubs: read.stubs.into_boxed(),
-    });
+    }));
 }
 
 #[expect(clippy::too_many_lines, reason = "one store terminal dispatcher covers every live read owner")]
@@ -5550,36 +3733,25 @@ fn load_outputs(
 fn transcript_failed(domain: &mut Domain, waiter: Token) {
     let Some(Read::Transcript { task }) = take_read(domain, waiter) else { return };
     domain.result_reads.retire(Id::from_token(waiter));
-    drop(domain.core.contexts.remove(&task));
-    drop(domain.core.transcripts.remove(&task));
-    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+    domain.work.push(Work::Core(jig_core::Event::PreparationFailed { task }));
 }
 
 fn begin_dependency_read(domain: &mut Domain, task: u64) -> Option<(Token, u64)> {
-    let context = domain.core.contexts.get(&task).expect("preparing task context");
-    let count = context.dependencies.len().checked_add(context.spec.inputs.len()).expect("bounded input count");
-    if count == 0 {
+    let ids = domain.core.preparation_ids(task).expect("preparing task context");
+    if ids.is_empty() {
         domain.work.push(Work::StartBrief { task });
         return None;
     }
-    let mut ids = List::with_capacity(u32::try_from(count).expect("bounded dependency count"));
-    for &dependency in &context.dependencies {
-        ids.push(dependency).expect("dependency identity room");
-    }
-    for &input in &context.spec.inputs {
-        ids.push(input).expect("input identity room");
-    }
-    let first = *ids.get(0).expect("nonempty result identities");
+    let first = *ids.first().expect("nonempty preparation IDs");
+    let count = ids.len();
     let read = DependencyRead {
         task,
-        ids: ids.into_boxed(),
+        ids,
         at: 0,
         results: List::with_capacity(u32::try_from(count).expect("bounded result count")),
     };
     let Ok(waiter) = domain.result_reads.insert(Some(Read::Dependency(read))) else {
-        drop(domain.core.contexts.remove(&task));
-        drop(domain.core.transcripts.remove(&task));
-        domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+        domain.work.push(Work::Core(jig_core::Event::PreparationFailed { task }));
         return None;
     };
     Some((waiter.token(), first))
@@ -5588,9 +3760,7 @@ fn begin_dependency_read(domain: &mut Domain, task: u64) -> Option<(Token, u64)>
 fn dependency_failed(domain: &mut Domain, waiter: Token) {
     let Some(Read::Dependency(read)) = take_read(domain, waiter) else { return };
     domain.result_reads.retire(Id::from_token(waiter));
-    drop(domain.core.contexts.remove(&read.task));
-    drop(domain.core.transcripts.remove(&read.task));
-    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task: read.task }));
+    domain.work.push(Work::Core(jig_core::Event::PreparationFailed { task: read.task }));
 }
 
 fn dependency_loaded(
@@ -5602,7 +3772,6 @@ fn dependency_loaded(
 ) {
     let Some(Some(Read::Dependency(read))) = domain.result_reads.get(Id::from_token(waiter)) else { return };
     let wanted = *read.ids.get(usize::try_from(read.at).expect("bounded index")).expect("one requested result");
-    let project = domain.core.contexts.get(&read.task).expect("preparing task context").project;
     if next.is_some() || rows.len() != 1 {
         dependency_failed(domain, waiter);
         return;
@@ -5623,22 +3792,14 @@ fn dependency_loaded(
             return;
         }
     };
-    if row.number != wanted || row.project != project {
+    let Some(result) = domain.core.dependency_result(read.task, wanted, row) else {
         dependency_failed(domain, waiter);
         return;
-    }
-    let ending = match row.phase {
-        tasks::Phase::Ended(ending) => ending,
-        tasks::Phase::Waiting | tasks::Phase::Active(_) | tasks::Phase::Closing(_) | tasks::Phase::Held { .. } => {
-            dependency_failed(domain, waiter);
-            return;
-        }
     };
-    let (kind, words) = result_notice(ending);
     let Some(Some(Read::Dependency(read))) = domain.result_reads.get_mut(Id::from_token(waiter)) else {
         unreachable!("read survives validation")
     };
-    read.results.push(HistoricalResult { task: wanted, kind, words }).expect("one result per bounded ID");
+    read.results.push(result).expect("one result per bounded ID");
     read.at = read.at.checked_add(1).expect("bounded result index");
     if let Some(&next) = read.ids.get(usize::try_from(read.at).expect("bounded index")) {
         request_load(domain, waiter, Range::TaskResult { task: next }, None, out);
@@ -5699,90 +3860,13 @@ fn transcript_loaded(
     }
 }
 
-#[expect(clippy::too_many_lines, reason = "one preparation gathers typed core sections and pinned forge sources")]
-fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
-    let Some(context) = domain.core.contexts.get(&task) else { return };
-    let Some(current) = domain.core.tasks.task(task) else { return };
-    if current.phase != tasks::Phase::Active(tasks::Active::Preparing) || current.last_message != context.last_message {
-        return;
-    }
-    let oversized = domain.core.transcript_oversized(task);
-    let mut wanted = List::with_capacity(domain.limits.brief.sections);
-    let Some(task_text) = read_core(domain, task, TaskBriefPart::Spec) else {
-        domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
-        return;
-    };
-    wanted
-        .push(brief::Planned::Core {
-            kind: brief::Core::Task,
-            text: task_text,
-            limit: domain.limits.brief.budgets.task,
-            priority: 0,
-            required: true,
-        })
-        .expect("task brief room");
-    if !context.dependencies.is_empty() || !context.spec.inputs.is_empty() {
-        let Some(text) = read_core(domain, task, TaskBriefPart::Dependencies) else {
-            domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
-            return;
-        };
-        wanted
-            .push(brief::Planned::Core {
-                kind: brief::Core::Results,
-                text,
-                limit: domain.limits.brief.budgets.dependencies,
-                priority: 1,
-                required: true,
-            })
-            .expect("dependency result section room");
-    }
-    if oversized {
-        let Some(text) = read_core(domain, task, TaskBriefPart::TranscriptTail) else {
-            domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
-            return;
-        };
-        wanted
-            .push(brief::Planned::Core {
-                kind: brief::Core::TranscriptTail,
-                text,
-                limit: domain.limits.brief.budgets.task,
-                priority: 2,
-                required: true,
-            })
-            .expect("tail brief room");
-    }
-    if !context.delegates.is_empty()
-        && wanted.room() > 0
-        && let Some(text) = read_core(domain, task, TaskBriefPart::Delegates)
-    {
-        wanted
-            .push(brief::Planned::Core {
-                kind: brief::Core::Plan,
-                text,
-                limit: domain.limits.brief.budgets.plan,
-                priority: 3,
-                required: false,
-            })
-            .expect("delegate section room");
-    }
-    if context.tries != tasks::Tries::NONE
-        && wanted.room() > 0
-        && let Some(text) = read_core(domain, task, TaskBriefPart::Attempts)
-    {
-        wanted
-            .push(brief::Planned::Core {
-                kind: brief::Core::Attempts,
-                text,
-                limit: domain.limits.brief.budgets.attempts,
-                priority: 4,
-                required: false,
-            })
-            .expect("attempt brief room");
-    }
-    let parent = match context.requester {
-        tasks::Party::Task(parent) => Some(parent),
-        tasks::Party::Person(_) | tasks::Party::Deployment { .. } => None,
-    };
+fn finish_brief_plan(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    task: u64,
+    parent: Option<u64>,
+    mut wanted: List<brief::Planned>,
+) {
     if let Some(parent) = parent
         && let Some(row) = domain.forge.change(parent)
         && let Some((child, _)) = row.delegate
@@ -5885,60 +3969,6 @@ fn forge_brief_budget(kind: ForgeBriefKind, budgets: &BriefBudgets) -> u32 {
         ForgeBriefKind::Reviews => budgets.reviews,
         ForgeBriefKind::Pull => budgets.pull,
     }
-}
-
-fn read_core(domain: &Domain, task: u64, part: TaskBriefPart) -> Option<Box<[u8]>> {
-    let tail = match part {
-        TaskBriefPart::TranscriptTail => true,
-        TaskBriefPart::Spec | TaskBriefPart::Dependencies | TaskBriefPart::Delegates | TaskBriefPart::Attempts => false,
-    };
-    let read = task_section(domain, task, part, domain.limits.brief.parts, domain.limits.brief.read_bytes);
-    let parts = match read {
-        TaskBriefRead::Got(parts) => parts,
-        TaskBriefRead::Failed => return None,
-    };
-    let mut length = 0_usize;
-    let mut ended_line = true;
-    for part in &parts {
-        length = length.checked_add(part.bytes.len())?;
-        if let Some(last) = part.bytes.last() {
-            ended_line = *last == b'\n';
-        }
-        if part.left > 0 {
-            length = length
-                .checked_add(usize::from(!tail && !ended_line))?
-                .checked_add(1)?
-                .checked_add(Decimal::of(part.left).as_bytes().len())?
-                .checked_add(b" bytes cut]\n".len())?;
-            ended_line = true;
-        }
-    }
-    if length > usize::try_from(domain.limits.brief.brief_bytes).ok()? {
-        return None;
-    }
-    let mut writer = Writer::new(length);
-    let mut ended_line = true;
-    for part in parts {
-        if tail && part.left > 0 {
-            writer.put(b"[").expect("measured cut marker");
-            writer.put(Decimal::of(part.left).as_bytes()).expect("measured lost count");
-            writer.put(b" bytes cut]\n").expect("measured cut marker");
-        }
-        writer.put(&part.bytes).expect("measured part");
-        if let Some(last) = part.bytes.last() {
-            ended_line = *last == b'\n';
-        }
-        if !tail && part.left > 0 {
-            if !ended_line {
-                writer.put(b"\n").expect("measured break");
-            }
-            writer.put(b"[").expect("measured cut marker");
-            writer.put(Decimal::of(part.left).as_bytes()).expect("measured lost count");
-            writer.put(b" bytes cut]\n").expect("measured cut marker");
-            ended_line = true;
-        }
-    }
-    Some(writer.finish())
 }
 
 fn startup_page(
@@ -6087,15 +4117,38 @@ fn account_outputs(routed: jig_core::Requests, out: &mut Queue<Request>) {
             jig_core::Request::Now(value) => match *value {
                 jig_core::Now::Account(request) => out.push(Request::Account(request)),
                 jig_core::Now::View(_)
+                | jig_core::Now::SignInRefused { .. }
+                | jig_core::Now::WatchRefused { .. }
                 | jig_core::Now::NotesIndexed { .. }
                 | jig_core::Now::NotesRecalled { .. }
-                | jig_core::Now::NotesRefused { .. } => unreachable!("account route owns its now output"),
+                | jig_core::Now::NotesRefused { .. }
+                | jig_core::Now::DropPayload { .. }
+                | jig_core::Now::DropAssignment { .. }
+                | jig_core::Now::TurnPayload { .. }
+                | jig_core::Now::AnswerPayload { .. }
+                | jig_core::Now::AcceptedTurn { .. }
+                | jig_core::Now::RefusedPayload { .. }
+                | jig_core::Now::Activate { .. }
+                | jig_core::Now::PrepareAgent { .. }
+                | jig_core::Now::StartPreparation { .. }
+                | jig_core::Now::HistoricalProposal { .. }
+                | jig_core::Now::BriefCorePlanned { .. }
+                | jig_core::Now::WorkspaceRequest { .. }
+                | jig_core::Now::RunPreparationFailed { .. }
+                | jig_core::Now::RunPrepared { .. }
+                | jig_core::Now::CompleteBrief { .. }
+                | jig_core::Now::HistoricalEscalation { .. }
+                | jig_core::Now::EscalationInspection { .. }
+                | jig_core::Now::EscalationReply { .. }
+                | jig_core::Now::EscalationRefused { .. }
+                | jig_core::Now::CallPayload { .. }
+                | jig_core::Now::ProcedureDelegateOutcome { .. }
+                | jig_core::Now::RestoreRefused => unreachable!("account route owns its now output"),
             },
             jig_core::Request::Decided => {}
-            jig_core::Request::Write(_)
-            | jig_core::Request::Ask { .. }
-            | jig_core::Request::Held(_)
-            | jig_core::Request::Route(_) => unreachable!("account route changes no store decision"),
+            jig_core::Request::Write(_) | jig_core::Request::Ask { .. } | jig_core::Request::Held(_) => {
+                unreachable!("account route changes no store decision")
+            }
         }
     }
 }
@@ -6125,21 +4178,6 @@ fn ending_words(ending: tasks::Ending) -> Box<[u8]> {
     }
 }
 
-fn result_notice(ending: tasks::Ending) -> (tasks::ResultKind, Box<[u8]>) {
-    match ending {
-        tasks::Ending::Done(result) => match result {
-            tasks::TaskResult::Report { words } => (tasks::ResultKind::Report, words),
-            tasks::TaskResult::Verdict { code, words } => (tasks::ResultKind::Verdict { code }, words),
-            tasks::TaskResult::Change { connector, kind, resource, words } => {
-                (tasks::ResultKind::Change { connector, kind, resource }, words)
-            }
-            tasks::TaskResult::Failure { reason } => (tasks::ResultKind::Failed, reason),
-        },
-        tasks::Ending::Failed { reason } => (tasks::ResultKind::Failed, reason),
-        tasks::Ending::Cancelled { reason, .. } => (tasks::ResultKind::Cancelled, reason),
-    }
-}
-
 fn tasks_saved_within(saved: Option<&[u32]>, most: u32) -> bool {
     let Some(tags) = saved else { return true };
     if tags.len() > usize::try_from(most).expect("u32 fits usize") {
@@ -6157,163 +4195,6 @@ fn tasks_saved_within(saved: Option<&[u32]>, most: u32) -> bool {
 
 fn end_bytes(end: &tasks::End) -> u64 {
     tasks::terminal_bytes(end).expect("bounded terminal bytes")
-}
-
-fn authority_numbers(numbers: tasks::Numbers) -> authority::Numbers {
-    authority::Numbers {
-        budget: numbers.budget,
-        spent: numbers.spent,
-        spent_below: numbers.spent_below,
-        reserved: numbers.reserved,
-    }
-}
-
-fn symbolic_grants(grants: &[tasks::Grant], limit: u32) -> Option<Box<[authority::Grant]>> {
-    let mut result = List::with_capacity(limit);
-    for grant in grants {
-        let last = match &grant.pattern.last {
-            tasks::Last::Open(prefix) => authority::Last::Open(prefix.clone()),
-            tasks::Last::Exact(_) => return None,
-        };
-        result
-            .push(authority::Grant {
-                connector: grant.connector,
-                kind: grant.kind,
-                pattern: authority::Pattern { segments: grant.pattern.segments.clone(), last },
-            })
-            .ok()?;
-    }
-    Some(result.into_boxed())
-}
-
-fn resolved_delegate_authority(
-    base: &tasks::Authority,
-    symbolic: &[tasks::Grant],
-    task: u64,
-    limits: &Limits,
-) -> Option<tasks::Authority> {
-    let symbols = symbolic_grants(symbolic, limits.authority.grants)?;
-    let resolved = authority::resolve_task_grants(&symbols, task, &limits.authority)?;
-    let mut authority = authority_value(base);
-    let mut grants = List::with_capacity(limits.authority.grants);
-    for grant in &authority.grants {
-        grants.push(grant.clone()).ok()?;
-    }
-    for grant in resolved {
-        grants.push(grant).ok()?;
-    }
-    authority.grants = grants.into_boxed();
-    Some(task_authority(&authority))
-}
-
-fn task_authority(value: &authority::Authority) -> tasks::Authority {
-    let mut grants = List::with_capacity(u32::try_from(value.grants.len()).expect("validated authority grants"));
-    for grant in &value.grants {
-        let last = match &grant.pattern.last {
-            authority::Last::Exact(bytes) => tasks::Last::Exact(bytes.clone()),
-            authority::Last::Open(bytes) => tasks::Last::Open(bytes.clone()),
-        };
-        grants
-            .push(tasks::Grant {
-                connector: grant.connector,
-                kind: grant.kind,
-                pattern: tasks::Pattern { segments: grant.pattern.segments.clone(), last },
-            })
-            .expect("grant capacity");
-    }
-    let mut note_resources =
-        List::with_capacity(u32::try_from(value.note_resources.len()).expect("validated note scopes"));
-    for scope in &value.note_resources {
-        note_resources
-            .push(tasks::ResourceScope {
-                connector: scope.connector,
-                pattern: tasks::Pattern {
-                    segments: scope.pattern.segments.clone(),
-                    last: match &scope.pattern.last {
-                        authority::Last::Exact(bytes) => tasks::Last::Exact(bytes.clone()),
-                        authority::Last::Open(bytes) => tasks::Last::Open(bytes.clone()),
-                    },
-                },
-            })
-            .expect("note scope capacity");
-    }
-    let mut kinds = List::with_capacity(u32::try_from(value.delegation.kinds.len()).expect("validated executors"));
-    for kind in &value.delegation.kinds {
-        kinds
-            .push(match kind {
-                authority::Executor::Charter(number) => tasks::AuthorityExecutor::Charter(*number),
-                authority::Executor::Procedure(number) => tasks::AuthorityExecutor::Procedure(*number),
-                authority::Executor::Role(number) => tasks::AuthorityExecutor::Role(*number),
-            })
-            .expect("executor capacity");
-    }
-    tasks::Authority {
-        tools: tasks::Tools(value.tools.0),
-        grants: grants.into_boxed(),
-        delegation: tasks::Delegation {
-            kinds: kinds.into_boxed(),
-            tasks: value.delegation.tasks,
-            depth: value.delegation.depth,
-        },
-        budget: tasks::Budget { spend: value.budget.spend, deadline: value.budget.deadline },
-        notes: tasks::Scopes(value.notes.0),
-        note_resources: note_resources.into_boxed(),
-    }
-}
-
-fn authority_value(value: &tasks::Authority) -> authority::Authority {
-    let mut grants = List::with_capacity(u32::try_from(value.grants.len()).expect("validated task grants"));
-    for grant in &value.grants {
-        let last = match &grant.pattern.last {
-            tasks::Last::Exact(bytes) => authority::Last::Exact(bytes.clone()),
-            tasks::Last::Open(bytes) => authority::Last::Open(bytes.clone()),
-        };
-        grants
-            .push(authority::Grant {
-                connector: grant.connector,
-                kind: grant.kind,
-                pattern: authority::Pattern { segments: grant.pattern.segments.clone(), last },
-            })
-            .expect("grant capacity");
-    }
-    let mut note_resources =
-        List::with_capacity(u32::try_from(value.note_resources.len()).expect("validated task note scopes"));
-    for scope in &value.note_resources {
-        note_resources
-            .push(authority::ResourceScope {
-                connector: scope.connector,
-                pattern: authority::Pattern {
-                    segments: scope.pattern.segments.clone(),
-                    last: match &scope.pattern.last {
-                        tasks::Last::Exact(bytes) => authority::Last::Exact(bytes.clone()),
-                        tasks::Last::Open(bytes) => authority::Last::Open(bytes.clone()),
-                    },
-                },
-            })
-            .expect("note scope capacity");
-    }
-    let mut kinds = List::with_capacity(u32::try_from(value.delegation.kinds.len()).expect("validated task executors"));
-    for kind in &value.delegation.kinds {
-        kinds
-            .push(match kind {
-                tasks::AuthorityExecutor::Charter(number) => authority::Executor::Charter(*number),
-                tasks::AuthorityExecutor::Procedure(number) => authority::Executor::Procedure(*number),
-                tasks::AuthorityExecutor::Role(number) => authority::Executor::Role(*number),
-            })
-            .expect("executor capacity");
-    }
-    authority::Authority {
-        tools: authority::Tools(value.tools.0),
-        grants: grants.into_boxed(),
-        delegation: authority::Delegation {
-            kinds: kinds.into_boxed(),
-            tasks: value.delegation.tasks,
-            depth: value.delegation.depth,
-        },
-        budget: authority::Budget { spend: value.budget.spend, deadline: value.budget.deadline },
-        notes: authority::Scopes(value.notes.0),
-        note_resources: note_resources.into_boxed(),
-    }
 }
 
 fn payload_slots(limits: &Limits) -> Option<u32> {
@@ -6818,367 +4699,6 @@ pub(crate) fn run_charter_bytes(charter: &RunCharter) -> Option<u64> {
     Some(bytes)
 }
 
-fn text_part(first: &[u8], second: &[u8], third: &[u8], fourth: &[u8], available: u32) -> TaskBriefFragment {
-    let total = first
-        .len()
-        .checked_add(second.len())
-        .expect("bounded part bytes")
-        .checked_add(third.len())
-        .expect("bounded part bytes")
-        .checked_add(fourth.len())
-        .expect("bounded part bytes");
-    let wanted = total.min(usize::try_from(available).expect("u32 fits usize"));
-    let mut keep = 0_usize;
-    for source in [first, second, third, fourth] {
-        let demand = wanted.checked_sub(keep).expect("prefix within demand");
-        let length = prefix(source, demand).len();
-        keep = keep.checked_add(length).expect("bounded part prefix");
-        if length < source.len() {
-            break;
-        }
-    }
-    let mut text = Writer::new(keep);
-    for source in [first, second, third, fourth] {
-        let bytes = prefix(source, text.room());
-        text.put(bytes).expect("measured exact text part");
-        if bytes.len() < source.len() {
-            break;
-        }
-    }
-    TaskBriefFragment {
-        bytes: text.finish(),
-        left: u64::try_from(total.checked_sub(keep).expect("prefix in part")).expect("usize fits u64"),
-    }
-}
-
-fn prefix(bytes: &[u8], most: usize) -> &[u8] {
-    let mut end = most.min(bytes.len());
-    for _ in 0_u32..3 {
-        if let Some(byte) = bytes.get(end)
-            && byte & 0b1100_0000 == 0b1000_0000
-        {
-            if end == 0 {
-                break;
-            }
-            end = end.checked_sub(1).expect("positive prefix end");
-        }
-    }
-    bytes.get(..end).expect("UTF-8 prefix within source")
-}
-
-fn task_section(domain: &Domain, task: u64, part: TaskBriefPart, parts: u32, bytes: u32) -> TaskBriefRead {
-    if parts == 0 {
-        return TaskBriefRead::Failed;
-    }
-    match part {
-        TaskBriefPart::Spec => match domain.core.contexts.get(&task) {
-            Some(context) => task_read(context, parts, bytes),
-            None => TaskBriefRead::Failed,
-        },
-        TaskBriefPart::Delegates => match domain.core.contexts.get(&task) {
-            Some(context) => delegates_read(&context.delegates, bytes),
-            None => TaskBriefRead::Failed,
-        },
-        TaskBriefPart::Dependencies => match domain.core.dependency_results.get(&task) {
-            Some(results) => dependency_read(results, bytes),
-            None => TaskBriefRead::Failed,
-        },
-        TaskBriefPart::Attempts => match domain.core.contexts.get(&task) {
-            Some(context) => attempt_read(context.tries, context.invalid_result, bytes),
-            None => TaskBriefRead::Failed,
-        },
-        TaskBriefPart::TranscriptTail => match domain.core.transcripts.get(&task) {
-            Some(transcript) => tail_read(transcript, bytes),
-            None => TaskBriefRead::Failed,
-        },
-    }
-}
-
-fn attempt_read(tries: tasks::Tries, invalid: Option<tasks::InvalidResult>, bytes: u32) -> TaskBriefRead {
-    let classes: [(&[u8], u32); 6] = [
-        (b"transient: ", tries.transient),
-        (b"permanent: ", tries.permanent),
-        (b"run: ", tries.run),
-        (b"agent: ", tries.agent),
-        (b"lost: ", tries.lost),
-        (b"invalid: ", tries.invalid),
-    ];
-    let mut total = 0_usize;
-    for (name, count) in classes {
-        if count > 0 {
-            total = total
-                .checked_add(name.len())
-                .expect("bounded attempt label")
-                .checked_add(Decimal::of(u64::from(count)).as_bytes().len())
-                .expect("bounded count")
-                .checked_add(1)
-                .expect("newline");
-        }
-    }
-    let reason = match invalid {
-        Some(tasks::InvalidResult::Form) => b"last invalid result: contract form\n".as_slice(),
-        Some(tasks::InvalidResult::Verdict) => b"last invalid result: verdict code\n",
-        Some(tasks::InvalidResult::Words) => b"last invalid result: word limit\n",
-        Some(tasks::InvalidResult::Change) => b"last invalid result: change identity\n",
-        Some(tasks::InvalidResult::Followups) => b"last invalid result: follow-up limit\n",
-        None => b"",
-    };
-    total = total.checked_add(reason.len()).expect("bounded invalid reason");
-    let mut writer = Writer::new(total.min(usize::try_from(bytes).expect("u32 fits usize")));
-    for (name, count) in classes {
-        if count > 0 {
-            for fragment in [name, Decimal::of(u64::from(count)).as_bytes(), b"\n"] {
-                let kept = prefix(fragment, writer.room());
-                writer.put(kept).expect("attempt prefix fits");
-            }
-        }
-    }
-    let kept = prefix(reason, writer.room());
-    writer.put(kept).expect("invalid reason prefix fits");
-    let text = writer.finish();
-    TaskBriefRead::Got(Box::new([TaskBriefFragment {
-        left: u64::try_from(total.checked_sub(text.len()).expect("written prefix")).expect("usize fits u64"),
-        bytes: text,
-    }]))
-}
-
-fn delegate_phase(phase: &tasks::Phase) -> &'static [u8] {
-    match phase {
-        tasks::Phase::Waiting => b"waiting",
-        tasks::Phase::Active(active) => match active {
-            tasks::Active::Idle => b"idle",
-            tasks::Active::Due | tasks::Active::Preparing => b"due",
-            tasks::Active::Claimed { .. } | tasks::Active::Running { .. } => b"running",
-            tasks::Active::BackingOff { .. } => b"backing off",
-        },
-        tasks::Phase::Closing(_) => b"closing",
-        tasks::Phase::Held { .. } => b"held",
-        tasks::Phase::Ended(_) => b"ended",
-    }
-}
-
-fn delegates_read(delegates: &[tasks::DelegateState], bytes: u32) -> TaskBriefRead {
-    let mut total = 0_usize;
-    for delegate in delegates {
-        total = total
-            .checked_add(b"delegate ".len())
-            .expect("bounded delegate text")
-            .checked_add(Decimal::of(delegate.task).as_bytes().len())
-            .expect("bounded delegate ID")
-            .checked_add(b": ".len())
-            .expect("bounded delegate text")
-            .checked_add(delegate_phase(&delegate.phase).len())
-            .expect("bounded delegate phase")
-            .checked_add(1)
-            .expect("delegate newline");
-    }
-    let mut writer = Writer::new(total);
-    for delegate in delegates {
-        writer.put(b"delegate ").expect("measured delegate text");
-        writer.put(Decimal::of(delegate.task).as_bytes()).expect("measured delegate ID");
-        writer.put(b": ").expect("measured delegate text");
-        writer.put(delegate_phase(&delegate.phase)).expect("measured delegate phase");
-        writer.put(b"\n").expect("measured delegate newline");
-    }
-    let text = writer.finish();
-    TaskBriefRead::Got(Box::new([text_part(&text, b"", b"", b"", bytes)]))
-}
-
-fn result_label(kind: tasks::ResultKind) -> &'static [u8] {
-    match kind {
-        tasks::ResultKind::Report => b"report",
-        tasks::ResultKind::Verdict { .. } => b"verdict",
-        tasks::ResultKind::Change { .. } => b"change",
-        tasks::ResultKind::Failed => b"failed",
-        tasks::ResultKind::Cancelled => b"cancelled",
-    }
-}
-
-fn dependency_read(results: &[HistoricalResult], bytes: u32) -> TaskBriefRead {
-    let mut total = 0_usize;
-    for result in results {
-        total = total
-            .checked_add(b"task ".len())
-            .expect("bounded result text")
-            .checked_add(Decimal::of(result.task).as_bytes().len())
-            .expect("bounded result ID")
-            .checked_add(b": ".len())
-            .expect("bounded result text")
-            .checked_add(result_label(result.kind).len())
-            .expect("bounded result kind")
-            .checked_add(result.words.len())
-            .expect("bounded result words")
-            .checked_add(3)
-            .expect("result separators");
-        match result.kind {
-            tasks::ResultKind::Verdict { code } => {
-                total = total
-                    .checked_add(Decimal::of(u64::from(code)).as_bytes().len())
-                    .expect("bounded verdict code")
-                    .checked_add(1)
-                    .expect("verdict space");
-            }
-            tasks::ResultKind::Report
-            | tasks::ResultKind::Change { .. }
-            | tasks::ResultKind::Failed
-            | tasks::ResultKind::Cancelled => {}
-        }
-    }
-    let mut writer = Writer::new(total);
-    for result in results {
-        writer.put(b"task ").expect("measured result text");
-        writer.put(Decimal::of(result.task).as_bytes()).expect("measured result ID");
-        writer.put(b": ").expect("measured result text");
-        writer.put(result_label(result.kind)).expect("measured result kind");
-        match result.kind {
-            tasks::ResultKind::Verdict { code } => {
-                writer.put(b" ").expect("measured verdict space");
-                writer.put(Decimal::of(u64::from(code)).as_bytes()).expect("measured verdict code");
-            }
-            tasks::ResultKind::Report
-            | tasks::ResultKind::Change { .. }
-            | tasks::ResultKind::Failed
-            | tasks::ResultKind::Cancelled => {}
-        }
-        writer.put(b"\n").expect("measured result newline");
-        writer.put(&result.words).expect("measured result words");
-        writer.put(b"\n\n").expect("measured result separator");
-    }
-    let text = writer.finish();
-    TaskBriefRead::Got(Box::new([text_part(&text, b"", b"", b"", bytes)]))
-}
-
-fn tail_read(transcript: &Transcript, bytes: u32) -> TaskBriefRead {
-    let kept = u64::from(bytes).min(transcript.kept);
-    let skip = transcript.kept.checked_sub(kept).expect("tail within kept bytes");
-    let mut writer = Writer::new(usize::try_from(kept).expect("u32 bound fits usize"));
-    let mut passed = 0_u64;
-    for turn in &transcript.turns {
-        let end = passed.checked_add(u64::try_from(turn.len()).expect("bounded turn")).expect("bounded retained tail");
-        if end > skip {
-            let from = usize::try_from(skip.saturating_sub(passed)).expect("bounded offset");
-            writer.put(turn.get(from..).expect("tail starts inside retained turn")).expect("tail fits chosen budget");
-        }
-        passed = end;
-    }
-    let text = writer.finish();
-    TaskBriefRead::Got(Box::new([TaskBriefFragment {
-        left: transcript.bytes.saturating_sub(u64::try_from(text.len()).expect("bounded tail")),
-        bytes: text,
-    }]))
-}
-
-fn add_text_len(total: &mut usize, fragment: &[u8]) {
-    *total = total.checked_add(fragment.len()).expect("bounded brief text");
-}
-
-fn contract_text(contract: &tasks::Contract) -> Box<[u8]> {
-    let mut room = 0_usize;
-    match contract {
-        tasks::Contract::Report { words } => {
-            for fragment in [b"[Report: at most ".as_slice(), Decimal::of(u64::from(*words)).as_bytes(), b" bytes]\n"] {
-                add_text_len(&mut room, fragment);
-            }
-        }
-        tasks::Contract::Verdict { choices } => {
-            add_text_len(&mut room, b"[Verdict choices:\n");
-            for choice in choices {
-                for fragment in [
-                    b"  ".as_slice(),
-                    Decimal::of(u64::from(choice.code)).as_bytes(),
-                    b": at most ",
-                    Decimal::of(u64::from(choice.words)).as_bytes(),
-                    b" bytes\n",
-                ] {
-                    add_text_len(&mut room, fragment);
-                }
-            }
-            add_text_len(&mut room, b"]\n");
-        }
-        tasks::Contract::Change { connector, kind, words } => {
-            for fragment in [
-                b"[Change connector ".as_slice(),
-                Decimal::of(u64::from(*connector)).as_bytes(),
-                b", kind ",
-                Decimal::of(u64::from(*kind)).as_bytes(),
-                b", at most ",
-                Decimal::of(u64::from(*words)).as_bytes(),
-                b" bytes]\n",
-            ] {
-                add_text_len(&mut room, fragment);
-            }
-        }
-    }
-    let mut writer = Writer::new(room);
-    match contract {
-        tasks::Contract::Report { words } => {
-            writer.put(b"[Report: at most ").expect("contract text room");
-            writer.put(Decimal::of(u64::from(*words)).as_bytes()).expect("contract text room");
-            writer.put(b" bytes]\n").expect("contract text room");
-        }
-        tasks::Contract::Verdict { choices } => {
-            writer.put(b"[Verdict choices:\n").expect("contract text room");
-            for choice in choices {
-                writer.put(b"  ").expect("contract text room");
-                writer.put(Decimal::of(u64::from(choice.code)).as_bytes()).expect("contract text room");
-                writer.put(b": at most ").expect("contract text room");
-                writer.put(Decimal::of(u64::from(choice.words)).as_bytes()).expect("contract text room");
-                writer.put(b" bytes\n").expect("contract text room");
-            }
-            writer.put(b"]\n").expect("contract text room");
-        }
-        tasks::Contract::Change { connector, kind, words } => {
-            writer.put(b"[Change connector ").expect("contract text room");
-            writer.put(Decimal::of(u64::from(*connector)).as_bytes()).expect("contract text room");
-            writer.put(b", kind ").expect("contract text room");
-            writer.put(Decimal::of(u64::from(*kind)).as_bytes()).expect("contract text room");
-            writer.put(b", at most ").expect("contract text room");
-            writer.put(Decimal::of(u64::from(*words)).as_bytes()).expect("contract text room");
-            writer.put(b" bytes]\n").expect("contract text room");
-        }
-    }
-    writer.finish()
-}
-
-/// Render an agent task's spec and typed contract from its activation snapshot.
-fn task_read(record: &tasks::RunContext, parts: u32, bytes: u32) -> TaskBriefRead {
-    if parts == 0 {
-        return TaskBriefRead::Failed;
-    }
-    let contract = contract_text(&record.contract);
-    let first = text_part(&record.spec.words, b"\n", &contract, b"", bytes);
-    let remaining =
-        bytes.checked_sub(u32::try_from(first.bytes.len()).expect("bounded task part")).expect("part within read");
-    let part = match record.requester {
-        tasks::Party::Person(person) => {
-            let person = Decimal::of(person);
-            text_part(b"[Requested by person ", person.as_bytes(), b"]\n", b"", remaining)
-        }
-        tasks::Party::Task(task) => {
-            let task = Decimal::of(task);
-            text_part(b"[Requested by task ", task.as_bytes(), b"]\n", b"", remaining)
-        }
-        tasks::Party::Deployment { project } => {
-            let project = Decimal::of(u64::from(project));
-            text_part(b"[Requested by deployment for project ", project.as_bytes(), b"]\n", b"", remaining)
-        }
-    };
-    let mut gathered = List::with_capacity(parts);
-    gathered.push(first).expect("positive part room");
-    if parts > 1 {
-        gathered.push(part).expect("requester part room");
-    } else {
-        let last = gathered.get_mut(0).expect("first part");
-        last.left = last
-            .left
-            .checked_add(u64::try_from(part.bytes.len()).expect("usize fits u64"))
-            .expect("bounded omitted bytes")
-            .checked_add(part.left)
-            .expect("bounded omitted bytes");
-    }
-    TaskBriefRead::Got(gathered.into_boxed())
-}
-
 fn header_loaded(startup: Startup) -> bool {
     match startup {
         Startup::Cold | Startup::Loading(Range::Deployment) | Startup::Failed => false,
@@ -7294,10 +4814,6 @@ fn current_proof(domain: &Domain, task: u64, attempt: u64) -> bool {
     domain.core.current_proof(task, attempt)
 }
 
-fn remember_unpriced_terminal(domain: &mut Domain, run: Token, attempt: Token, end: tasks::End) {
-    domain.core.remember_unpriced_terminal(run, attempt, end);
-}
-
 fn valid_connector_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits: &Limits) -> bool {
     match answer {
         CallAnswer::ForgeEffect { entry, .. } => *entry != 0 && *entry <= deployment.connector_rows,
@@ -7337,6 +4853,7 @@ fn valid_connector_answer(answer: &CallAnswer, deployment: &crate::Deployment, l
 /// Reject unsupported root shapes and identities above durable high-water marks before child
 /// restoration. Proof rows consume exact transient live-row correlations and never load archive
 /// history into the live map.
+#[expect(clippy::too_many_lines, reason = "each durable record family has one exhaustive restoration route")]
 fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
     match row {
         Record::Call(record) => {
@@ -7375,7 +4892,9 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             }
         }
         Record::People(people::Stored::Policy { project, value }) => {
-            policy::restore(domain, project, value);
+            if !domain.core.restore_policy(&core_limits(&domain.limits), project, value) {
+                domain.startup = Startup::Failed;
+            }
         }
         Record::People(record) => domain.work.push(Work::People(people::Event::Restore { record })),
         Record::Forge { id, row } => {

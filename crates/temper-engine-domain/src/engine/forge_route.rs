@@ -2,9 +2,8 @@
 //! calls cross one root decision; the connector never owns the store.
 use super::{
     CallAnswer, CallKey, Decision, Delivery, Domain, Env, Family, ForgeRepository, ForgeStart, ForgeWorkspace,
-    Freshness, Id, Key, LandingRule, Limits, List, ProcedureAction, Queue, Record, ReplyTo, RoutedCall, Token, Work,
-    Write, authority, decide_call, emit, escalation, forge, forge_change, forge_client, forge_issues, people,
-    procedure_step, save, tasks,
+    Freshness, Id, Key, LandingRule, Limits, List, ProcedureAction, Queue, Record, ReplyTo, Token, Work, Write,
+    authority, decide_call, emit, escalation, forge, forge_change, forge_client, forge_issues, people, save, tasks,
 };
 use alloc::boxed::Box;
 use jig_core::connector::{EffectDescription, EffectForm, Recovery};
@@ -90,7 +89,7 @@ fn permission_number(permission: forge_client::api::Permission) -> u16 {
 
 fn seeded_role(domain: &Domain, project: u32, permission: forge_client::api::Permission) -> Option<people::Role> {
     let number = permission_number(permission);
-    let mappings = domain.config.permission_roles.get(&project)?;
+    let mappings = domain.core.permission_roles.get(&project)?;
     for mapping in mappings.as_ref() {
         if mapping.connector == domain.config.forge_connector && mapping.permission == number {
             return Some(people::Role::from_number(mapping.role));
@@ -513,7 +512,7 @@ pub(super) fn effect_call(
         );
         return;
     }
-    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(domain.core.reserve_connector_call(key), "call record room reserved");
     domain.work.push(Work::Forge(forge::Event::Enqueue {
         entry: forge_client::Entry {
             number: entry,
@@ -609,7 +608,7 @@ pub(super) fn read_call(
         );
     }
     let owner = Token::new(serial | (1_u64 << 61_u32));
-    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call record room reserved");
+    assert!(domain.core.reserve_connector_call(key), "call record room reserved");
     assert!(domain.forge_reading.insert(owner, (to, key)) == Ok(None), "one fresh read correlation");
     domain.work.push(Work::Forge(forge::Event::Client(forge_client::Event::Read { owner, repository, read })));
 }
@@ -659,11 +658,7 @@ pub(super) fn subscribe_call(
         return;
     }
     let token = to.into_token();
-    assert!(domain.core.pending_calls.insert(key, true).is_ok(), "call room reserved");
-    assert!(
-        domain.core.routing_calls.insert(token, RoutedCall::Subscribe { key, subscription: number }) == Ok(None),
-        "one routed call"
-    );
+    assert!(domain.core.reserve_connector_subscription(token, key, number), "one routed call");
     assert!(domain.forge_subscribing.insert(token, subscriber) == Ok(None), "one connector interest");
     domain.work.push(Work::Tasks(tasks::Event::SubscribeTopic {
         reply_to: ReplyTo::new(token),
@@ -865,6 +860,7 @@ pub(super) fn task_holdings(
     Some(holdings.into_boxed())
 }
 
+#[derive(Debug)]
 pub(super) struct RunWorkspace {
     pub workspace: ForgeWorkspace,
     pub writes: Box<[authority::Write]>,
@@ -1833,19 +1829,10 @@ fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool
     }
     let Some(repository) = domain.forge.repository(row.repository) else { return false };
     let project = repository.project;
-    let Some(authority) = domain.core.connector_repair_authority(project) else { return false };
-    let period = domain.core.settings.period;
+    let Some(seed) = domain.core.repair_seed(project) else { return false };
+    let repair = seed.number();
     let provider = row.repository;
     let base = row.base.clone();
-    let Some(repair) = crate::fresh(&mut domain.core.counters, Family::Task) else { return false };
-    if domain.core.tasks.funding(tasks::Funder::Period { project, period }).is_none() {
-        domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
-            reply_to: super::internal(u64::MAX - 2),
-            project,
-            period,
-            budget: domain.core.settings.period_budget,
-        }));
-    }
     let spec = tasks::Spec {
         words: Box::from(&b"Repair landing branch CI"[..]),
         parameters: Box::new([
@@ -1865,33 +1852,20 @@ fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool
         return false;
     };
     domain.work.push(Work::Forge(forge::Event::QueueRepairStarted { owner: task, repair }));
-    domain.work.push(Work::Tasks(tasks::Event::Make {
-        reply_to: super::internal(u64::MAX - 3),
-        creator: tasks::Party::Deployment { project },
-        batch: Box::new([tasks::New {
-            number: repair,
-            project,
-            executor,
-            spec,
-            contract: tasks::Contract::Change {
-                connector: domain.config.forge_connector,
-                kind: 1,
-                words: env.limits.tasks.result_bytes,
-            },
-            numbers: tasks::Numbers { budget: authority.budget.spend, spent: 0, spent_below: 0, reserved: 0 },
-            authority: super::task_authority(&authority),
-            funder: tasks::Funder::Period { project, period },
-            dependencies: Box::new([]),
-            holdings,
-            wake: tasks::WakePolicy::DEFAULT,
-            recurring: None,
-            tracked: None,
-        }]),
+    domain.work.push(Work::Core(jig_core::Event::ConnectorRepair {
+        seed: Box::new(seed),
+        executor,
+        spec,
+        contract: tasks::Contract::Change {
+            connector: domain.config.forge_connector,
+            kind: 1,
+            words: env.limits.tasks.result_bytes,
+        },
+        holdings,
     }));
     true
 }
 
-#[expect(clippy::too_many_lines, reason = "one procedure decision translates the complete change vocabulary")]
 fn change_decision(domain: &mut Domain, env: &Env<Limits>, task: u64, choice: forge_change::Decision) {
     let Some((connector, code, step)) = domain.core.tasks.procedure_due(task) else { return };
     if connector != domain.config.forge_connector || code != 2 {
@@ -1906,15 +1880,13 @@ fn change_decision(domain: &mut Domain, env: &Env<Limits>, task: u64, choice: fo
                 None => None,
             };
             let Some(pull) = pull else {
-                drop(procedure_step(
-                    domain,
-                    env,
+                domain.work.push(Work::Core(jig_core::Event::ProcedureStep {
                     task,
                     step,
                     connector,
                     code,
-                    ProcedureAction::Hold(tasks::Hold::Effects),
-                ));
+                    action: ProcedureAction::Hold(tasks::Hold::Effects),
+                }));
                 return;
             };
             ProcedureAction::Result(tasks::TaskResult::Change {
@@ -1968,35 +1940,27 @@ fn change_decision(domain: &mut Domain, env: &Env<Limits>, task: u64, choice: fo
         }
         forge_change::Decision::Delegate(kind) => {
             let Some(delegate) = change_delegate(domain, env, task, kind) else {
-                drop(procedure_step(
-                    domain,
-                    env,
+                domain.work.push(Work::Core(jig_core::Event::ProcedureStep {
                     task,
                     step,
                     connector,
                     code,
-                    ProcedureAction::Hold(tasks::Hold::Effects),
-                ));
+                    action: ProcedureAction::Hold(tasks::Hold::Effects),
+                }));
                 return;
             };
-            let delegated = procedure_step(
-                domain,
-                env,
+            assert!(domain.forge_delegating.insert((task, step), kind).is_ok(), "one forge procedure delegate");
+            domain.work.push(Work::Core(jig_core::Event::ProcedureStep {
                 task,
                 step,
                 connector,
                 code,
-                ProcedureAction::Delegate(Box::new([delegate])),
-            );
-            if let Some(numbers) = delegated
-                && let Some(child) = numbers.first()
-            {
-                domain.work.push(Work::Forge(forge::Event::Delegated { task, child: *child, kind }));
-            }
+                action: ProcedureAction::Delegate(Box::new([delegate])),
+            }));
             return;
         }
     };
-    drop(procedure_step(domain, env, task, step, connector, code, action));
+    domain.work.push(Work::Core(jig_core::Event::ProcedureStep { task, step, connector, code, action }));
     if again {
         domain.work.push(Work::Tasks(tasks::Event::WakeProcedure { task }));
     }
@@ -2190,10 +2154,8 @@ pub(super) fn outputs(
                 }
             }
             forge::Request::Taken { task, .. } | forge::Request::Refused { task } => {
-                if domain.core.claiming.remove(&task).is_some() {
-                    drop(domain.assignments.remove(&task));
-                    drop(domain.core.proofs.remove(&task));
-                    domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
+                if domain.core.claiming.contains_key(&task) {
+                    domain.work.push(Work::Core(jig_core::Event::ClaimRefused { task }));
                     continue;
                 }
                 let mut failed = None;

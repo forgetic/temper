@@ -60,7 +60,7 @@ pub(super) fn begin(
     let Some(person) = domain.core.people.person(sign_in, env.now, env.wall) else {
         return refused(to, people::Refusal::SignIn, out);
     };
-    if !domain.ready() || !admits(domain, &env.limits) || domain.core.reading_results.contains_key(&person) {
+    if !domain.ready() || !admits(domain, &env.limits) || domain.core.reading_result(person) {
         return refused(to, people::Refusal::Busy, out);
     }
     let read = Read {
@@ -82,8 +82,7 @@ pub(super) fn begin(
         Err(Some(RootRead::Inbox(read))) => return refused(read.to, people::Refusal::Busy, out),
         Err(_) => unreachable!("inserted inbox read"),
     };
-    let indexed = domain.core.reading_results.insert(person, id.token());
-    assert!(indexed == Ok(None), "one inbox read per person");
+    assert!(domain.core.reserve_result_read(person, id.token()), "one inbox read per person");
     let mut decision = Decision::new(&env.limits.journal);
     emit(&mut decision, &env.limits, Delivery::BeginInboxView { waiter: id.token() });
     close(domain, env, decision, out);
@@ -104,8 +103,7 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, o
         }
         None => return,
     };
-    let removed = domain.core.reading_results.remove(&read.person);
-    assert!(removed == Some(waiter), "inbox reader index names its waiter");
+    assert!(domain.core.release_result_read(read.person, waiter), "inbox reader index names its waiter");
     domain.result_reads.retire(Id::from_token(waiter));
     refused(read.to, why, out);
 }
@@ -348,8 +346,7 @@ pub(super) fn page(
             if next.is_none() && read.high > read.position {
                 let row = domain
                     .core
-                    .people
-                    .advance_read_position(read.person, read.high)
+                    .advance_inbox_read(read.person, read.high)
                     .expect("newest read position advances after the last page");
                 save(&mut decision, &env.limits, Write::Save(Record::People(row)));
             }
@@ -364,8 +361,7 @@ pub(super) fn page(
 }
 
 fn failed_owned(domain: &mut Domain, waiter: Token, read: Read, why: people::Refusal, out: &mut Queue<Request>) {
-    let removed = domain.core.reading_results.remove(&read.person);
-    assert!(removed == Some(waiter), "inbox reader index names its waiter");
+    assert!(domain.core.release_result_read(read.person, waiter), "inbox reader index names its waiter");
     domain.result_reads.retire(Id::from_token(waiter));
     refused(read.to, why, out);
 }

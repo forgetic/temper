@@ -47,7 +47,7 @@ pub(super) fn begin(
     let Some(person) = domain.core.people.person(sign_in, env.now, env.wall) else {
         return refuse(to, people::Refusal::SignIn, out);
     };
-    if !domain.ready() || !admits(domain, &env.limits) || domain.core.reading_results.contains_key(&person) {
+    if !domain.ready() || !admits(domain, &env.limits) || domain.core.reading_result(person) {
         return refuse(to, people::Refusal::Busy, out);
     }
     let position = domain.core.people.read_position(person).expect("authenticated person restored");
@@ -72,8 +72,7 @@ pub(super) fn begin(
             | None,
         ) => unreachable!("inserted result read"),
     };
-    let indexed = domain.core.reading_results.insert(person, id.token());
-    assert!(indexed == Ok(None), "one result read per authenticated person");
+    assert!(domain.core.reserve_result_read(person, id.token()), "one result read per authenticated person");
     let mut decision = Decision::new(&env.limits.journal);
     emit(&mut decision, &env.limits, Delivery::ReadResult { waiter: id.token() });
     close(domain, env, decision, out);
@@ -90,8 +89,7 @@ pub(super) fn failed(domain: &mut Domain, waiter: Token, why: people::Refusal, o
         | RootRead::Dependency(_)
         | RootRead::InputCheck(_) => unreachable!("result load owns result read"),
     };
-    let removed = domain.core.reading_results.remove(&read.person);
-    assert!(removed == Some(waiter), "result reader index names its waiter");
+    assert!(domain.core.release_result_read(read.person, waiter), "result reader index names its waiter");
     domain.result_reads.retire(Id::from_token(waiter));
     refuse(read.to, why, out);
 }
@@ -195,8 +193,7 @@ pub(super) fn page(
         return;
     }
     let Some(RootRead::Result(read)) = take_read(domain, waiter) else { unreachable!("complete result read") };
-    let removed = domain.core.reading_results.remove(&read.person);
-    assert!(removed == Some(waiter), "result reader index names its waiter");
+    assert!(domain.core.release_result_read(read.person, waiter), "result reader index names its waiter");
     domain.result_reads.retire(Id::from_token(waiter));
     let mut decision = Decision::new(&env.limits.journal);
     match read.query {

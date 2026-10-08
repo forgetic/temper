@@ -299,8 +299,8 @@ pub struct Decision {
 pub type Journal = SkeinJournal<Write, Output>;
 
 impl Decision {
-    /// Root-only preflight of unused write/delivery slots before a synchronous
-    /// role replacement; no reservation can interleave with another mutation
+    /// Test the unused slots while exercising journal admission bounds.
+    #[cfg(test)]
     pub(crate) fn room_for(&self, writes: u32, deliveries: u32) -> bool {
         self.reserved.writes.saturating_sub(self.writes.len().saturating_add(1)) >= writes
             && self.reserved.held.saturating_sub(self.deliveries.len()) >= deliveries
