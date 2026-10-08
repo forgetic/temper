@@ -45,10 +45,10 @@ pub enum Recovery {
 #[expect(clippy::match_same_arms, reason = "each forge kind declares its own recovery reason")]
 pub fn recovery(write: &Write) -> Recovery {
     match write {
-        // Forgejo refuses a second open pull request for the same head and base.
-        Write::OpenPull { .. } => Recovery::Keyed,
-        // A branch name is unique, and creation refuses an occupied name.
-        Write::CreateBranch { .. } => Recovery::Keyed,
+        // Forgejo refuses a second pull only while one for those branches is open.
+        Write::OpenPull { .. } => Recovery::Conditional,
+        // A branch may be deleted; Forgejo then keeps no proof it was created.
+        Write::CreateBranch { .. } => Recovery::Unrecoverable,
         // Forgejo checks the requested pull head when applying a merge.
         Write::Merge { .. } => Recovery::Conditional,
         // Issue creation has no server-enforced key; a marker only finds copies.

@@ -238,6 +238,7 @@ impl World {
     }
     /// Answer writes as timed out, then apply their delayed copies at `after`.
     pub fn land_writes_late(&mut self, after: Duration) {
+        assert!(after <= self.env.limits.lifetime, "a delayed copy lands within its attempt's lifetime");
         self.forge_env.limits.landing = 1000;
         self.forge_env.limits.land_min = after;
         self.forge_env.limits.land_max = after;
@@ -487,10 +488,13 @@ impl World {
         };
         id
     }
-    pub fn historical_pull(&mut self) -> u64 {
+    pub fn historical_topic(&mut self) {
         self.external(raw::Op::Git(raw::Git::Create { branch: Box::from(&b"topic"[..]), commit: 1 }), 21_000, 2);
         let env = Env { now: Time::ZERO, wall: Wall::EPOCH, limits: self.forge_env.limits };
         forge::advance(&mut self.forge, &env, b"org/repo", b"topic", b"file", b"topic", 2).expect("fixture branch");
+    }
+    pub fn historical_pull(&mut self) -> u64 {
+        self.historical_topic();
         let raw::Answer::Created(number) = self.external(
             raw::Op::Write(raw::Write::OpenPull {
                 title: Box::from(&b"pull"[..]),
@@ -505,6 +509,11 @@ impl World {
         };
         number
     }
+    /// A person closes a pull request after a client write landed.
+    pub fn outside_close_pull(&mut self, number: u64) {
+        let now = self.env.now;
+        assert_eq!(self.external_at(raw::Op::Write(raw::Write::Close { number }), 21_009, 2, now), raw::Answer::Done,);
+    }
     /// Another writer takes a branch name before a delayed client creation lands.
     pub fn outside_branch(&mut self, branch: &[u8], commit: u64) {
         let now = self.env.now;
@@ -516,6 +525,14 @@ impl World {
                 now,
             ),
             raw::Answer::Branch(raw::Created::Created)
+        );
+    }
+    /// A person deletes a branch after a client creation landed.
+    pub fn outside_delete_branch(&mut self, branch: &[u8]) {
+        let now = self.env.now;
+        assert_eq!(
+            self.external_at(raw::Op::Write(raw::Write::DeleteBranch { branch: Box::from(branch) }), 21_010, 2, now),
+            raw::Answer::Done,
         );
     }
     pub fn historical_review(&mut self, number: u64, pending: bool) -> u64 {

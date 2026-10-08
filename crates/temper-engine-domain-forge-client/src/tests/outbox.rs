@@ -160,7 +160,11 @@ fn recovery_classes_follow_forgejo_guarantees() {
             head: Box::from(&b"topic"[..]),
             base: Box::from(&b"main"[..]),
         }),
-        Recovery::Keyed,
+        Recovery::Conditional,
+    );
+    assert_eq!(
+        recovery(&Write::CreateBranch { branch: Box::from(&b"topic"[..]), commit: [1; 32] }),
+        Recovery::Unrecoverable,
     );
     assert_eq!(recovery(&Write::Close { number: 9 }), Recovery::Idempotent);
 }
@@ -229,6 +233,48 @@ fn an_uncertain_comment_is_found_by_key_without_a_second_write() {
         h.outcomes.as_slice(),
         &[(1, Outcome::Uncertain), (1, Outcome::Made { made: Made::Commented(42), found: true })]
     );
+}
+#[test]
+fn a_closed_pull_found_after_an_uncertain_open_is_raced() {
+    let mut h = Harness::new();
+    let write = Write::OpenPull {
+        title: Box::from(&b"task"[..]),
+        body: Box::new([]),
+        head: Box::from(&b"topic"[..]),
+        base: Box::from(&b"main"[..]),
+    };
+    h.make(1, write.clone(), Condition::None);
+    h.clock();
+    let sent = h.one();
+    assert_eq!(sent.op, Op::Write(write));
+    h.answer(sent, Err(Error::Timeout));
+    let find = h.one();
+    assert_eq!(find.op, Op::Read(Read::PullFor { head: Box::from(&b"topic"[..]), base: Box::from(&b"main"[..]) }));
+    let mut closed = pull([1; 32]);
+    closed.state = api::State::Closed;
+    h.answer(find, Ok(Answer::Pull(closed)));
+    assert_eq!(
+        h.outcomes.as_slice(),
+        &[(1, Outcome::Uncertain), (1, Outcome::Raced { made: Made::Created(9), why: Error::Closed })]
+    );
+    assert_eq!(h.writes, 1);
+}
+#[test]
+fn a_missing_comment_target_is_searched_until_its_deadline_then_held() {
+    let mut h = Harness::new();
+    h.make(1, comment(), Condition::None);
+    h.clock();
+    let sent = h.one();
+    h.answer(sent, Err(Error::Timeout));
+    let find = h.one();
+    assert_eq!(find.op, Op::Read(Read::Item { number: 9, after: 0 }));
+    h.answer(find, Err(Error::Missing));
+    assert_eq!(h.domain.next_deadline(), Some(at(111)));
+    h.fire(111);
+    let find = h.one();
+    h.answer(find, Err(Error::Missing));
+    assert_eq!(h.outcomes.as_slice(), &[(1, Outcome::Uncertain), (1, Outcome::Held)]);
+    assert_eq!(h.writes, 1);
 }
 #[test]
 fn restart_keeps_the_original_deadline_and_holds_an_unrecoverable_write() {

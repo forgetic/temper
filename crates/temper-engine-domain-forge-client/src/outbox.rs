@@ -763,7 +763,11 @@ fn pulled(d: &mut Domain, env: &Env<Limits>, number: u64, phase: Phase, pull: ap
         Phase::Find { .. } => match &w.entry.effect.write {
             Write::OpenPull { head, base, .. } => {
                 if pull.head == *head && pull.base == *base {
-                    finished(d, number, Made::Created(pull.number), true, out);
+                    if pull.state == api::State::Closed {
+                        finish(d, number, Outcome::Raced { made: Made::Created(pull.number), why: Error::Closed }, out);
+                    } else {
+                        finished(d, number, Made::Created(pull.number), true, out);
+                    }
                 } else {
                     not_found(d, env, number, out);
                 }
@@ -882,16 +886,17 @@ fn failed(d: &mut Domain, env: &Env<Limits>, number: u64, phase: Phase, error: E
             match phase {
                 Phase::Find { .. } => match w.entry.effect.write {
                     Write::DeleteBranch { .. } => finished(d, number, Made::Set, true, out),
-                    Write::CreateBranch { .. } | Write::OpenPull { .. } => not_found(d, env, number, out),
-                    Write::CreateIssue { .. }
+                    Write::CreateBranch { .. }
+                    | Write::OpenPull { .. }
+                    | Write::CreateIssue { .. }
                     | Write::Post { .. }
                     | Write::Review { .. }
-                    | Write::Edit { .. }
+                    | Write::Merge { .. }
+                    | Write::Update { .. } => not_found(d, env, number, out),
+                    Write::Edit { .. }
                     | Write::SetReviewers { .. }
                     | Write::Close { .. }
                     | Write::Reopen { .. }
-                    | Write::Merge { .. }
-                    | Write::Update { .. }
                     | Write::Status { .. } => finish(d, number, Outcome::Failed(error), out),
                 },
                 Phase::Make => match w.entry.effect.write {
@@ -1025,24 +1030,25 @@ fn retain_uncertain(
         | Error::Busy => false,
     };
     if !transient {
-        // A missing keyed creation is the answer to its recovery lookup,
+        // A missing creation is the answer to its recovery lookup,
         // rather than a failed lookup to back off. Let `failed` apply the
-        // saved deadline and either wait or retry under the same key.
+        // saved deadline and either wait, retry safely, or hold for a person.
         if error == Error::Missing
             && let Phase::Find { .. } = phase
         {
             let w = d.outbox.entries.get(&number).expect("find owns entry");
             match w.entry.effect.write {
-                Write::CreateBranch { .. } | Write::OpenPull { .. } => return false,
-                Write::CreateIssue { .. }
+                Write::CreateBranch { .. }
+                | Write::OpenPull { .. }
+                | Write::CreateIssue { .. }
                 | Write::Post { .. }
                 | Write::Review { .. }
-                | Write::Edit { .. }
+                | Write::Merge { .. }
+                | Write::Update { .. } => return false,
+                Write::Edit { .. }
                 | Write::SetReviewers { .. }
                 | Write::Close { .. }
                 | Write::Reopen { .. }
-                | Write::Merge { .. }
-                | Write::Update { .. }
                 | Write::Status { .. }
                 | Write::DeleteBranch { .. } => {}
             }

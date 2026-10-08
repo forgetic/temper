@@ -1888,6 +1888,15 @@ fn change_outcome(d: &mut Domain, env: &Env<Limits>, entry: u64, outcome: client
     }
     let Some(task) = task else { return };
     let Some(row) = d.changes.get_mut(&task) else { unreachable!("found change row") };
+    let pull_closed = match outcome {
+        client::Outcome::Raced { made: client::Made::Created(_), why: client::api::Error::Closed } => true,
+        client::Outcome::Made { .. }
+        | client::Outcome::Failed(_)
+        | client::Outcome::Raced { .. }
+        | client::Outcome::Uncertain
+        | client::Outcome::Held
+        | client::Outcome::Withdrawn => false,
+    };
     row.effect = match outcome {
         client::Outcome::Made { .. } => change::EffectResult::Made,
         client::Outcome::Failed(client::api::Error::Conflict) => change::EffectResult::Conflict,
@@ -1898,8 +1907,18 @@ fn change_outcome(d: &mut Domain, env: &Env<Limits>, entry: u64, outcome: client
         client::Outcome::Uncertain => return,
     };
     row.pending = None;
+    if pull_closed {
+        row.drift = Some(change::Hold::PullClosed);
+    }
     let saved = row.clone();
     emit(out, Request::Save { record: Stored::Change(saved.clone()) });
+    if pull_closed {
+        let branch =
+            client::Resource { repository: saved.repository, what: client::What::Branch(saved.branch.clone()) };
+        if let Some(resource) = from_client(&branch, &env.limits) {
+            emit(out, Request::Drift { task, resource });
+        }
+    }
     match outcome {
         client::Outcome::Made { made: client::Made::Updated(commit), .. } => {
             child(

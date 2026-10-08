@@ -41,11 +41,11 @@ fn seeded_faults_restarts_and_keyed_effects() {
 }
 
 #[test]
-fn keyed_branch_creation_survives_cuts_before_and_after_its_retry_and_late_copy() {
+fn unrecoverable_branch_creation_survives_cuts_before_and_after_its_late_copy() {
     for seed in 0..64 {
         let mut world = World::new(Settings::calm(seed));
         let head = world.branch(b"main").expect("fixture main");
-        world.land_writes_late(skein_lib::Duration::from_secs(20));
+        world.land_writes_late(skein_lib::Duration::from_secs(5));
         world.make(Entry {
             number: 1,
             task: 7,
@@ -68,7 +68,7 @@ fn keyed_branch_creation_survives_cuts_before_and_after_its_retry_and_late_copy(
         world.run_for(30);
         assert_eq!(world.branch(b"temper/7"), Some(head), "seed {seed}");
         assert_eq!(world.stats().late_landings, 1, "seed {seed}");
-        assert!(world.stats().writes <= 2, "seed {seed}");
+        assert_eq!(world.stats().writes, 1, "seed {seed}");
         world.finish();
     }
 }

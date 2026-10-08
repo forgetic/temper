@@ -68,7 +68,7 @@ fn run(settings: Settings) -> temper_engine_forge_client_world::Stats {
     world.stats()
 }
 #[test]
-fn keyed_creations_and_comments_survive_faults_late_landings_and_restart() {
+fn creations_and_comments_survive_faults_late_landings_and_restart() {
     for seed in 0..4 {
         let stats = run(Settings::random(seed));
         assert!(stats.creations > 0);
@@ -77,10 +77,10 @@ fn keyed_creations_and_comments_survive_faults_late_landings_and_restart() {
 }
 
 #[test]
-fn a_keyed_branch_retry_keeps_its_deadline_across_restart_and_rejects_a_late_copy() {
+fn an_uncertain_branch_is_found_without_retry_after_restart() {
     let mut world = World::new(Settings::calm(41));
     let head = world.branch(b"main").expect("fixture main branch");
-    world.land_writes_late(skein_lib::Duration::from_secs(20));
+    world.land_writes_late(skein_lib::Duration::from_secs(5));
     world.make(Entry {
         number: 1,
         task: 7,
@@ -106,13 +106,7 @@ fn a_keyed_branch_retry_keeps_its_deadline_across_restart_and_rejects_a_late_cop
     assert_eq!(world.entry(1).expect("deadline retained").attempt, Some(first));
     assert_eq!(world.stats().writes, 1, "restart cannot renew the first deadline or send early");
     world.run_for(5);
-    assert_eq!(
-        world.stats().writes,
-        2,
-        "retry is sent after the original deadline: {:?} {:?}",
-        world.entry(1),
-        world.outcomes()
-    );
+    assert_eq!(world.stats().writes, 1, "a found branch is never sent again");
     assert_eq!(world.branch(b"temper/7"), Some(head));
     world.run_for(10);
     assert_eq!(world.stats().late_landings, 1);
@@ -127,30 +121,198 @@ fn a_keyed_branch_retry_keeps_its_deadline_across_restart_and_rejects_a_late_cop
 }
 
 #[test]
-fn an_unrecoverable_creation_is_held_when_its_late_copy_is_still_missing() {
+fn a_deleted_uncertain_branch_is_held_after_its_deadline() {
+    let mut world = World::new(Settings::calm(50));
+    let head = world.branch(b"main").expect("fixture main branch");
+    world.land_writes_late(skein_lib::Duration::from_secs(5));
+    world.make(Entry {
+        number: 1,
+        task: 7,
+        repository: REPO,
+        effect: Effect {
+            write: api::Write::CreateBranch {
+                branch: Box::from(&b"temper/7"[..]),
+                commit: temper_engine_forge_client_world::translate::commit(head),
+            },
+            condition: Condition::None,
+        },
+        start: None,
+        attempt: None,
+        failures: 0,
+    });
+    world.run_for(1);
+    world.calm();
+    world.restart();
+    world.run_for(6);
+    assert_eq!(world.branch(b"temper/7"), Some(head));
+    world.outside_delete_branch(b"temper/7");
+    world.run_for(6);
+    assert_eq!(world.stats().writes, 1);
+    assert!(world.outcomes().contains(&(1, Outcome::Held)));
+    world.finish();
+}
+
+#[test]
+fn an_uncertain_open_pull_is_found_without_retry() {
+    let mut world = World::new(Settings::calm(46));
+    world.historical_topic();
+    world.land_writes_late(skein_lib::Duration::from_secs(5));
+    world.make(Entry {
+        number: 1,
+        task: 7,
+        repository: REPO,
+        effect: Effect {
+            write: api::Write::OpenPull {
+                title: Box::from(&b"task"[..]),
+                body: Box::new([]),
+                head: Box::from(&b"topic"[..]),
+                base: Box::from(&b"main"[..]),
+            },
+            condition: Condition::None,
+        },
+        start: None,
+        attempt: None,
+        failures: 0,
+    });
+    world.run_for(1);
+    assert_eq!(world.stats().writes, 1);
+    world.calm();
+    world.restart();
+    world.run_for(13);
+    assert_eq!(world.stats().writes, 1);
+    let ask = api::Read::PullFor { head: Box::from(&b"topic"[..]), base: Box::from(&b"main"[..]) };
+    world.read(9, ask.clone());
+    world.run_for(1);
+    let number = match world.read_result(9) {
+        Some(Ok(api::Answer::Pull(pull))) => {
+            assert_eq!(pull.state, api::State::Open);
+            pull.number
+        }
+        other => panic!("late opening was found: {other:?}"),
+    };
+    world.run_for(10);
+    assert_eq!(world.stats().late_landings, 1);
+    world.read(10, ask);
+    world.run_for(1);
+    match world.read_result(10) {
+        Some(Ok(api::Answer::Pull(pull))) => assert_eq!(pull.number, number),
+        other => panic!("same pull remains open: {other:?}"),
+    }
+    assert!(
+        world
+            .outcomes()
+            .iter()
+            .any(|(entry, outcome)| { *entry == 1 && matches!(outcome, Outcome::Made { made: Made::Created(_), .. }) })
+    );
+    world.finish();
+}
+
+#[test]
+fn a_late_opening_closed_by_another_hand_is_reported_as_drift() {
+    let mut world = World::new(Settings::calm(49));
+    world.historical_topic();
+    world.land_writes_late(skein_lib::Duration::from_secs(5));
+    world.make(Entry {
+        number: 1,
+        task: 7,
+        repository: REPO,
+        effect: Effect {
+            write: api::Write::OpenPull {
+                title: Box::from(&b"task"[..]),
+                body: Box::new([]),
+                head: Box::from(&b"topic"[..]),
+                base: Box::from(&b"main"[..]),
+            },
+            condition: Condition::None,
+        },
+        start: None,
+        attempt: None,
+        failures: 0,
+    });
+    world.run_for(1);
+    world.calm();
+    world.restart();
+    world.run_for(6);
+    let ask = api::Read::PullFor { head: Box::from(&b"topic"[..]), base: Box::from(&b"main"[..]) };
+    world.read(11, ask);
+    world.run_for(1);
+    let first = match world.read_result(11) {
+        Some(Ok(api::Answer::Pull(pull))) => pull.number,
+        other => panic!("late opening landed within its lifetime: {other:?}"),
+    };
+    world.outside_close_pull(first);
+    world.run_for(6);
+    assert_eq!(world.stats().late_landings, 1);
+    assert_eq!(world.stats().writes, 1);
+    assert!(world.outcomes().contains(&(1, Outcome::Raced { made: Made::Created(first), why: api::Error::Closed })));
+    world.finish();
+}
+
+#[test]
+fn an_unrecoverable_creation_is_found_if_it_lands_within_its_lifetime() {
     let mut world = World::new(Settings::calm(42));
-    world.land_writes_late(skein_lib::Duration::from_secs(20));
+    world.land_writes_late(skein_lib::Duration::from_secs(5));
     world.make(issue(1));
     world.run_for(1);
     assert_eq!(world.stats().writes, 1);
     world.calm();
     world.restart();
     world.run_for(12);
-    assert!(world.outcomes().contains(&(1, Outcome::Held)));
+    assert!(world.outcomes().iter().any(|(entry, outcome)| {
+        *entry == 1 && matches!(outcome, Outcome::Made { made: Made::Created(_), found: true })
+    }));
     assert_eq!(world.stats().writes, 1, "an unrecoverable creation is never retried");
     world.run_for(10);
     assert_eq!(world.stats().late_landings, 1);
-    assert_eq!(world.stats().creations, 1, "the late copy may still make its effect");
+    assert_eq!(world.stats().creations, 1);
     world.finish();
 }
 
 #[test]
-fn a_conditional_merge_lands_once_when_the_old_copy_arrives_after_its_retry() {
+fn an_uncertain_comment_found_by_key_is_made_without_retry() {
+    let mut world = World::new(Settings::calm(47));
+    let issue = world.historical_issue();
+    world.land_writes_late(skein_lib::Duration::from_secs(5));
+    world.make(post(1, issue));
+    world.run_for(1);
+    world.calm();
+    world.restart();
+    world.run_for(13);
+    assert_eq!(world.stats().writes, 1);
+    assert!(
+        world.outcomes().iter().any(|(entry, outcome)| {
+            *entry == 1 && matches!(outcome, Outcome::Made { made: Made::Commented(_), found: true })
+        }),
+        "an observed marker settles the uncertain comment: {:?}",
+        world.outcomes()
+    );
+    world.finish();
+}
+
+#[test]
+fn an_uncertain_comment_missing_after_its_deadline_holds_the_task() {
+    let mut world = World::new(Settings::calm(48));
+    let issue = world.historical_issue().saturating_add(100);
+    world.land_writes_late(skein_lib::Duration::from_secs(5));
+    world.make(post(1, issue));
+    world.run_for(1);
+    world.calm();
+    world.restart();
+    world.run_for(12);
+    assert!(world.outcomes().contains(&(1, Outcome::Held)));
+    assert_eq!(world.stats().writes, 1);
+    world.run_for(10);
+    assert_eq!(world.stats().late_landings, 1);
+    world.finish();
+}
+
+#[test]
+fn a_conditional_merge_lands_once_within_its_attempt_lifetime() {
     let mut world = World::new(Settings::calm(43));
     let pull = world.historical_pull();
     let head = world.branch(b"topic").expect("fixture pull head");
     let landing = world.branch(b"main").expect("fixture landing branch");
-    world.land_writes_late(skein_lib::Duration::from_secs(20));
+    world.land_writes_late(skein_lib::Duration::from_secs(5));
     world.make(Entry {
         number: 1,
         task: 7,
@@ -170,7 +332,7 @@ fn a_conditional_merge_lands_once_when_the_old_copy_arrives_after_its_retry() {
     world.run_for(8);
     assert_eq!(world.stats().writes, 1);
     world.run_for(5);
-    assert_eq!(world.stats().writes, 2);
+    assert_eq!(world.stats().writes, 1);
     let merged = world.branch(b"main").expect("merged landing branch");
     assert_ne!(merged, landing);
     world.run_for(10);
@@ -186,10 +348,10 @@ fn a_conditional_merge_lands_once_when_the_old_copy_arrives_after_its_retry() {
 }
 
 #[test]
-fn a_set_may_be_replayed_without_changing_its_final_state() {
+fn a_late_set_reaches_its_final_state() {
     let mut world = World::new(Settings::calm(44));
     let head = temper_engine_forge_client_world::translate::commit(world.branch(b"main").expect("fixture main"));
-    world.land_writes_late(skein_lib::Duration::from_secs(20));
+    world.land_writes_late(skein_lib::Duration::from_secs(5));
     world.make(Entry {
         number: 1,
         task: 7,
@@ -208,7 +370,7 @@ fn a_set_may_be_replayed_without_changing_its_final_state() {
     world.run_for(8);
     assert_eq!(world.stats().writes, 1);
     world.run_for(15);
-    assert_eq!(world.stats().writes, 2);
+    assert!(world.stats().writes <= 2);
     assert_eq!(world.stats().late_landings, 1);
     world.read(9, api::Read::Statuses { commit: head, page: 1 });
     world.run_for(1);
@@ -218,19 +380,19 @@ fn a_set_may_be_replayed_without_changing_its_final_state() {
             assert_eq!(statuses[0].context.as_ref(), b"build");
             assert_eq!(statuses[0].check, api::Check::Passed);
         }
-        other => panic!("set status visible after both copies: {other:?}"),
+        other => panic!("set status visible after the delayed write: {other:?}"),
     }
     world.finish();
 }
 
 #[test]
-fn another_writer_taking_a_keyed_branch_name_is_reported_without_overwriting_it() {
+fn another_writer_taking_a_branch_name_is_reported_without_overwriting_it() {
     let mut world = World::new(Settings::calm(45));
     world.historical_pull();
     let intended = world.branch(b"main").expect("fixture main");
     let other = world.branch(b"topic").expect("fixture topic");
     assert_ne!(intended, other);
-    world.land_writes_late(skein_lib::Duration::from_secs(20));
+    world.land_writes_late(skein_lib::Duration::from_secs(5));
     world.make(Entry {
         number: 1,
         task: 7,
