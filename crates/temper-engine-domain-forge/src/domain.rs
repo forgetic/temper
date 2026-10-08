@@ -116,6 +116,7 @@ pub struct Domain {
     client: client::Domain,
     client_out: Queue<client::Request>,
     pub(crate) brief_fetches: Map<Token, brief::BriefFetch>,
+    brief_planned: Map<Token, crate::BriefSource>,
     pub(crate) brief_pending: Map<Token, held::Pending>,
     pub(crate) brief_held: Map<Token, held::Held>,
     judges: crate::Judges,
@@ -159,6 +160,7 @@ impl Domain {
             client: client::Domain::configured(&l.client, seed, config)?,
             client_out: Queue::with_capacity(client::max_out(&l.client)),
             brief_fetches: Map::with_capacity(l.brief_sections),
+            brief_planned: Map::with_capacity(l.brief_sections),
             brief_pending: Map::with_capacity(l.brief_sections),
             brief_held: Map::with_capacity(l.brief_sections),
             judges: crate::Judges::empty(l.judge_projects),
@@ -245,7 +247,10 @@ impl Domain {
     /// Whether no brief section is being gathered by the connector.
     #[must_use]
     pub fn briefs_idle(&self) -> bool {
-        self.brief_fetches.is_empty() && self.brief_pending.is_empty() && self.brief_held.is_empty()
+        self.brief_fetches.is_empty()
+            && self.brief_planned.is_empty()
+            && self.brief_pending.is_empty()
+            && self.brief_held.is_empty()
     }
 
     /// Transfer one completed section to the parent assembling an assignment.
@@ -448,6 +453,20 @@ pub const fn max_out(l: &Limits) -> u32 {
 /// Decide one parent event and collect its durable records and outputs.
 pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::PlanBrief { section, source } => {
+            assert!(d.brief_planned.insert(section, source) == Ok(None), "one bounded planned section");
+        }
+        Event::GatherPlanned { section, parts, bytes, ci_budget } => {
+            let Some(source) = d.brief_planned.remove(&section) else {
+                out.push(Request::BriefSized { section, size: None });
+                return;
+            };
+            let max_job_bytes = match source {
+                crate::BriefSource::Ci { .. } => env.limits.client.answer_bytes.min(ci_budget / 5).max(1),
+                crate::BriefSource::Reviews { .. } | crate::BriefSource::Pull { .. } => 0,
+            };
+            held::gather(d, section, source, parts, bytes, max_job_bytes, env.limits.brief_bytes, out);
+        }
         Event::GatherBrief { owner, source, parts, bytes, max_job_bytes } => {
             brief::gather(d, owner, source, parts, bytes, max_job_bytes, env.limits.brief_bytes, out);
         }
@@ -456,7 +475,10 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         }
         Event::CutBrief { section, bytes } => held::cut(d, section, bytes, out),
         Event::TakeBrief { section } => held::take(d, section, out),
-        Event::DropBrief { section } => held::drop_section(d, section),
+        Event::DropBrief { section } => {
+            d.brief_planned.remove(&section);
+            held::drop_section(d, section);
+        }
         Event::Adopt { reply_to, adoption } => adopt(d, env, reply_to, adoption, out),
         Event::ForgetAdoption { repository, restore } => match restore {
             Some(previous) => {

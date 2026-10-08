@@ -771,7 +771,6 @@ enum Work {
 #[derive(Debug)]
 struct BriefConnector {
     task: u64,
-    source: forge::BriefSource,
     kind: ForgeBriefKind,
     cutting: bool,
 }
@@ -3460,15 +3459,12 @@ fn delegate_call(
     }
     let mut findings =
         Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("findings bound"));
-    let checked = authority::check_batch(
-        &domain.core.authority,
-        &authority::BatchAsk {
-            project: context.project,
-            creator: authority_value(&context.authority),
-            numbers: authority_numbers(context.numbers),
-            tasks_left: context.tasks_left,
-            tasks: asked.into_boxed(),
-        },
+    let checked = domain.core.connector_batch_admit(
+        context.project,
+        &context.authority,
+        context.numbers,
+        context.tasks_left,
+        asked.into_boxed(),
         &mut findings,
     );
     if checked.answer != authority::Answer::Allow {
@@ -3685,7 +3681,6 @@ fn delegate_call(
 
 /// Route a connector-owned step through current task authority and the tasks hub in one root
 /// decision. Invalid or stale owner inputs make no change; the owner retries from current facts.
-#[expect(clippy::too_many_lines, reason = "procedure admission checks and routing form one bounded decision")]
 fn procedure_step(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -3719,15 +3714,12 @@ fn procedure_step(
             let mut findings = Queue::with_capacity(
                 authority::max_out(domain.core.authority.limits()).expect("authority finding bound"),
             );
-            let checked = authority::check_batch(
-                &domain.core.authority,
-                &authority::BatchAsk {
-                    project: context.project,
-                    creator: authority_value(&context.authority),
-                    numbers: authority_numbers(context.numbers),
-                    tasks_left: context.tasks_left,
-                    tasks: asked.into_boxed(),
-                },
+            let checked = domain.core.connector_batch_admit(
+                context.project,
+                &context.authority,
+                context.numbers,
+                context.tasks_left,
+                asked.into_boxed(),
                 &mut findings,
             );
             if checked.answer != authority::Answer::Allow {
@@ -3881,20 +3873,12 @@ fn tasks_outputs(
                         })
                         .expect("bounded template");
                 }
-                let checked = authority::check_batch(
-                    &domain.core.authority,
-                    &authority::BatchAsk {
-                        project: context.project,
-                        creator: authority_value(&context.authority),
-                        numbers: authority::Numbers {
-                            budget: context.authority.budget.spend,
-                            spent: 0,
-                            spent_below: 0,
-                            reserved: 0,
-                        },
-                        tasks_left: context.tasks_left,
-                        tasks: asked.into_boxed(),
-                    },
+                let checked = domain.core.connector_batch_admit(
+                    context.project,
+                    &context.authority,
+                    tasks::Numbers { budget: context.authority.budget.spend, spent: 0, spent_below: 0, reserved: 0 },
+                    context.tasks_left,
+                    asked.into_boxed(),
                     &mut Queue::with_capacity(
                         authority::max_out(domain.core.authority.limits()).expect("bounded authority findings"),
                     ),
@@ -4689,19 +4673,14 @@ fn brief_outputs(
     for _ in 0..out.len() {
         match out.pop().expect("brief output count") {
             brief::GatherRequest::Gather { connector: 0, section, budget } => {
-                let Some(row) = domain.brief_connectors.get(Id::from_token(section)) else { continue };
-                let max_job_bytes = match row.source {
-                    forge::BriefSource::Ci { .. } => {
-                        env.limits.forge.client.answer_bytes.min(env.limits.brief.budgets.ci / 5).max(1)
-                    }
-                    forge::BriefSource::Reviews { .. } | forge::BriefSource::Pull { .. } => 0,
-                };
-                domain.work.push(Work::Forge(forge::Event::GatherBriefHeld {
+                if domain.brief_connectors.get(Id::from_token(section)).is_none() {
+                    continue;
+                }
+                domain.work.push(Work::Forge(forge::Event::GatherPlanned {
                     section,
-                    source: row.source,
                     parts: env.limits.brief.parts,
                     bytes: budget,
-                    max_job_bytes,
+                    ci_budget: env.limits.brief.budgets.ci,
                 }));
             }
             brief::GatherRequest::CutTo { connector: 0, section, size } => {
@@ -5814,9 +5793,10 @@ fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
         let kind = forge_brief_kind(source);
         let token = domain
             .brief_connectors
-            .insert(BriefConnector { task, source, kind, cutting: false })
+            .insert(BriefConnector { task, kind, cutting: false })
             .expect("reserved connector section room")
             .token();
+        domain.work.push(Work::Forge(forge::Event::PlanBrief { section: token, source }));
         wanted
             .push(brief::Planned::Connector {
                 connector: 0,
@@ -5844,9 +5824,10 @@ fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
             let kind = forge_brief_kind(source);
             let token = domain
                 .brief_connectors
-                .insert(BriefConnector { task, source, kind, cutting: false })
+                .insert(BriefConnector { task, kind, cutting: false })
                 .expect("reserved connector section room")
                 .token();
+            domain.work.push(Work::Forge(forge::Event::PlanBrief { section: token, source }));
             wanted
                 .push(brief::Planned::Connector {
                     connector: 0,

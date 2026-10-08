@@ -12,6 +12,7 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 extern crate alloc;
+use alloc::boxed::Box;
 pub mod boundary;
 mod brief;
 mod domain;
@@ -24,6 +25,147 @@ pub use boundary::*;
 pub use domain::{Domain, fire, max_out, resume, step};
 pub use judge::{Criterion, Freshness as JudgeFreshness, Judges, Reviewer, Verdict as JudgeVerdict};
 pub use limits::{Limits, worst_case};
+/// Connector-owned access to one exact effect on an adopted resource.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Access {
+    Owned,
+    Participant,
+    Context,
+    Unavailable,
+}
+
+/// What a forge write does to its named target.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EffectForm {
+    Creation,
+    Transition,
+    Set,
+}
+
+/// Recovery promise of one forge effect kind.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Recovery {
+    Keyed,
+    Conditional,
+    Idempotent,
+    Unrecoverable,
+}
+
+/// Effect form and recovery class declared by the forge connector.
+#[must_use]
+pub const fn effect_shape(kind: u16) -> Option<(EffectForm, Recovery)> {
+    match kind {
+        2 => Some((EffectForm::Transition, Recovery::Unrecoverable)),
+        4 => Some((EffectForm::Transition, Recovery::Conditional)),
+        3 | 9 => Some((EffectForm::Creation, Recovery::Keyed)),
+        5 | 7 | 8 => Some((EffectForm::Creation, Recovery::Unrecoverable)),
+        6 => Some((EffectForm::Set, Recovery::Idempotent)),
+        0 | 1 | 10..=u16::MAX => None,
+    }
+}
+
+/// Connector-owned request and the facts jig may inspect before admitting it.
+#[derive(Debug)]
+pub struct AgentEffect {
+    pub effect: temper_engine_domain_forge_client::Effect,
+    pub kind: u16,
+    pub state: [u8; 32],
+    pub form: EffectForm,
+    pub recovery: Recovery,
+}
+
+/// Classify and bound an agent write in the connector's own vocabulary.
+pub fn describe_agent_effect(
+    repository: &Repository,
+    resource: &What,
+    write: temper_engine_domain_forge_client::api::Write,
+    key: Box<[u8]>,
+    op_bytes: u32,
+) -> Result<AgentEffect, temper_engine_domain_forge_client::api::Error> {
+    use temper_engine_domain_forge_client as client;
+    let (write, kind, state, form, valid_resource) = match write {
+        client::api::Write::CreateIssue { title, body, .. } => (
+            client::api::Write::CreateIssue { key, title, body },
+            8,
+            [0; 32],
+            EffectForm::Creation,
+            *resource == What::Repository,
+        ),
+        client::api::Write::Post { number, body, .. } => (
+            client::api::Write::Post { number, key, body },
+            7,
+            [0; 32],
+            EffectForm::Creation,
+            *resource == What::Issue(number) || *resource == What::Pull(number),
+        ),
+        client::api::Write::Status { commit, context, check } => (
+            client::api::Write::Status { commit, context, check },
+            6,
+            commit,
+            EffectForm::Set,
+            *resource == What::Repository,
+        ),
+        client::api::Write::OpenPull { .. }
+        | client::api::Write::Review { .. }
+        | client::api::Write::Edit { .. }
+        | client::api::Write::SetReviewers { .. }
+        | client::api::Write::Close { .. }
+        | client::api::Write::Reopen { .. }
+        | client::api::Write::Merge { .. }
+        | client::api::Write::Update { .. }
+        | client::api::Write::CreateBranch { .. }
+        | client::api::Write::DeleteBranch { .. } => return Err(client::api::Error::Forbidden),
+    };
+    let access = effect_access(repository, resource, kind);
+    let available = match access {
+        Access::Owned | Access::Participant => true,
+        Access::Context | Access::Unavailable => false,
+    };
+    if !valid_resource || !available {
+        return Err(client::api::Error::Forbidden);
+    }
+    let effect = client::Effect { write, condition: client::Condition::None };
+    let recovery = match client::recovery(&effect.write) {
+        client::Recovery::Keyed => Recovery::Keyed,
+        client::Recovery::Conditional => Recovery::Conditional,
+        client::Recovery::Idempotent => Recovery::Idempotent,
+        client::Recovery::Unrecoverable => Recovery::Unrecoverable,
+    };
+    match client::effect_bytes(&effect) {
+        Some(bytes) if bytes <= u64::from(op_bytes) => {}
+        Some(_) | None => return Err(client::api::Error::Forbidden),
+    }
+    Ok(AgentEffect { effect, kind, state, form, recovery })
+}
+
+/// Describe current access from the forge's adopted role and effect kinds.
+#[must_use]
+pub fn effect_access(repository: &Repository, what: &What, kind: u16) -> Access {
+    let permitted = match kind {
+        1 => repository.kinds.read,
+        2 => repository.kinds.push,
+        3 => repository.kinds.open,
+        4 => repository.kinds.land,
+        5 => repository.kinds.review,
+        6 => repository.kinds.status,
+        7 => repository.kinds.comment,
+        8 => repository.kinds.issue,
+        9 => repository.kinds.branch,
+        _ => false,
+    };
+    let shared = match what {
+        What::Issue(_) | What::Pull(_) => true,
+        What::Repository | What::Branch(_) => false,
+    };
+    match repository.role {
+        Role::Context => Access::Context,
+        Role::Owned | Role::Adopted | Role::Fork if !permitted => Access::Unavailable,
+        Role::Owned | Role::Adopted | Role::Fork if shared => Access::Participant,
+        Role::Adopted => Access::Participant,
+        Role::Fork if kind == 4 => Access::Participant,
+        Role::Owned | Role::Fork => Access::Owned,
+    }
+}
 /// Stable key of one durable connector row.
 #[must_use]
 pub fn stored_key(row: &Stored) -> Key {

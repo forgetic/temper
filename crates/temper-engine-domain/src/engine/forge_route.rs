@@ -3,10 +3,11 @@
 use super::{
     CallAnswer, CallKey, Decision, Delivery, Domain, Env, Family, ForgeRepository, ForgeStart, ForgeWorkspace,
     Freshness, Id, Key, LandingRule, Limits, List, ProcedureAction, Queue, Record, ReplyTo, RoutedCall, Token, Work,
-    Write, authority, authority_numbers, authority_value, decide_call, emit, escalation, forge, forge_change,
-    forge_client, forge_issues, people, procedure_step, save, tasks,
+    Write, authority, decide_call, emit, escalation, forge, forge_change, forge_client, forge_issues, people,
+    procedure_step, save, tasks,
 };
 use alloc::boxed::Box;
+use jig_core::connector::{EffectDescription, EffectForm, Recovery};
 use jig_core_brief as brief;
 
 /// Translate the worker's connector-specific saved tags at the root boundary.
@@ -360,29 +361,11 @@ fn resource_name(repository: &forge::Repository, what: &forge::What, limit: u32)
 }
 
 fn effect_access(repository: &forge::Repository, what: &forge::What, kind: u16) -> authority::EffectAccess {
-    let permitted = match kind {
-        1 => repository.kinds.read,
-        2 => repository.kinds.push,
-        3 => repository.kinds.open,
-        4 => repository.kinds.land,
-        5 => repository.kinds.review,
-        6 => repository.kinds.status,
-        7 => repository.kinds.comment,
-        8 => repository.kinds.issue,
-        9 => repository.kinds.branch,
-        _ => false,
-    };
-    let shared = match what {
-        forge::What::Issue(_) | forge::What::Pull(_) => true,
-        forge::What::Repository | forge::What::Branch(_) => false,
-    };
-    match repository.role {
-        forge::Role::Context => authority::EffectAccess::Context,
-        _ if !permitted => authority::EffectAccess::Unavailable,
-        _ if shared => authority::EffectAccess::Participant,
-        forge::Role::Adopted => authority::EffectAccess::Participant,
-        forge::Role::Fork if kind == 4 => authority::EffectAccess::Participant,
-        forge::Role::Owned | forge::Role::Fork => authority::EffectAccess::Owned,
+    match forge::effect_access(repository, what, kind) {
+        forge::Access::Owned => authority::EffectAccess::Owned,
+        forge::Access::Participant => authority::EffectAccess::Participant,
+        forge::Access::Context => authority::EffectAccess::Context,
+        forge::Access::Unavailable => authority::EffectAccess::Unavailable,
     }
 }
 
@@ -422,7 +405,7 @@ pub(super) fn effect_call(
         );
         return;
     };
-    let Some(context) = domain.core.tasks.delegation(key.task) else {
+    if !domain.core.connector_project(key.task, adopted.project) {
         decide_call(
             domain,
             &env.limits,
@@ -432,44 +415,17 @@ pub(super) fn effect_call(
             CallAnswer::ForgeEffectRefused(forge_client::api::Error::Forbidden),
         );
         return;
-    };
-    let (write, kind, state, permitted) = match write {
-        forge_client::api::Write::CreateIssue { title, body, .. } => (
-            forge_client::api::Write::CreateIssue { key: effect_key(domain, key), title, body },
-            8_u16,
-            [0; 32],
-            resource == forge::What::Repository && adopted.kinds.issue,
-        ),
-        forge_client::api::Write::Post { number, body, .. } => (
-            forge_client::api::Write::Post { number, key: effect_key(domain, key), body },
-            7_u16,
-            [0; 32],
-            (resource == forge::What::Issue(number) || resource == forge::What::Pull(number)) && adopted.kinds.comment,
-        ),
-        forge_client::api::Write::Status { commit, context, check } => (
-            forge_client::api::Write::Status { commit, context, check },
-            6_u16,
-            commit,
-            resource == forge::What::Repository && adopted.kinds.status,
-        ),
-        forge_client::api::Write::OpenPull { .. }
-        | forge_client::api::Write::Review { .. }
-        | forge_client::api::Write::Edit { .. }
-        | forge_client::api::Write::SetReviewers { .. }
-        | forge_client::api::Write::Close { .. }
-        | forge_client::api::Write::Reopen { .. }
-        | forge_client::api::Write::Merge { .. }
-        | forge_client::api::Write::Update { .. }
-        | forge_client::api::Write::CreateBranch { .. }
-        | forge_client::api::Write::DeleteBranch { .. } => {
-            decide_call(
-                domain,
-                &env.limits,
-                decision,
-                to,
-                key,
-                CallAnswer::ForgeEffectRefused(forge_client::api::Error::Forbidden),
-            );
+    }
+    let described = match forge::describe_agent_effect(
+        adopted,
+        &resource,
+        write,
+        effect_key(domain, key),
+        env.limits.forge.client.op_bytes,
+    ) {
+        Ok(described) => described,
+        Err(why) => {
+            decide_call(domain, &env.limits, decision, to, key, CallAnswer::ForgeEffectRefused(why));
             return;
         }
     };
@@ -484,45 +440,36 @@ pub(super) fn effect_call(
         );
         return;
     };
-    let effect = forge_client::Effect { write, condition: forge_client::Condition::None };
-    let valid = match forge_client::effect_bytes(&effect) {
-        Some(bytes) => bytes <= u64::from(env.limits.forge.client.op_bytes),
-        None => false,
-    };
-    if !permitted || context.project != adopted.project || adopted.role == forge::Role::Context || !valid {
-        decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::ForgeEffectRefused(forge_client::api::Error::Forbidden),
-        );
-        return;
-    }
     let mut findings =
         Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
-    let checked = authority::check_effect(
-        &domain.core.authority,
-        &authority::EffectAsk {
-            project: context.project,
-            authority: authority_value(&context.authority),
-            numbers: authority_numbers(context.numbers),
-            effect: authority::Effect {
-                connector: domain.config.forge_connector,
-                kind,
-                name,
-                state,
-                price: None,
-                access: effect_access(adopted, &resource, kind),
-                additional: Box::new([]),
-                guards: Box::new([]),
-            },
-            now: env.wall,
+    let form = match described.form {
+        forge::EffectForm::Creation => EffectForm::Creation,
+        forge::EffectForm::Transition => EffectForm::Transition,
+        forge::EffectForm::Set => EffectForm::Set,
+    };
+    let recovery = match described.recovery {
+        forge::Recovery::Keyed => Recovery::Keyed,
+        forge::Recovery::Conditional => Recovery::Conditional,
+        forge::Recovery::Idempotent => Recovery::Idempotent,
+        forge::Recovery::Unrecoverable => Recovery::Unrecoverable,
+    };
+    let description = EffectDescription {
+        connector: domain.config.forge_connector,
+        purpose: key.completion.into(),
+        effect: authority::Effect {
+            connector: domain.config.forge_connector,
+            kind: described.kind,
+            name,
+            state: described.state,
+            price: None,
+            access: effect_access(adopted, &resource, described.kind),
+            additional: Box::new([]),
+            guards: Box::new([]),
         },
-        &[],
-        &mut findings,
-    );
+        form,
+        recovery,
+    };
+    let checked = domain.core.connector_effect_admit(key.task, &description, env.wall, &[], &mut findings);
     if checked != authority::Answer::Allow {
         let mut reasons =
             List::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
@@ -568,7 +515,7 @@ pub(super) fn effect_call(
             number: entry,
             task: key.task,
             repository,
-            effect,
+            effect: described.effect,
             start: None,
             attempt: None,
             failures: 0,
@@ -610,22 +557,17 @@ pub(super) fn read_call(
         Some(name) if context.project == adopted.project && adopted.kinds.read => {
             let mut findings =
                 Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
-            authority::check_call(
-                &domain.core.authority,
-                &authority::CallAsk {
-                    project: context.project,
-                    authority: authority_value(&context.authority),
-                    family: authority::Tools(1),
-                    call: authority::Call::Read(authority::Effect {
-                        connector: domain.config.forge_connector,
-                        kind: 1,
-                        name,
-                        state: [0; 32],
-                        price: None,
-                        access: effect_access(adopted, &forge::What::Repository, 1),
-                        additional: Box::new([]),
-                        guards: Box::new([]),
-                    }),
+            domain.core.connector_read_admit(
+                key.task,
+                authority::Effect {
+                    connector: domain.config.forge_connector,
+                    kind: 1,
+                    name,
+                    state: [0; 32],
+                    price: None,
+                    access: effect_access(adopted, &forge::What::Repository, 1),
+                    additional: Box::new([]),
+                    guards: Box::new([]),
                 },
                 &mut findings,
             ) == authority::Answer::Allow
@@ -930,7 +872,6 @@ pub(super) struct RunWorkspace {
 #[expect(
     clippy::disallowed_methods,
     clippy::wildcard_enum_match_arm,
-    clippy::too_many_lines,
     reason = "projection converts already validated task text and selects current milestone kinds"
 )]
 pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks::TaskRecord) {
@@ -945,27 +886,23 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks:
     };
     let mut findings =
         Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
-    let allowed = authority::check_effect(
-        &domain.core.authority,
-        &authority::EffectAsk {
-            project: goal.project,
-            authority: authority_value(&goal.authority),
-            numbers: authority_numbers(goal.numbers),
-            effect: authority::Effect {
-                connector: domain.config.forge_connector,
-                kind: 8,
-                name,
-                state: [0; 32],
-                price: None,
-                access: effect_access(repository, &forge::What::Repository, 8),
-                additional: Box::new([]),
-                guards: Box::new([]),
-            },
-            now: env.wall,
+    let description = EffectDescription {
+        connector: domain.config.forge_connector,
+        purpose: goal.number,
+        effect: authority::Effect {
+            connector: domain.config.forge_connector,
+            kind: 8,
+            name,
+            state: [0; 32],
+            price: None,
+            access: effect_access(repository, &forge::What::Repository, 8),
+            additional: Box::new([]),
+            guards: Box::new([]),
         },
-        &[],
-        &mut findings,
-    );
+        form: EffectForm::Creation,
+        recovery: Recovery::Unrecoverable,
+    };
+    let allowed = domain.core.connector_goal_effect_admit(goal, &description, env.wall, &mut findings);
     if allowed != authority::Answer::Allow {
         domain.work.push(Work::Tasks(tasks::Event::Hold { task: goal.number, why: tasks::Hold::Effects }));
         return;
@@ -1090,30 +1027,19 @@ fn may_push(
     let Some(name) = resource_name(repository, &what, env.limits.authority.segments) else { return false };
     let Some(bound) = authority::max_out(domain.core.authority.limits()) else { return false };
     let mut findings = Queue::with_capacity(bound);
-    authority::check_run(
-        &domain.core.authority,
-        &authority::RunAsk {
-            project: context.project,
-            authority: authority_value(&context.authority),
-            numbers: authority_numbers(context.numbers),
-            budget: authority::left(authority_numbers(context.numbers))
-                .min(domain.core.authority.rules().maximum_run_spend),
-            wall: env.wall,
-            accounts: Box::new([domain.core.accounts.usable(domain.core.settings.account)]),
-            writes: Box::new([authority::Write {
-                effect: authority::Effect {
-                    connector: domain.config.forge_connector,
-                    kind: 2,
-                    name,
-                    state: [0; 32],
-                    price: None,
-                    access: effect_access(repository, &what, 2),
-                    additional: Box::new([]),
-                    guards: Box::new([]),
-                },
-                held: authority::Writer::Task,
-            }]),
+    domain.core.connector_run_write_admit(
+        context,
+        authority::Effect {
+            connector: domain.config.forge_connector,
+            kind: 2,
+            name,
+            state: [0; 32],
+            price: None,
+            access: effect_access(repository, &what, 2),
+            additional: Box::new([]),
+            guards: Box::new([]),
         },
+        env.wall,
         &mut findings,
     ) == authority::Answer::Allow
 }
@@ -1363,26 +1289,7 @@ fn pull_what(number: Option<u64>) -> Option<forge::What> {
 
 /// Project landing gates are procedure gates before they become effect requirements.
 fn gate_required(domain: &Domain, project: u32, name: &authority::Name, parameters: u32, project_scope: bool) -> bool {
-    let requirements = if project_scope {
-        match domain.core.authority.policy(project) {
-            Some(policy) => &policy.requirements,
-            None => return false,
-        }
-    } else {
-        &domain.core.authority.rules().requirements
-    };
-    for requirement in requirements.as_ref() {
-        if requirement.connector == domain.config.forge_connector
-            && requirement.kind == 4
-            && requirement.judge.connector == domain.config.forge_connector
-            && requirement.judge.requirement == 3
-            && requirement.judge.parameters == parameters
-            && authority::pattern_covers(&requirement.pattern, name)
-        {
-            return true;
-        }
-    }
-    false
+    domain.core.connector_gate_required(project, domain.config.forge_connector, name, parameters, project_scope)
 }
 
 fn configured_gates(
@@ -1554,7 +1461,7 @@ fn check_change_effect(
         additional: Box::new([]),
         guards: Box::new([]),
     };
-    let Some(judges) = authority::needed_judges(&domain.core.authority, context.project, &effect) else {
+    let Some(judges) = domain.core.connector_needed_judges(context.project, &effect) else {
         return authority::Answer::Refuse;
     };
     let mut guards = List::with_capacity(env.limits.authority.facts);
@@ -1599,15 +1506,22 @@ fn check_change_effect(
     }
     let mut findings =
         Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority findings"));
-    authority::check_effect(
-        &domain.core.authority,
-        &authority::EffectAsk {
-            project: context.project,
-            authority: authority_value(&context.authority),
-            numbers: authority_numbers(context.numbers),
-            effect,
-            now: env.wall,
-        },
+    let Some((forge_form, forge_recovery)) = forge::effect_shape(kind) else { return authority::Answer::Refuse };
+    let form = match forge_form {
+        forge::EffectForm::Creation => EffectForm::Creation,
+        forge::EffectForm::Transition => EffectForm::Transition,
+        forge::EffectForm::Set => EffectForm::Set,
+    };
+    let recovery = match forge_recovery {
+        forge::Recovery::Keyed => Recovery::Keyed,
+        forge::Recovery::Conditional => Recovery::Conditional,
+        forge::Recovery::Idempotent => Recovery::Idempotent,
+        forge::Recovery::Unrecoverable => Recovery::Unrecoverable,
+    };
+    domain.core.connector_effect_admit(
+        task,
+        &EffectDescription { connector: domain.config.forge_connector, purpose: task, effect, form, recovery },
+        env.wall,
         given.as_slice(),
         &mut findings,
     )
@@ -1925,22 +1839,8 @@ fn start_queue_repair(domain: &mut Domain, env: &Env<Limits>, task: u64) -> bool
     }
     let Some(repository) = domain.forge.repository(row.repository) else { return false };
     let project = repository.project;
-    let Some(policy) = domain.core.authority.policy(project) else { return false };
-    let mut authority = policy.ceiling.clone();
+    let Some(authority) = domain.core.connector_repair_authority(project) else { return false };
     let period = domain.core.settings.period;
-    let available = match domain.core.tasks.funding(tasks::Funder::Period { project, period }) {
-        Some(funding) => funding
-            .numbers
-            .budget
-            .saturating_sub(funding.numbers.spent)
-            .saturating_sub(funding.numbers.spent_below)
-            .saturating_sub(funding.numbers.reserved),
-        None => domain.core.settings.period_budget,
-    };
-    authority.budget.spend = authority.budget.spend.min(available).min(domain.core.authority.rules().maximum_run_spend);
-    if authority.budget.spend == 0 {
-        return false;
-    }
     let provider = row.repository;
     let base = row.base.clone();
     let Some(repair) = crate::fresh(&mut domain.core.counters, Family::Task) else { return false };
@@ -2202,52 +2102,44 @@ pub(super) fn outputs(
                 let previous = domain.adoption_restore.remove(&reply_to).expect("one admitted adoption result");
                 match result {
                     Ok(adopted) => {
-                        let mut seeds = List::with_capacity(env.limits.forge.collaborators);
-                        let mut exhausted = false;
+                        let mut parties = List::with_capacity(env.limits.forge.collaborators);
                         for collaborator in &adopted.collaborators {
-                            let role = seeded_role(domain, adopted.repository.project, collaborator.permission);
-                            if let Some(role) = role {
-                                match crate::fresh(&mut domain.core.counters, Family::Person) {
-                                    Some(candidate) => {
-                                        seeds
-                                            .push(people::Seed {
-                                                identity: people::IdentityKey {
-                                                    provider: 0,
-                                                    subject: collaborator.user.to_be_bytes().into(),
-                                                },
-                                                candidate,
-                                                role,
-                                            })
-                                            .expect("bounded collaborators");
-                                    }
-                                    None => exhausted = true,
-                                }
+                            if let Some(role) = seeded_role(domain, adopted.repository.project, collaborator.permission)
+                            {
+                                parties
+                                    .push(jig_core::connector::AdoptedParty {
+                                        subject: collaborator.user.to_be_bytes().into(),
+                                        role,
+                                    })
+                                    .expect("bounded collaborators");
                             }
                         }
-                        if exhausted
-                            || !domain.core.people.can_seed(
-                                &env.limits.people,
-                                adopted.repository.project,
-                                seeds.as_slice(),
-                            )
-                        {
-                            domain.work.push(Work::Forge(forge::Event::ForgetAdoption {
-                                repository: adopted.repository.provider,
-                                restore: previous,
-                            }));
-                            domain.work.push(Work::People(people::Event::Decided {
-                                request: reply_to,
-                                outcome: people::Outcome::Refused(people::Refusal::Busy),
-                            }));
-                        } else {
-                            domain.work.push(Work::People(people::Event::Seed {
-                                project: adopted.repository.project,
-                                collaborators: seeds.into_boxed(),
-                            }));
-                            domain.work.push(Work::People(people::Event::Decided {
-                                request: reply_to,
-                                outcome: people::Outcome::Adopted { project: adopted.repository.project },
-                            }));
+                        match domain.core.connector_adopt_parties(
+                            &env.limits.people,
+                            adopted.repository.project,
+                            0,
+                            parties.into_boxed(),
+                        ) {
+                            Ok(seeds) => {
+                                domain.work.push(Work::People(people::Event::Seed {
+                                    project: adopted.repository.project,
+                                    collaborators: seeds,
+                                }));
+                                domain.work.push(Work::People(people::Event::Decided {
+                                    request: reply_to,
+                                    outcome: people::Outcome::Adopted { project: adopted.repository.project },
+                                }));
+                            }
+                            Err(why) => {
+                                domain.work.push(Work::Forge(forge::Event::ForgetAdoption {
+                                    repository: adopted.repository.provider,
+                                    restore: previous,
+                                }));
+                                domain.work.push(Work::People(people::Event::Decided {
+                                    request: reply_to,
+                                    outcome: people::Outcome::Refused(why),
+                                }));
+                            }
                         }
                     }
                     Err(error) => {
@@ -2283,21 +2175,17 @@ pub(super) fn outputs(
                 let class = match class {
                     forge::Class::Wakes => tasks::NewsClass::Wakes,
                     forge::Class::Kept => tasks::NewsClass::Kept,
-                    forge::Class::Dropped => continue,
+                    forge::Class::Dropped => tasks::NewsClass::Dropped,
                 };
-                let number = crate::fresh(&mut domain.core.counters, Family::Message).expect("news number admitted");
-                domain.work.push(Work::Tasks(tasks::Event::Notice {
+                if let Some(event) = domain.core.connector_news(
                     task,
-                    word: tasks::Word {
-                        number,
-                        from: tasks::Party::Task(task),
-                        kind: tasks::MessageKind::News { subscription, class },
-                        words: news_words(&news, env.limits.tasks.message_bytes),
-                        at: env.wall,
-                        hits: 1,
-                        eligible: false,
-                    },
-                }));
+                    subscription,
+                    class,
+                    news_words(&news, env.limits.tasks.message_bytes),
+                    env.wall,
+                ) {
+                    domain.work.push(Work::Tasks(event));
+                }
             }
             forge::Request::Taken { task, .. } | forge::Request::Refused { task } => {
                 if domain.core.claiming.remove(&task).is_some() {
@@ -2365,37 +2253,16 @@ pub(super) fn outputs(
                         save(decision, &env.limits, Write::Save(Record::Call(crate::CallRecord { key, answer })));
                     }
                 }
-                let cancelling = match domain.core.tasks.task(task) {
-                    Some(row) => match &row.phase {
-                        tasks::Phase::Closing(closing)
-                        | tasks::Phase::Held { was: tasks::Was::Closing(closing), .. } => match &closing.ending {
-                            tasks::Ending::Cancelled { .. } => true,
-                            tasks::Ending::Done(_) | tasks::Ending::Failed { .. } => false,
-                        },
-                        tasks::Phase::Waiting
-                        | tasks::Phase::Active(_)
-                        | tasks::Phase::Held { .. }
-                        | tasks::Phase::Ended(_) => false,
-                    },
-                    None => false,
+                let result = match outcome {
+                    forge_client::Outcome::Made { .. } => jig_core::connector::OutboxOutcome::Made,
+                    forge_client::Outcome::Failed(_) | forge_client::Outcome::Raced { .. } => {
+                        jig_core::connector::OutboxOutcome::Failed
+                    }
+                    forge_client::Outcome::Withdrawn => jig_core::connector::OutboxOutcome::Withdrawn,
+                    forge_client::Outcome::Uncertain => jig_core::connector::OutboxOutcome::Uncertain,
                 };
-                match outcome {
-                    forge_client::Outcome::Failed(_) | forge_client::Outcome::Raced { .. }
-                        if domain.forge.change(task).is_none() =>
-                    {
-                        domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::EffectFailed }));
-                    }
-                    forge_client::Outcome::Withdrawn if !cancelling && domain.forge.change(task).is_none() => {
-                        domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::EffectFailed }));
-                    }
-                    forge_client::Outcome::Failed(_)
-                    | forge_client::Outcome::Raced { .. }
-                    | forge_client::Outcome::Withdrawn
-                    | forge_client::Outcome::Made { .. }
-                    | forge_client::Outcome::Uncertain => {}
-                }
-                if outcome != forge_client::Outcome::Uncertain && domain.forge.change(task).is_some() {
-                    domain.work.push(Work::Tasks(tasks::Event::WakeProcedure { task }));
+                if let Some(event) = domain.core.connector_outbox(task, result, domain.forge.change(task).is_some()) {
+                    domain.work.push(Work::Tasks(event));
                 }
             }
             forge::Request::ContinueRelease { task } => {

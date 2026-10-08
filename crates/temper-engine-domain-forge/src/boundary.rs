@@ -356,6 +356,10 @@ pub enum Key {
 /// A parent or child input to the connector top.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Keep a connector-owned section source while the core budgets its brief.
+    PlanBrief { section: Token, source: BriefSource },
+    /// Gather a planned section with the core's allotted budget.
+    GatherPlanned { section: Token, parts: u32, bytes: u32, ci_budget: u32 },
     /// Gather one pinned, connector-owned section for a run brief.
     GatherBrief { owner: Token, source: BriefSource, parts: u32, bytes: u32, max_job_bytes: u32 },
     /// Gather a section and retain its rendered bytes until the root takes or drops its token.
