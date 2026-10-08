@@ -377,6 +377,37 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 06.2 simulated host process world | merged locally | smith 9fcc632 | Host service spawns the agent service over child pipes and fake LLM; covers exit, refusal, stderr tail, opening deadline and forced stop. fmt 0.975 s; Clippy 0.185 s; 1,332 focused / 4.413 s; 16 fuzzy / 5.010 s; world serial 5 focused / 0.039 s. |
 | 06.3 host referee, crash sweep and memory | merged locally | smith bf4b992 | Referee checks single answer, call terminals and child teardown before slot release; sweeps and replays hosted crashes at every step and meters process memory. fmt 0.962 s; Clippy 13.787 s; 1,336 focused / 4.330 s; 17 fuzzy / 5.481 s; world serial 9 focused / 0.163 s and one fuzzy / 0.777 s. |
 
+| 07.1 bounded terminal | merged locally | smith 2462708 | fmt/clippy pass; 1,340 focused / 5.538 s; 17 fuzzy / 5.925 s. |
+| 07.1 terminal service routing | merged locally | smith 97246f4 | Historical gate counts/times are absent from this commit; the later settings tip passed all four checks. |
+| 07.1 settings and local shell | merged locally | smith 202898e | fmt 0.939 s; Clippy 1.12 s; 1,366 focused / 4.301 s; 17 fuzzy / 6.774 s. |
+| 07.2 state and numbered turn codecs | merged locally | smith 210d887 | fmt/clippy pass; 1,343 focused / 4.698 s; 17 fuzzy / 5.918 s. |
+| 07.2 delivery intent and decision codecs | merged locally | smith 8160b99 | fmt/clippy pass; 1,346 focused / 5.453 s; 17 fuzzy / 5.909 s. |
+| 07.2 synced numbered files | merged locally | smith 901b5f9 | fmt/clippy pass; 1,362 focused / 5.449 s; 17 fuzzy / 5.811 s. |
+| 07.2 interrupted-save recovery | merged locally | smith cfd964f | fmt 0.904 s; Clippy 15.12 s; 1,363 focused / 4.225 s; 17 fuzzy / 4.976 s. |
+| 07.3 OAuth translator | merged locally | smith ffdf343 | fmt/clippy pass; 1,349 focused / 5.558 s; 17 fuzzy / 5.846 s. |
+| 07.3 private durable token files | merged locally | smith 4929e81 | Private directory and 0600 synced replacements reject unsafe existing paths; not yet connected to transport. fmt/clippy pass; 1,368 focused / 4.431 s; 17 fuzzy / 5.627 s. |
+| 07.4 typed git adapter | merged locally | smith b26e11d | fmt/clippy pass; 1,353 focused / 5.566 s; 17 fuzzy / 5.832 s. |
+| 07.5 external-agent domain boundary | merged locally | smith c97208f | fmt/clippy pass; 1,354 focused (time unrecorded); 17 fuzzy / 6.070 s. |
+| 07.5 host-channel delivery bridge | merged locally | smith 70d7e16 | fmt/clippy pass; 1,355 focused / 5.534 s; 17 fuzzy / 5.970 s. |
+| 07.5 checked spawned start | merged locally | smith 19bb806 | fmt/clippy pass; 1,356 focused / 6.880 s; 17 fuzzy / 7.191 s. |
+| 07.5 numbered live turn | merged locally | smith 92ab349 | fmt/clippy pass; 1,357 focused / 5.897 s; 17 fuzzy / 7.461 s. |
+| 07.5 spawned results | merged locally | smith d423c4f | fmt/clippy pass; 1,358 focused / 6.809 s; 17 fuzzy / 7.317 s. |
+| 07.5 spawned final boundary | merged locally | smith 06cad7c | fmt/clippy pass; 1,359 focused / 5.499 s; 17 fuzzy / 6.100 s. |
+| 07.5 local service | merged locally | smith 10aa298 | fmt/clippy pass; 1,360 focused / 5.498 s; 17 fuzzy / 5.875 s. |
+| 07.5 process adapter | merged locally | smith e43ab01 | fmt/clippy pass; 1,360 focused / 5.457 s; 17 fuzzy / 6.009 s. |
+
+Session 07 stopped incomplete on 2026-10-08 at Smith main `4929e81`.
+The clean unmerged branch `protocol/07-4-delivery-io` retains checkpoint
+`fb86822`: fmt/clippy passed, 1,371 focused / 4.256 s and 17 fuzzy / 5.406 s.
+It is blocked by an uncertain-effect contract: a commit can land before its
+head receipt fails or a deadline fires, but the existing adapter reports
+failure and the domain overwrites its intent without the landed receipt.
+The proposal is to distinguish uncertainty, keep the intent, and reconcile
+its delivery trailer before saving an answer; this needs a design decision.
+OAuth transport and loopback sign-in, integration of the private token store,
+plain-directory and marker IO, in-process mode, complete settings docs, and
+the simulated local-process world and its serial measurements remain.
+
 ## jig extraction
 
 | Increment | State | Commit | Evidence |
