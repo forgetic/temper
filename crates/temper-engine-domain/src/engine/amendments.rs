@@ -1,11 +1,8 @@
 //! Authenticated person amendments (domain/people.md, 5.1; jig's domain/tasks.md, 7).
-//! The root translates the person's typed payload, checks current standing and
-//! authority, and sends one task edit. Tasks retains the change and history.
-use super::{
-    Domain, Env, Limits, PersonTaskRoute, ReplyTo, Token, Work, authority, authority_numbers, authority_value,
-    escalation, people, person_control_refused, person_escalation_recipient, person_tree, tasks,
-};
-use skein_lib::{List, Queue};
+//! The root translates the person's typed payload and routes the core's
+//! admission decision to tasks. Tasks retains the change and history.
+use super::{Domain, Env, Limits, PersonTaskRoute, ReplyTo, Token, Work, people, person_control_refused, tasks};
+use skein_lib::List;
 
 fn wake_rule(value: people::WakeRule) -> tasks::WakeRule {
     match value {
@@ -128,7 +125,6 @@ fn translate(value: people::Amendment, limits: &tasks::Limits) -> Option<tasks::
 
 /// Check this person's standing and current authority, then submit one full task amendment.
 #[expect(clippy::too_many_arguments, reason = "one keyed person amendment names its caller, project and task")]
-#[expect(clippy::too_many_lines, reason = "the admission and task route form one bounded decision")]
 pub(super) fn begin(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -139,107 +135,45 @@ pub(super) fn begin(
     task: u64,
     amendment: people::Amendment,
 ) {
-    let Some(context) = domain.core.tasks.delegation(task) else {
-        return person_control_refused(domain, request, people::Refusal::Ended);
-    };
-    let Some(role) = role else { return person_control_refused(domain, request, people::Refusal::Role) };
-    let any_task = match role {
-        people::Role::Owner | people::Role::Maintainer => true,
-        people::Role::Member | people::Role::Observer => false,
-        people::Role::Policy { .. } => match domain.core.authority.role(project, role.number()) {
-            Some(policy) => policy.requests.allows(authority::RequestKind::Amend),
-            None => false,
-        },
-    };
-    let standing = person_tree(domain, person, task) || person_escalation_recipient(domain, person, role, task);
-    if context.project != project || !any_task && !standing {
-        return person_control_refused(domain, request, people::Refusal::Standing);
-    }
-    let role_number = escalation::role_number(role);
-    let Some(role_policy) = domain.core.authority.role(project, role_number) else {
-        return person_control_refused(domain, request, people::Refusal::Authority);
-    };
-    if !role_policy.requests.allows(authority::RequestKind::Amend) && !standing {
-        return person_control_refused(domain, request, people::Refusal::Authority);
-    }
     let Some(amendment) = translate(amendment, &env.limits.tasks) else {
         return person_control_refused(domain, request, people::Refusal::Limit);
     };
-    let mut stop_run = false;
-    if let Some(after) = &amendment.authority {
-        if !tasks::valid_authority(&env.limits.tasks, after) {
+    let (stop_run, propose) = match domain.core.amend_admit(
+        person,
+        role,
+        project,
+        task,
+        &amendment,
+        env.limits.tasks.depth,
+        &env.limits.tasks,
+    ) {
+        Ok(admitted) => admitted,
+        Err(why) => return person_control_refused(domain, request, why),
+    };
+    if propose {
+        let Some(proposal) = crate::fresh(&mut domain.core.counters, super::Family::Message) else {
             return person_control_refused(domain, request, people::Refusal::Limit);
-        }
-        let before = authority_value(&context.authority);
-        let after = authority_value(after);
-        let implies = &domain.core.authority.rules().implies;
-        stop_run = !authority::at_most(&before, &after, implies);
-        if !authority::at_most(&after, &before, implies) {
-            let pool = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
-            let numbers = match domain.core.tasks.funding(pool) {
-                Some(row) => row.numbers,
-                None => tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
-            };
-            let mut findings =
-                Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority bound"));
-            let checked = authority::check_request_with_standing(
-                &domain.core.authority,
-                &authority::PersonAsk {
-                    project,
-                    role: role_number,
-                    pool: authority_numbers(numbers),
-                    tasks_left: context.tasks_left,
-                    request: authority::PersonRequest::Amend(after),
+        };
+        assert!(
+            domain.core.person_tasks.insert(request, PersonTaskRoute::AmendProposed { task, proposal }) == Ok(None),
+            "one amendment proposal"
+        );
+        domain.work.push(Work::Tasks(tasks::Event::Propose {
+            reply_to: ReplyTo::new(request),
+            proposal: tasks::Proposal {
+                number: proposal,
+                proposer: task,
+                project,
+                reason: amendment.reason.clone(),
+                as_holder: false,
+                action: tasks::ProposalAction::Amend { task, amendment },
+                state: tasks::ProposalState::Pending {
+                    holder: tasks::ProposalHolder::Policy { project, kind: tasks::ProposalKind::Amend },
+                    since: env.wall,
                 },
-                standing,
-                &mut findings,
-            );
-            let role_shortage = if findings.len() == 1 {
-                match findings.pop() {
-                    Some(authority::Finding::Authority { source: authority::Source::Role, .. }) => true,
-                    Some(_) | None => false,
-                }
-            } else {
-                false
-            };
-            let answer = if checked.answer == authority::Answer::Refuse && role_shortage {
-                authority::Answer::Propose
-            } else {
-                checked.answer
-            };
-            match answer {
-                authority::Answer::Allow => {}
-                authority::Answer::Propose => {
-                    let Some(proposal) = crate::fresh(&mut domain.core.counters, super::Family::Message) else {
-                        return person_control_refused(domain, request, people::Refusal::Limit);
-                    };
-                    assert!(
-                        domain.core.person_tasks.insert(request, PersonTaskRoute::AmendProposed { task, proposal })
-                            == Ok(None),
-                        "one amendment proposal"
-                    );
-                    domain.work.push(Work::Tasks(tasks::Event::Propose {
-                        reply_to: ReplyTo::new(request),
-                        proposal: tasks::Proposal {
-                            number: proposal,
-                            proposer: task,
-                            project,
-                            reason: amendment.reason.clone(),
-                            as_holder: false,
-                            action: tasks::ProposalAction::Amend { task, amendment },
-                            state: tasks::ProposalState::Pending {
-                                holder: tasks::ProposalHolder::Policy { project, kind: tasks::ProposalKind::Amend },
-                                since: env.wall,
-                            },
-                        },
-                    }));
-                    return;
-                }
-                authority::Answer::Wait | authority::Answer::Refuse => {
-                    return person_control_refused(domain, request, people::Refusal::Authority);
-                }
-            }
-        }
+            },
+        }));
+        return;
     }
     let Some(message) = crate::fresh(&mut domain.core.counters, super::Family::Message) else {
         return person_control_refused(domain, request, people::Refusal::Limit);

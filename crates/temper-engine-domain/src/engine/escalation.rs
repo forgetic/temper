@@ -4,7 +4,7 @@
 
 use super::{
     CallKey, Decision, Delivery, Domain, Env, EscalationChoice, Family, Id, Limits, Read, ReplyTo, Request, RoutedCall,
-    Token, Work, authority, emit, people, save, tasks,
+    Token, Work, emit, people, save, tasks,
 };
 use crate::{CallAnswer, EscalationDecisionRecord, Record, Write};
 use alloc::boxed::Box;
@@ -33,60 +33,24 @@ pub(super) fn role_number(role: people::Role) -> u32 {
 }
 
 fn fallback(domain: &Domain, project: u32) -> Option<tasks::EscalationHolder> {
-    // The policy names the escalation role; this slice resolves that role here.
-    let role = domain.core.authority.policy(project)?.escalation_role?;
-    Some(tasks::EscalationHolder::Role { project, role })
+    domain.core.escalation_fallback(project)
 }
 
 fn covers(domain: &Domain, context: &tasks::EscalationContext, person: u64, role: Option<people::Role>) -> bool {
-    let Some(role) = role else { return false };
-    let pool = tasks::Funder::Pool { project: context.project, person, period: domain.core.settings.period };
-    let numbers = match domain.core.tasks.funding(pool) {
-        Some(record) => record.numbers,
-        None => tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
-    };
-    let Some(needed) = authority::needs(&authority::Action::Escalate { release: None }) else { return false };
-    authority::covers(
-        &domain.core.authority,
-        &needed,
-        &authority::Holder::Person {
-            project: context.project,
-            role: role_number(role),
-            proposal: authority::ProposalKind::Escalation,
-            pool: super::authority_numbers(numbers),
-            tasks_left: domain.limits.tasks.tree_tasks,
-        },
-        0,
-    )
+    domain.core.escalation_covers(&super::core_limits(&domain.limits), context, person, role)
 }
 
 pub(super) fn supported(domain: &Domain, task: &tasks::TaskRecord) -> bool {
-    let Some(fallback) = fallback(domain, task.project) else { return false };
-    match &task.escalation {
-        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Role { .. }, entry, .. } => {
-            // An old selector can be rechecked, but its project must remain the chat's.
-            *entry <= domain.core.counters.deployment().messages
-                && match fallback {
-                    tasks::EscalationHolder::Role { project, .. } => project == task.project,
-                    tasks::EscalationHolder::Task(_) | tasks::EscalationHolder::Person(_) => false,
-                }
-        }
-        tasks::Escalation::Rejected { by, .. } => {
-            *by <= domain.core.counters.deployment().people.max(domain.core.counters.deployment().tasks)
-        }
-        tasks::Escalation::Waiting { entry, .. } => *entry <= domain.core.counters.deployment().messages,
-        tasks::Escalation::Unheld { .. } | tasks::Escalation::Routing { .. } => true,
-    }
+    domain.core.escalation_supported(task)
 }
 
-/// Pure recipient selection for actual startup/live routing and candidate-roster
-/// preflight; preserves a final-role holder.
+/// The core selects held recipients from its task, party and authority state.
 pub(super) fn recipient(
     domain: &Domain,
     context: &tasks::EscalationContext,
     requester_role: Option<people::Role>,
 ) -> Option<tasks::EscalationHolder> {
-    recipient_after(domain, context, requester_role, None)
+    domain.core.escalation_recipient(&super::core_limits(&domain.limits), context, requester_role)
 }
 
 fn recipient_after(
@@ -95,56 +59,7 @@ fn recipient_after(
     requester_role: Option<people::Role>,
     after: Option<tasks::EscalationHolder>,
 ) -> Option<tasks::EscalationHolder> {
-    match context.escalation {
-        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Role { .. }, .. } => {
-            fallback(domain, context.project)
-        }
-        tasks::Escalation::Unheld { .. }
-        | tasks::Escalation::Routing { .. }
-        | tasks::Escalation::Waiting { .. }
-        | tasks::Escalation::Rejected { .. } => {
-            let needed = authority::needs(&authority::Action::Escalate { release: None })?;
-            let mut above = context.immediate;
-            let mut distance = 1_u32;
-            let mut passed = after.is_none();
-            for _ in 0..domain.limits.tasks.depth.saturating_add(1) {
-                let parent = match above {
-                    tasks::Party::Task(parent) => parent,
-                    tasks::Party::Person(_) | tasks::Party::Deployment { .. } => break,
-                };
-                let Some(holder) = domain.core.tasks.delegation(parent) else {
-                    return fallback(domain, context.project);
-                };
-                if passed
-                    && holder.deciding
-                    && holder.project == context.project
-                    && authority::covers(
-                        &domain.core.authority,
-                        &needed,
-                        &authority::Holder::Task {
-                            project: context.project,
-                            authority: super::authority_value(&holder.authority),
-                            numbers: super::authority_numbers(holder.numbers),
-                            tasks_left: holder.tasks_left,
-                        },
-                        distance,
-                    )
-                {
-                    return Some(tasks::EscalationHolder::Task(parent));
-                }
-                if after == Some(tasks::EscalationHolder::Task(parent)) {
-                    passed = true;
-                }
-                above = holder.requester;
-                distance = distance.checked_add(1)?;
-            }
-            if passed && context.requester != 0 && covers(domain, context, context.requester, requester_role) {
-                Some(tasks::EscalationHolder::Person(context.requester))
-            } else {
-                fallback(domain, context.project)
-            }
-        }
-    }
+    domain.core.escalation_recipient_after(&super::core_limits(&domain.limits), context, requester_role, after)
 }
 
 pub(super) fn needed(domain: &mut Domain, context: Box<tasks::EscalationContext>) {
@@ -518,28 +433,7 @@ fn release_allowed(
     person: u64,
     role: Option<people::Role>,
 ) -> bool {
-    let Some(role) = role else { return false };
-    let pool = tasks::Funder::Pool { project: context.project, person, period: domain.core.settings.period };
-    let numbers = match domain.core.tasks.funding(pool) {
-        Some(record) => record.numbers,
-        None => tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
-    };
-    let mut findings = skein_lib::Queue::with_capacity(
-        authority::max_out(domain.core.authority.limits()).expect("checked authority output"),
-    );
-    authority::check_request(
-        &domain.core.authority,
-        &authority::PersonAsk {
-            project: context.project,
-            role: role_number(role),
-            pool: super::authority_numbers(numbers),
-            tasks_left: domain.limits.tasks.tree_tasks,
-            request: authority::PersonRequest::Accept(authority::Action::Escalate { release: None }),
-        },
-        &mut findings,
-    )
-    .answer
-        == authority::Answer::Allow
+    domain.core.escalation_release_allowed(context, person, role, domain.limits.tasks.tree_tasks)
 }
 
 fn archive(domain: &mut Domain, env: &Env<Limits>, barrier: &mut Decision, waiter: Token, query: Query) {

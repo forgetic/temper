@@ -4,39 +4,13 @@
 
 //! Owner permission checks also admit current policy and pool changes.
 
-use super::{
-    Decision, Domain, Env, Limits, ReplyTo, Token, Work, authority, escalation, people, proposals, save, tasks,
-};
+use super::{Decision, Domain, Env, Limits, ReplyTo, Token, Work, escalation, people, proposals, save, tasks};
 use crate::{Record, Write};
 use alloc::boxed::Box;
 use skein_lib::Queue;
 
 pub(super) fn allowed(domain: &Domain, person: u64, project: u32) -> Result<(), people::Refusal> {
-    if domain.core.people.role(person, project) != Some(people::Role::Owner) {
-        return Err(people::Refusal::Role);
-    }
-    if domain.core.authority.policy(project).is_none() {
-        return Err(people::Refusal::Unknown);
-    }
-    let pool = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
-    let numbers = match domain.core.tasks.funding(pool) {
-        Some(record) => record.numbers,
-        None => tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
-    };
-    let mut findings =
-        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("validated authority bound"));
-    let checked = authority::check_request(
-        &domain.core.authority,
-        &authority::PersonAsk {
-            project,
-            role: escalation::role_number(people::Role::Owner),
-            pool: super::authority_numbers(numbers),
-            tasks_left: domain.limits.tasks.tree_tasks,
-            request: authority::PersonRequest::Policy,
-        },
-        &mut findings,
-    );
-    if checked.answer == authority::Answer::Allow { Ok(()) } else { Err(people::Refusal::Authority) }
+    domain.core.role_allowed(person, project, domain.limits.tasks.tree_tasks)
 }
 
 fn inspected(
@@ -108,32 +82,7 @@ fn preflight(
     contexts: &[tasks::EscalationContext],
     holdings: &[people::Holding],
 ) -> Result<u32, people::Refusal> {
-    let mut changed = 0_u32;
-    for context in contexts {
-        let mut role = None;
-        for holding in holdings {
-            if holding.person == context.requester {
-                role = Some(holding.role);
-            }
-        }
-        let Some(holder) = escalation::recipient(domain, context, role) else {
-            return Err(people::Refusal::Authority);
-        };
-        match context.escalation {
-            tasks::Escalation::Waiting { revision, holder: old, .. } => {
-                if old != holder {
-                    if revision.checked_add(1).is_none() {
-                        return Err(people::Refusal::Limit);
-                    }
-                    changed = changed.checked_add(1).expect("bounded task count");
-                }
-            }
-            tasks::Escalation::Unheld { .. }
-            | tasks::Escalation::Routing { .. }
-            | tasks::Escalation::Rejected { .. } => unreachable!("inspection contains waiting contexts only"),
-        }
-    }
-    Ok(changed)
+    domain.core.roles_preflight(&super::core_limits(&domain.limits), contexts, holdings)
 }
 
 /// Consume one actual people route, preflight bounded Waiting contexts and

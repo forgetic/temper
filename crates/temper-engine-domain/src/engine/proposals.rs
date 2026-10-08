@@ -4,8 +4,7 @@
 //! copied into the task child.
 use super::{
     CallKey, Decision, Dependency, Domain, Env, Family, Limits, PersonProposalRoute, ProposalChoice, ProposedAction,
-    ReplyTo, RoutedCall, Token, Work, authority, authority_numbers, authority_value, current_proof, forge_route,
-    people, tasks,
+    ReplyTo, RoutedCall, Token, Work, authority, authority_value, current_proof, forge_route, people, tasks,
 };
 use crate::{CallAnswer, ProposalDecisionRecord};
 use alloc::boxed::Box;
@@ -192,69 +191,11 @@ fn refused(
 }
 
 fn kind(action: &tasks::ProposalAction) -> (tasks::ProposalKind, authority::ProposalKind) {
-    match action {
-        tasks::ProposalAction::Batch(_) => (tasks::ProposalKind::Batch, authority::ProposalKind::Batch),
-        tasks::ProposalAction::Amend { .. } => (tasks::ProposalKind::Amend, authority::ProposalKind::Amend),
-        tasks::ProposalAction::Widen { .. } => (tasks::ProposalKind::Widen, authority::ProposalKind::Widen),
-        tasks::ProposalAction::Release { .. } => (tasks::ProposalKind::Release, authority::ProposalKind::Escalation),
-    }
+    jig_core::Core::proposal_kind(action)
 }
 
 fn action_for_check(action: &tasks::ProposalAction) -> Option<authority::Action> {
-    match action {
-        tasks::ProposalAction::Batch(batch) => {
-            let mut members = List::with_capacity(u32::try_from(batch.len()).expect("bounded proposed batch"));
-            for member in batch {
-                let executor = match member.executor {
-                    tasks::Executor::Agent { charter } => authority::Executor::Charter(charter),
-                    tasks::Executor::Procedure { code, .. } => authority::Executor::Procedure(code),
-                    tasks::Executor::Person(_) => return None,
-                };
-                members
-                    .push(authority::Delegate {
-                        executor,
-                        authority: authority_value(&member.authority),
-                        symbolic: Box::new([]),
-                    })
-                    .expect("bounded proposed batch");
-            }
-            Some(authority::Action::Batch(members.into_boxed()))
-        }
-        tasks::ProposalAction::Amend { amendment, .. } => Some(authority::Action::Amend(authority_value(
-            amendment.authority.as_ref().expect("proposal amendment widens"),
-        ))),
-        tasks::ProposalAction::Widen { authority, .. } => Some(authority::Action::Widen(authority_value(authority))),
-        tasks::ProposalAction::Release { .. } => Some(authority::Action::Escalate { release: None }),
-    }
-}
-
-fn covers_task(domain: &Domain, needed: &authority::Authority, ancestor: u64, distance: u32, project: u32) -> bool {
-    let Some(holder) = domain.core.tasks.delegation(ancestor) else { return false };
-    holder.project == project
-        && holder.deciding
-        && authority::covers(
-            &domain.core.authority,
-            needed,
-            &authority::Holder::Task {
-                project,
-                authority: authority_value(&holder.authority),
-                numbers: authority_numbers(holder.numbers),
-                tasks_left: holder.tasks_left,
-            },
-            distance,
-        )
-}
-
-fn distance(domain: &Domain, proposer: u64, holder: u64) -> Option<u32> {
-    let mut next = domain.core.tasks.delegation(proposer)?.requester;
-    for depth in 1..=domain.limits.tasks.depth.saturating_add(1) {
-        match next {
-            tasks::Party::Task(task) if task == holder => return Some(depth),
-            tasks::Party::Task(task) => next = domain.core.tasks.delegation(task)?.requester,
-            tasks::Party::Person(_) | tasks::Party::Deployment { .. } => return None,
-        }
-    }
-    None
+    jig_core::Core::proposal_action_for_check(action)
 }
 
 fn covers_person(
@@ -264,101 +205,26 @@ fn covers_person(
     project: u32,
     kind: authority::ProposalKind,
 ) -> bool {
-    let Some(role) = domain.core.people.role(person, project) else { return false };
-    let funder = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
-    let numbers = match domain.core.tasks.funding(funder) {
-        Some(pool) => pool.numbers,
-        None => tasks::Numbers { budget: domain.core.settings.person_budget, spent: 0, spent_below: 0, reserved: 0 },
-    };
-    authority::covers(
-        &domain.core.authority,
-        needed,
-        &authority::Holder::Person {
-            project,
-            role: super::escalation::role_number(role),
-            proposal: kind,
-            pool: authority_numbers(numbers),
-            tasks_left: domain.limits.tasks.tree_tasks,
-        },
-        0,
-    )
+    domain.core.proposal_covers_person(&super::core_limits(&domain.limits), needed, person, project, kind)
 }
 
-/// Select the nearest live covering ancestor, then the root requester, then
-/// the policy's eligible people. `after` skips holders through one pass/stall.
+/// Select the nearest holder from the core's current state.
 pub(super) fn holder(
     domain: &Domain,
     proposer: u64,
     action: &tasks::ProposalAction,
     after: Option<tasks::ProposalHolder>,
 ) -> Option<tasks::ProposalHolder> {
-    let context = domain.core.tasks.delegation(proposer)?;
-    let checked = action_for_check(action)?;
-    let needed = authority::needs(&checked)?;
-    let (kind, policy_kind) = kind(action);
-    let mut next = context.requester;
-    let mut distance = 1_u32;
-    let mut passed = after.is_none();
-    for _ in 0..domain.limits.tasks.depth.saturating_add(1) {
-        match next {
-            tasks::Party::Task(task) => {
-                let holder = tasks::ProposalHolder::Task(task);
-                if passed && covers_task(domain, &needed, task, distance, context.project) {
-                    return Some(holder);
-                }
-                if after == Some(holder) {
-                    passed = true;
-                }
-                next = match domain.core.tasks.delegation(task) {
-                    Some(context) => context.requester,
-                    None => return Some(tasks::ProposalHolder::Policy { project: context.project, kind }),
-                };
-                distance = distance.checked_add(1)?;
-            }
-            tasks::Party::Person(person) => {
-                let holder = tasks::ProposalHolder::Person(person);
-                if passed && covers_person(domain, &needed, person, context.project, policy_kind) {
-                    return Some(holder);
-                }
-                if after == Some(holder) {
-                    // The next recipient is the final policy group.
-                }
-                return Some(tasks::ProposalHolder::Policy { project: context.project, kind });
-            }
-            tasks::Party::Deployment { .. } => {
-                return Some(tasks::ProposalHolder::Policy { project: context.project, kind });
-            }
-        }
-    }
-    None
+    domain.core.proposal_holder(&super::core_limits(&domain.limits), proposer, action, after)
 }
 
 /// Revisit pending recipients after project policy or role membership changes.
 /// A queued reroute carries the exact holder and task revision it inspected, so
 /// another decision made before it drains cannot redirect a newer proposal.
 pub(super) fn recheck_project(domain: &mut Domain, project: u32) {
-    for view in domain.core.tasks.view_tasks() {
-        if view.project != project {
-            continue;
-        }
-        let Some(record) = domain.core.tasks.task(view.number) else { continue };
-        let Some(proposal) = &record.proposal else { continue };
-        let current = match proposal.state {
-            tasks::ProposalState::Pending { holder, .. } => holder,
-            tasks::ProposalState::Accepted { .. }
-            | tasks::ProposalState::Rejected { .. }
-            | tasks::ProposalState::Withdrawn => continue,
-        };
-        let Some(next) = holder(domain, view.number, &proposal.action, None) else { continue };
-        if current != next {
-            domain.work.push(Work::Tasks(tasks::Event::StalledProposal {
-                proposer: view.number,
-                proposal: proposal.number,
-                from: current,
-                revision: record.revision,
-                holder: next,
-            }));
-        }
+    let mut events = domain.core.proposal_recheck_project(&super::core_limits(&domain.limits), project);
+    for _ in 0..events.len() {
+        domain.work.push(Work::Tasks(events.pop().expect("bounded holder recheck")));
     }
 }
 
@@ -464,20 +330,8 @@ pub(super) fn propose_call(
         ProposedAction::Widen { task, authority } => tasks::ProposalAction::Widen { task, authority },
         ProposedAction::Release { task } => tasks::ProposalAction::Release { task },
     };
-    let Some(checked) = action_for_check(&action) else {
-        return refused(domain, env, decision, to, key, tasks::Refusal::Executor);
-    };
-    let Some(needed) = authority::needs(&checked) else {
-        return refused(domain, env, decision, to, key, tasks::Refusal::AuthorityShape);
-    };
-    let Some(policy) = domain.core.authority.policy(context.project) else {
-        return refused(domain, env, decision, to, key, tasks::Refusal::Project);
-    };
-    let implies = &domain.core.authority.rules().implies;
-    if !authority::at_most(&needed, &policy.ceiling, implies)
-        || !authority::at_most(&needed, &domain.core.authority.rules().ceiling, implies)
-    {
-        return refused(domain, env, decision, to, key, tasks::Refusal::AuthorityShape);
+    if let Err(why) = domain.core.proposal_admit_action(context.project, &action) {
+        return refused(domain, env, decision, to, key, why);
     }
     let Some(holder) = holder(domain, key.task, &action, None) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::Reference);
@@ -593,17 +447,14 @@ fn accept(
     proposal: tasks::Proposal,
 ) {
     let result_followups = domain.core.tasks.result_proposal(proposal.proposer, proposal.number);
-    let Some(action) = action_for_check(&proposal.action) else {
-        return refused(domain, env, decision, to, key, tasks::Refusal::Executor);
-    };
-    let Some(needed) = authority::needs(&action) else {
-        return refused(domain, env, decision, to, key, tasks::Refusal::AuthorityShape);
-    };
-    let Some(depth) = distance(domain, proposal.proposer, key.task) else {
-        return refused(domain, env, decision, to, key, tasks::Refusal::Reference);
-    };
-    if !covers_task(domain, &needed, key.task, depth, proposal.project) {
-        return refused(domain, env, decision, to, key, tasks::Refusal::Funding);
+    if let Err(why) = domain.core.proposal_accept_allowed(
+        &super::core_limits(&env.limits),
+        proposal.proposer,
+        key.task,
+        proposal.project,
+        &proposal.action,
+    ) {
+        return refused(domain, env, decision, to, key, why);
     }
     let Some(message) = crate::fresh(&mut domain.core.counters, Family::Message) else {
         return refused(domain, env, decision, to, key, tasks::Refusal::Busy);
@@ -688,11 +539,7 @@ fn person_refused(domain: &mut Domain, request: Token, why: people::Refusal) {
 }
 
 fn policy_standing(domain: &Domain, person: u64, project: u32, kind: authority::ProposalKind) -> bool {
-    let Some(role) = domain.core.people.role(person, project) else { return false };
-    let Some(policy) = domain.core.authority.role(project, super::escalation::role_number(role)) else {
-        return false;
-    };
-    policy.decides.allows(kind)
+    domain.core.proposal_policy_standing(person, project, kind)
 }
 
 #[expect(clippy::too_many_arguments, reason = "one keyed person route carries its authenticated holder and proposal")]

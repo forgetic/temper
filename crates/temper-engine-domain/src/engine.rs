@@ -1223,30 +1223,11 @@ fn watch_views(subject: people::WatchSubject, project: u32) -> views::Subject {
 }
 
 fn watch_authorized(domain: &Domain, project: u32, role: Option<people::Role>) -> bool {
-    let Some(role) = role else { return false };
-    match domain.core.authority.role(project, role.number()) {
-        Some(policy) => policy.requests.allows(authority::RequestKind::Watch),
-        None => false,
-    }
+    domain.core.watch_authorized(project, role)
 }
 
 fn note_authorized(domain: &Domain, project: u32, role: Option<people::Role>, scope: &people::NoteScope) -> bool {
-    let Some(role) = role else { return false };
-    let Some(policy) = domain.core.authority.role(project, role.number()) else { return false };
-    match scope {
-        people::NoteScope::Deployment => policy.authority.notes.0 & 4 != 0,
-        people::NoteScope::Project => policy.authority.notes.0 & 2 != 0,
-        people::NoteScope::Goal { .. } => policy.authority.notes.0 & 1 != 0,
-        people::NoteScope::Resources { connector, pattern } => {
-            let needed = policy_translate::pattern_to_authority(pattern.clone());
-            for offered in &policy.authority.note_resources {
-                if offered.connector == *connector && authority::pattern_at_most(&needed, &offered.pattern) {
-                    return true;
-                }
-            }
-            false
-        }
-    }
+    domain.core.note_authorized(project, role, scope)
 }
 
 /// A watch uses people's keyed admission, then opens a volatile view after the last commit is
@@ -2463,32 +2444,20 @@ fn route_person_message(
     question: Option<u64>,
     words: Box<[u8]>,
 ) {
-    let Some(message) = crate::fresh(&mut domain.core.counters, Family::Message) else {
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Limit),
-        }));
-        return;
-    };
-    let kind = match question {
-        Some(number) => tasks::MessageKind::Answer { question: number },
-        None => tasks::MessageKind::Words,
-    };
-    assert!(domain.core.saying.insert(request, (task, question)) == Ok(None), "one person message flight");
-    domain.work.push(Work::Tasks(tasks::Event::Message {
-        reply_to: ReplyTo::new(request),
+    match domain.core.person_message(jig_core::PersonMessage {
+        request,
+        person,
         project,
         task,
-        word: tasks::Word {
-            number: message,
-            from: tasks::Party::Person(person),
-            kind,
-            words,
-            at: env.wall,
-            hits: 1,
-            eligible: false,
-        },
-    }));
+        question,
+        words,
+        at: env.wall,
+    }) {
+        Ok(event) => domain.work.push(Work::Tasks(event)),
+        Err(why) => {
+            domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Refused(why) }));
+        }
+    }
 }
 
 fn route_person_priorities(
@@ -2499,31 +2468,11 @@ fn route_person_priorities(
     role: Option<people::Role>,
     goals: Box<[(u64, u32)]>,
 ) {
-    let allowed = match role {
-        Some(people::Role::Owner | people::Role::Maintainer | people::Role::Policy { .. }) => {
-            match domain.core.authority.role(project, escalation::role_number(role.expect("checked role"))) {
-                Some(policy) => policy.requests.allows(authority::RequestKind::Amend),
-                None => false,
-            }
-        }
-        Some(people::Role::Member | people::Role::Observer) | None => false,
+    let event = match domain.core.prioritise(request, person, project, role, goals, domain.limits.tasks.tasks) {
+        Ok(event) => event,
+        Err(why) => return person_control_refused(domain, request, why),
     };
-    if !allowed {
-        return person_control_refused(domain, request, people::Refusal::Authority);
-    }
-    if goals.len() > usize::try_from(domain.limits.tasks.tasks).expect("u32 fits usize") {
-        return person_control_refused(domain, request, people::Refusal::Limit);
-    }
-    assert!(
-        domain.core.person_tasks.insert(request, PersonTaskRoute::Prioritised(project)) == Ok(None),
-        "one priority route"
-    );
-    domain.work.push(Work::Tasks(tasks::Event::Prioritise {
-        reply_to: ReplyTo::new(request),
-        project,
-        by: tasks::Party::Person(person),
-        goals,
-    }));
+    domain.work.push(Work::Tasks(event));
 }
 
 #[expect(clippy::too_many_lines, reason = "the keyed people routes each retain an exhaustive typed branch")]
@@ -2676,15 +2625,6 @@ fn people_outputs(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decisio
     }
 }
 
-fn person_result(result: people::PersonResult) -> tasks::TaskResult {
-    match result {
-        people::PersonResult::Report { words } => tasks::TaskResult::Report { words },
-        people::PersonResult::Verdict { code, words } => tasks::TaskResult::Verdict { code, words },
-        people::PersonResult::Failure { reason } => tasks::TaskResult::Failure { reason },
-    }
-}
-
-#[expect(clippy::too_many_lines, reason = "one exhaustive route handles all person task requests")]
 fn route_person_task(
     domain: &mut Domain,
     request: Token,
@@ -2693,164 +2633,11 @@ fn route_person_task(
     role: Option<people::Role>,
     ask: people::Ask,
 ) {
-    let task = match &ask {
-        people::Ask::TakePerson { task, .. }
-        | people::Ask::HandBackPerson { task, .. }
-        | people::Ask::AnswerPerson { task, .. } => *task,
-        people::Ask::Move { .. }
-        | people::Ask::DecideProposal { .. }
-        | people::Ask::Say { .. }
-        | people::Ask::AnswerQuestion { .. }
-        | people::Ask::Prioritise { .. }
-        | people::Ask::Amend { .. }
-        | people::Ask::Watch { .. }
-        | people::Ask::EditNote { .. }
-        | people::Ask::MakeService { .. }
-        | people::Ask::SetRoles { .. }
-        | people::Ask::Adopt { .. }
-        | people::Ask::ChangePolicy { .. }
-        | people::Ask::SetPool { .. }
-        | people::Ask::DecideEscalation { .. }
-        | people::Ask::StartChat { .. }
-        | people::Ask::Stop { .. }
-        | people::Ask::Cancel { .. }
-        | people::Ask::Release { .. }
-        | people::Ask::SetGoal { .. } => unreachable!("person-task route owns its ask"),
-    };
-    let Some(context) = domain.core.tasks.delegation(task) else {
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Ended),
-        }));
-        return;
-    };
-    let allowed = context.project == project
-        && match domain.core.tasks.executor(task).expect("live task has executor") {
-            tasks::Executor::Person(tasks::PersonAddress::Person(address)) => {
-                address == person
-                    && match &ask {
-                        people::Ask::AnswerPerson { .. } => true,
-                        people::Ask::TakePerson { .. } | people::Ask::HandBackPerson { .. } => false,
-                        people::Ask::Move { .. }
-                        | people::Ask::DecideProposal { .. }
-                        | people::Ask::Say { .. }
-                        | people::Ask::AnswerQuestion { .. }
-                        | people::Ask::Prioritise { .. }
-                        | people::Ask::Amend { .. }
-                        | people::Ask::Watch { .. }
-                        | people::Ask::EditNote { .. }
-                        | people::Ask::MakeService { .. }
-                        | people::Ask::SetRoles { .. }
-                        | people::Ask::Adopt { .. }
-                        | people::Ask::ChangePolicy { .. }
-                        | people::Ask::SetPool { .. }
-                        | people::Ask::DecideEscalation { .. }
-                        | people::Ask::StartChat { .. }
-                        | people::Ask::Stop { .. }
-                        | people::Ask::Cancel { .. }
-                        | people::Ask::Release { .. }
-                        | people::Ask::SetGoal { .. } => unreachable!("person-task route owns its ask"),
-                    }
-            }
-            tasks::Executor::Person(tasks::PersonAddress::Role(address)) => {
-                let handing_back = match &ask {
-                    people::Ask::HandBackPerson { .. } => true,
-                    people::Ask::TakePerson { .. } | people::Ask::AnswerPerson { .. } => false,
-                    people::Ask::Move { .. }
-                    | people::Ask::DecideProposal { .. }
-                    | people::Ask::Say { .. }
-                    | people::Ask::AnswerQuestion { .. }
-                    | people::Ask::Prioritise { .. }
-                    | people::Ask::Amend { .. }
-                    | people::Ask::Watch { .. }
-                    | people::Ask::EditNote { .. }
-                    | people::Ask::MakeService { .. }
-                    | people::Ask::SetRoles { .. }
-                    | people::Ask::Adopt { .. }
-                    | people::Ask::ChangePolicy { .. }
-                    | people::Ask::SetPool { .. }
-                    | people::Ask::DecideEscalation { .. }
-                    | people::Ask::StartChat { .. }
-                    | people::Ask::Stop { .. }
-                    | people::Ask::Cancel { .. }
-                    | people::Ask::Release { .. }
-                    | people::Ask::SetGoal { .. } => unreachable!("person-task route owns its ask"),
-                };
-                handing_back
-                    || match role {
-                        Some(holding) => escalation::role_number(holding) == address,
-                        None => false,
-                    }
-            }
-            tasks::Executor::Agent { .. } | tasks::Executor::Procedure { .. } => false,
-        };
-    if !allowed {
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Standing),
-        }));
-        return;
-    }
-    let (route, event) = match ask {
-        people::Ask::TakePerson { .. } => {
-            (PersonTaskRoute::Take(task), tasks::Event::TakePerson { reply_to: ReplyTo::new(request), task, person })
+    match domain.core.person_task(request, person, project, role, ask) {
+        Ok(event) => domain.work.push(Work::Tasks(event)),
+        Err(why) => {
+            domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Refused(why) }));
         }
-        people::Ask::HandBackPerson { .. } => (
-            PersonTaskRoute::HandBack(task),
-            tasks::Event::HandBackPerson { reply_to: ReplyTo::new(request), task, person },
-        ),
-        people::Ask::AnswerPerson { result, .. } => (
-            PersonTaskRoute::Answer(task),
-            tasks::Event::AnswerPerson { reply_to: ReplyTo::new(request), task, person, result: person_result(result) },
-        ),
-        people::Ask::Move { .. }
-        | people::Ask::DecideProposal { .. }
-        | people::Ask::Say { .. }
-        | people::Ask::AnswerQuestion { .. }
-        | people::Ask::Prioritise { .. }
-        | people::Ask::Amend { .. }
-        | people::Ask::Watch { .. }
-        | people::Ask::EditNote { .. }
-        | people::Ask::MakeService { .. }
-        | people::Ask::SetRoles { .. }
-        | people::Ask::Adopt { .. }
-        | people::Ask::ChangePolicy { .. }
-        | people::Ask::SetPool { .. }
-        | people::Ask::DecideEscalation { .. }
-        | people::Ask::StartChat { .. }
-        | people::Ask::Stop { .. }
-        | people::Ask::Cancel { .. }
-        | people::Ask::Release { .. }
-        | people::Ask::SetGoal { .. } => unreachable!("person-task route owns its ask"),
-    };
-    assert!(domain.core.person_tasks.insert(request, route) == Ok(None), "one routed person task per keyed flight");
-    domain.work.push(Work::Tasks(event));
-}
-
-fn person_tree(domain: &Domain, person: u64, task: u64) -> bool {
-    let mut next = task;
-    for _ in 0..=domain.limits.tasks.depth {
-        let Some(context) = domain.core.tasks.delegation(next) else { return false };
-        match context.requester {
-            tasks::Party::Person(requester) => return requester == person,
-            tasks::Party::Task(parent) => next = parent,
-            tasks::Party::Deployment { .. } => return false,
-        }
-    }
-    false
-}
-
-fn person_escalation_recipient(domain: &Domain, person: u64, role: people::Role, task: u64) -> bool {
-    let Some(context) = domain.core.tasks.escalation(task) else { return false };
-    match context.escalation {
-        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Person(holder), .. } => holder == person,
-        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Role { project, role: holder }, .. } => {
-            project == context.project && holder == escalation::role_number(role)
-        }
-        tasks::Escalation::Waiting { holder: tasks::EscalationHolder::Task(_), .. }
-        | tasks::Escalation::Unheld { .. }
-        | tasks::Escalation::Routing { .. }
-        | tasks::Escalation::Rejected { .. } => false,
     }
 }
 
@@ -2858,10 +2645,6 @@ fn person_control_refused(domain: &mut Domain, request: Token, why: people::Refu
     domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Refused(why) }));
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "one authenticated control route checks standing and authority before task mutation"
-)]
 fn route_person_control(
     domain: &mut Domain,
     request: Token,
@@ -2870,96 +2653,17 @@ fn route_person_control(
     role: Option<people::Role>,
     ask: people::Ask,
 ) {
-    let (task, control_kind) = match &ask {
-        people::Ask::Stop { task, .. } | people::Ask::Cancel { task, .. } => (*task, authority::RequestKind::Cancel),
-        people::Ask::Release { task, .. } => (*task, authority::RequestKind::Release),
-        people::Ask::TakePerson { .. }
-        | people::Ask::HandBackPerson { .. }
-        | people::Ask::AnswerPerson { .. }
-        | people::Ask::Move { .. }
-        | people::Ask::DecideProposal { .. }
-        | people::Ask::Say { .. }
-        | people::Ask::AnswerQuestion { .. }
-        | people::Ask::Prioritise { .. }
-        | people::Ask::Amend { .. }
-        | people::Ask::Watch { .. }
-        | people::Ask::EditNote { .. }
-        | people::Ask::MakeService { .. }
-        | people::Ask::SetRoles { .. }
-        | people::Ask::Adopt { .. }
-        | people::Ask::ChangePolicy { .. }
-        | people::Ask::SetPool { .. }
-        | people::Ask::DecideEscalation { .. }
-        | people::Ask::StartChat { .. }
-        | people::Ask::SetGoal { .. } => {
-            unreachable!("control route owns its ask")
-        }
+    let task = match domain.core.control_admit(
+        &ask,
+        person,
+        project,
+        role,
+        domain.limits.tasks.depth,
+        domain.limits.tasks.result_bytes,
+    ) {
+        Ok(task) => task,
+        Err(why) => return person_control_refused(domain, request, why),
     };
-    let Some(context) = domain.core.tasks.delegation(task) else {
-        return person_control_refused(domain, request, people::Refusal::Ended);
-    };
-    let Some(holding) = role else {
-        return person_control_refused(domain, request, people::Refusal::Role);
-    };
-    let any_task = match holding {
-        people::Role::Owner | people::Role::Maintainer => true,
-        people::Role::Member | people::Role::Observer => false,
-        people::Role::Policy { .. } => match domain.core.authority.role(project, holding.number()) {
-            Some(policy) => policy.requests.allows(control_kind),
-            None => false,
-        },
-    };
-    let standing = person_tree(domain, person, task) || person_escalation_recipient(domain, person, holding, task);
-    if context.project != project || !any_task && !standing {
-        return person_control_refused(domain, request, people::Refusal::Standing);
-    }
-    let pool = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
-    let numbers = match domain.core.tasks.funding(pool) {
-        Some(record) => record.numbers,
-        None => tasks::Numbers { budget: 0, spent: 0, spent_below: 0, reserved: 0 },
-    };
-    let action = match &ask {
-        people::Ask::Stop { .. } | people::Ask::Cancel { .. } => authority::PersonRequest::Cancel,
-        people::Ask::Release { .. } => authority::PersonRequest::Release,
-        people::Ask::TakePerson { .. }
-        | people::Ask::HandBackPerson { .. }
-        | people::Ask::AnswerPerson { .. }
-        | people::Ask::Move { .. }
-        | people::Ask::DecideProposal { .. }
-        | people::Ask::Say { .. }
-        | people::Ask::AnswerQuestion { .. }
-        | people::Ask::Prioritise { .. }
-        | people::Ask::Amend { .. }
-        | people::Ask::Watch { .. }
-        | people::Ask::EditNote { .. }
-        | people::Ask::MakeService { .. }
-        | people::Ask::SetRoles { .. }
-        | people::Ask::Adopt { .. }
-        | people::Ask::ChangePolicy { .. }
-        | people::Ask::SetPool { .. }
-        | people::Ask::DecideEscalation { .. }
-        | people::Ask::StartChat { .. }
-        | people::Ask::SetGoal { .. } => {
-            unreachable!("control route owns its ask")
-        }
-    };
-    let mut findings =
-        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("bounded findings"));
-    let checked = authority::check_request_with_standing(
-        &domain.core.authority,
-        &authority::PersonAsk {
-            project,
-            role: escalation::role_number(holding),
-            pool: authority_numbers(numbers),
-            tasks_left: context.tasks_left,
-            request: action,
-        },
-        standing,
-        &mut findings,
-    );
-    if checked.answer != authority::Answer::Allow {
-        return person_control_refused(domain, request, people::Refusal::Authority);
-    }
     match ask {
         people::Ask::Stop { .. } => {
             domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::StoppedBy { party: person } }));
@@ -2968,9 +2672,6 @@ fn route_person_control(
                 .push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Stopped { task } }));
         }
         people::Ask::Cancel { reason, .. } => {
-            if reason.len() > usize::try_from(domain.limits.tasks.result_bytes).expect("u32 fits usize") {
-                return person_control_refused(domain, request, people::Refusal::Limit);
-            }
             assert!(
                 domain.core.person_tasks.insert(request, PersonTaskRoute::Cancel(task)) == Ok(None),
                 "one cancel route"
@@ -3029,83 +2730,10 @@ fn move_for_person(
     task: u64,
     reason: Box<[u8]>,
 ) {
-    let Some(context) = domain.core.tasks.delegation(task) else {
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Ended),
-        }));
-        return;
-    };
-    if context.project != project || role.is_none() {
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Standing),
-        }));
-        return;
-    }
-    let role = role.expect("checked member");
-    let role_number = escalation::role_number(role);
-    let Some(role_policy) = domain.core.authority.role(project, role_number) else {
-        unreachable!("member belongs to configured policy")
-    };
-    let standing = person_tree(domain, person, task) || person_escalation_recipient(domain, person, role, task);
-    if !role_policy.requests.allows(authority::RequestKind::Amend) && !standing {
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Authority),
-        }));
-        return;
-    }
-    let Some(policy) = domain.core.authority.policy(project) else { unreachable!("configured policy") };
-    if domain.core.settings.period_budget > policy.period_spend
-        || domain.core.settings.person_budget > role_policy.period_spend
+    if let Err(why) =
+        domain.core.move_admit(person, role, project, task, env.limits.tasks.tree_tasks, env.limits.tasks.depth)
     {
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Authority),
-        }));
-        return;
-    }
-    let Some(spent) = context.numbers.spent.checked_add(context.numbers.spent_below) else {
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Limit),
-        }));
-        return;
-    };
-    let Some(left) = context.numbers.budget.checked_sub(spent) else {
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Limit),
-        }));
-        return;
-    };
-    let pool = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
-    let pool_numbers = match domain.core.tasks.funding(pool) {
-        Some(record) => record.numbers,
-        None => tasks::Numbers { budget: domain.core.settings.person_budget, spent: 0, spent_below: 0, reserved: 0 },
-    };
-    let mut giving = authority_value(&context.authority);
-    giving.budget.spend = left;
-    let mut findings =
-        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority output"));
-    let checked = authority::check_request_with_standing(
-        &domain.core.authority,
-        &authority::PersonAsk {
-            project,
-            role: role_number,
-            pool: authority_numbers(pool_numbers),
-            tasks_left: env.limits.tasks.tree_tasks,
-            request: authority::PersonRequest::Move(giving),
-        },
-        true,
-        &mut findings,
-    );
-    if checked.answer != authority::Answer::Allow {
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Authority),
-        }));
+        domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Refused(why) }));
         return;
     }
     assert!(domain.core.moving.insert(request, task) == Ok(None), "one move flight per keyed request");
@@ -3120,7 +2748,6 @@ fn move_for_person(
     }));
 }
 
-#[expect(clippy::too_many_lines, reason = "chat admission keeps the keyed person request and task creation together")]
 fn make_chat(
     domain: &mut Domain,
     env: &Env<Limits>,
@@ -3130,52 +2757,11 @@ fn make_chat(
     role: people::Role,
     ask: people::Ask,
 ) {
-    let role_number = escalation::role_number(role);
+    if let Err(why) = domain.core.chat_admit(project, person, role, env.limits.tasks.tree_tasks) {
+        domain.work.push(Work::People(people::Event::Decided { request, outcome: people::Outcome::Refused(why) }));
+        return;
+    }
     let pool = tasks::Funder::Pool { project, person, period: domain.core.settings.period };
-    let pool_numbers = match domain.core.tasks.funding(pool) {
-        Some(record) => record.numbers,
-        None => tasks::Numbers { budget: domain.core.settings.person_budget, spent: 0, spent_below: 0, reserved: 0 },
-    };
-    let mut findings =
-        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority check bound"));
-    let checked = authority::check_request(
-        &domain.core.authority,
-        &authority::PersonAsk {
-            project,
-            role: role_number,
-            pool: authority_numbers(pool_numbers),
-            tasks_left: env.limits.tasks.tree_tasks,
-            request: authority::PersonRequest::Create(Box::new([authority::Delegate {
-                executor: authority::Executor::Charter(domain.core.settings.charter),
-                authority: domain.core.settings.chat_authority.clone(),
-                symbolic: Box::new([]),
-            }])),
-        },
-        &mut findings,
-    );
-    if checked.answer != authority::Answer::Allow {
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Authority),
-        }));
-        return;
-    }
-    let Some(policy) = domain.core.authority.policy(project) else { unreachable!("checked project policy") };
-    let Some(role_policy) = domain.core.authority.role(project, role_number) else {
-        unreachable!("checked role policy")
-    };
-    if match policy.escalation_role {
-        Some(role) => role > 3,
-        None => true,
-    } || domain.core.settings.period_budget > policy.period_spend
-        || domain.core.settings.person_budget > role_policy.period_spend
-    {
-        domain.work.push(Work::People(people::Event::Decided {
-            request,
-            outcome: people::Outcome::Refused(people::Refusal::Authority),
-        }));
-        return;
-    }
     let period = tasks::Funder::Period { project, period: domain.core.settings.period };
     if domain.core.tasks.funding(period).is_none() {
         domain.work.push(Work::Tasks(tasks::Event::OpenPeriod {
@@ -3274,7 +2860,6 @@ fn make_chat(
 
 /// Consume the actual child activation context for authority/account readiness and the person-chat
 /// brief; retain only credential waits and drop the context on claim/failure.
-#[expect(clippy::too_many_lines, reason = "authority check and transcript preparation are one activation route")]
 fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, task: Box<tasks::RunContext>) {
     let number = task.task;
     if !domain.ready() {
@@ -3302,71 +2887,14 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
         }
         tasks::Executor::Agent { .. } => {}
     }
-    let mut findings =
-        Queue::with_capacity(authority::max_out(domain.core.authority.limits()).expect("authority check bound"));
-    let checked = authority::check_run(
-        &domain.core.authority,
-        &authority::RunAsk {
-            project: task.project,
-            authority: authority_value(&task.authority),
-            numbers: authority_numbers(task.numbers),
-            budget: authority::left(authority_numbers(task.numbers))
-                .min(domain.core.authority.rules().maximum_run_spend),
-            wall: env.wall,
-            accounts: Box::new([domain.core.accounts.usable(domain.core.settings.account)]),
-            writes: Box::new([]),
-        },
-        &mut findings,
-    );
-    match checked {
-        authority::Answer::Allow => {}
-        authority::Answer::Wait | authority::Answer::Propose | authority::Answer::Refuse => {
-            let mut account = false;
-            let mut hold = None;
-            for _ in 0..findings.len() {
-                match findings.pop().expect("authority finding count") {
-                    authority::Finding::Account => account = true,
-                    authority::Finding::Deadline => hold = Some(tasks::Hold::Deadline),
-                    authority::Finding::RunBudget
-                    | authority::Finding::RunCap
-                    | authority::Finding::Arithmetic
-                    | authority::Finding::Spend { .. }
-                    | authority::Finding::Price { .. } => {
-                        if hold != Some(tasks::Hold::Deadline) {
-                            hold = Some(tasks::Hold::Budget);
-                        }
-                    }
-                    authority::Finding::Oversized
-                    | authority::Finding::UnknownProject
-                    | authority::Finding::UnknownRole
-                    | authority::Finding::Authority { .. }
-                    | authority::Finding::Executor { .. }
-                    | authority::Finding::Tasks { .. }
-                    | authority::Finding::Writer
-                    | authority::Finding::Tool
-                    | authority::Finding::Grant { .. }
-                    | authority::Finding::ResourceAccess
-                    | authority::Finding::Reference
-                    | authority::Finding::Scope { .. }
-                    | authority::Finding::Required { .. }
-                    | authority::Finding::Failed { .. }
-                    | authority::Finding::Unguarded { .. }
-                    | authority::Finding::Unpermitted
-                    | authority::Finding::Undecidable
-                    | authority::Finding::PeriodSpend => {
-                        if hold.is_none() {
-                            hold = Some(tasks::Hold::Effects);
-                        }
-                    }
-                }
-            }
-            if let Some(why) = hold {
-                domain.work.push(Work::Tasks(tasks::Event::Hold { task: number, why }));
-            } else if account {
-                remember_due(domain, task);
-            } else {
-                domain.work.push(Work::Tasks(tasks::Event::Hold { task: number, why: tasks::Hold::Effects }));
-            }
+    match domain.core.run_admission(&task, env.wall, Box::new([])) {
+        jig_core::RunAdmission::Allow => {}
+        jig_core::RunAdmission::Account => {
+            remember_due(domain, task);
+            return;
+        }
+        jig_core::RunAdmission::Hold(why) => {
+            domain.work.push(Work::Tasks(tasks::Event::Hold { task: number, why }));
             return;
         }
     }
@@ -3384,22 +2912,7 @@ fn activate(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, tas
         None
     };
     assert!(domain.core.contexts.insert(number, task).is_ok(), "bounded activation context");
-    assert!(
-        domain
-            .core
-            .transcripts
-            .insert(
-                number,
-                Transcript {
-                    previous_attempt,
-                    bytes: 0,
-                    kept: 0,
-                    turns: Queue::with_capacity(domain.core.settings.resume_bytes),
-                }
-            )
-            .is_ok(),
-        "one transcript preparation per live task"
-    );
+    domain.core.begin_transcript(number, previous_attempt);
     domain.work.push(Work::Tasks(tasks::Event::Prepare { reply_to: internal(number), task: number }));
     match waiter {
         Some(waiter) => emit(
@@ -3427,11 +2940,9 @@ fn retire_calls(domain: &mut Domain, limits: &Limits, decision: &mut Decision, t
 }
 
 fn call_answer(domain: &Domain, key: CallKey) -> Option<CallAnswer> {
-    match domain.core.call_parts.get(&key) {
-        Some(part) => match CallAnswer::from_core(part) {
-            Some(answer) => Some(answer),
-            None => domain.connector_calls.get(&key).cloned(),
-        },
+    match domain.core.replay_call(key) {
+        Some(jig_core::CallReplay::Core(part)) => CallAnswer::from_core(&part),
+        Some(jig_core::CallReplay::Connector { .. }) => domain.connector_calls.get(&key).cloned(),
         None => None,
     }
 }
@@ -3618,17 +3129,36 @@ fn decide_call(
     key: CallKey,
     answer: CallAnswer,
 ) {
-    let _pending = domain.core.pending_calls.remove(&key);
-    if !current_proof(domain, key.task, key.attempt) {
+    let part = answer.core_part(domain.config.forge_connector);
+    let connector_owned = match &part {
+        jig_core::CallPart::Connector { .. } => true,
+        jig_core::CallPart::EffectDenied { .. }
+        | jig_core::CallPart::EscalationDecided { .. }
+        | jig_core::CallPart::EscalationRefused(_)
+        | jig_core::CallPart::Proposed { .. }
+        | jig_core::CallPart::ProposalDecided { .. }
+        | jig_core::CallPart::ProposalRefused(_)
+        | jig_core::CallPart::Controlled
+        | jig_core::CallPart::ControlRefused(_)
+        | jig_core::CallPart::ControlDenied { .. }
+        | jig_core::CallPart::Sent { .. }
+        | jig_core::CallPart::Introduced
+        | jig_core::CallPart::MessageRefused(_)
+        | jig_core::CallPart::Subscribed { .. }
+        | jig_core::CallPart::Unsubscribed
+        | jig_core::CallPart::SubscriptionRefused(_)
+        | jig_core::CallPart::Delegated(_)
+        | jig_core::CallPart::DelegationDenied { .. }
+        | jig_core::CallPart::DelegationRefused(_)
+        | jig_core::CallPart::Unavailable => false,
+    };
+    if !domain.core.decide_named_call(key, part) {
         relay_call(domain, limits, decision, to, answer);
         return;
     }
-    let _number = crate::fresh(&mut domain.core.counters, Family::Call).expect("admitted call counter");
-    let part = answer.core_part(domain.config.forge_connector);
-    if let jig_core::CallPart::Connector { .. } = part {
+    if connector_owned {
         assert!(domain.connector_calls.insert(key, answer.clone()) == Ok(None), "connector answer room reserved");
     }
-    domain.core.record_call(key, part);
     save(decision, limits, Write::Save(Record::Call(crate::CallRecord { key, answer: answer.clone() })));
     relay_call(domain, limits, decision, to, answer);
 }
@@ -3775,80 +3305,22 @@ fn amend_call(
     target: u64,
     amendment: tasks::Amendment,
 ) {
-    let Some(holder) = domain.core.tasks.delegation(key.task) else {
-        return decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::ControlRefused(tasks::Problem {
-                task: Some(key.task),
-                why: tasks::Refusal::Unknown,
-                blocked_by: None,
-            }),
-        );
-    };
-    let Some(current) = domain.core.tasks.delegation(target) else {
-        return decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::ControlRefused(tasks::Problem {
-                task: Some(target),
-                why: tasks::Refusal::Unknown,
-                blocked_by: None,
-            }),
-        );
-    };
-    if target == key.task
-        || current.project != holder.project
-        || !in_tree(&domain.core.tasks.view_tasks(), target, key.task, domain.limits.tasks.depth)
-    {
-        return decide_call(
-            domain,
-            &env.limits,
-            decision,
-            to,
-            key,
-            CallAnswer::ControlRefused(tasks::Problem {
-                task: Some(target),
-                why: tasks::Refusal::Reference,
-                blocked_by: None,
-            }),
-        );
-    }
-    let mut stop_run = false;
-    if let Some(after) = &amendment.authority {
-        let before = authority_value(&current.authority);
-        let after = authority_value(after);
-        let implies = &domain.core.authority.rules().implies;
-        stop_run = !authority::at_most(&before, &after, implies);
-        if !authority::at_most(&after, &before, implies) {
-            let ceiling = domain.core.authority.policy(current.project);
-            let hard = match ceiling {
-                Some(policy) => {
-                    authority::at_most(&after, &policy.ceiling, implies)
-                        && authority::at_most(&after, &domain.core.authority.rules().ceiling, implies)
-                }
-                None => false,
-            };
-            let answer = if hard {
-                if authority::at_most(&after, &authority_value(&holder.authority), implies) {
-                    authority::Answer::Allow
-                } else {
-                    authority::Answer::Propose
-                }
-            } else {
-                authority::Answer::Refuse
-            };
-            if answer != authority::Answer::Allow {
-                return decide_call(domain, &env.limits, decision, to, key, CallAnswer::ControlDenied { answer });
-            }
+    let stop_run = match domain.core.task_amend_admit(key.task, target, &amendment, env.limits.tasks.depth) {
+        Ok(stop_run) => stop_run,
+        Err(jig_core::TaskAmendDenied::Refused { task, why }) => {
+            return decide_call(
+                domain,
+                &env.limits,
+                decision,
+                to,
+                key,
+                CallAnswer::ControlRefused(tasks::Problem { task: Some(task), why, blocked_by: None }),
+            );
         }
-    }
+        Err(jig_core::TaskAmendDenied::Denied(answer)) => {
+            return decide_call(domain, &env.limits, decision, to, key, CallAnswer::ControlDenied { answer });
+        }
+    };
     let Some(message) = crate::fresh(&mut domain.core.counters, Family::Message) else {
         return decide_call(
             domain,
@@ -4334,21 +3806,7 @@ fn start_recurring(
     authority: tasks::Authority,
     template: tasks::RecurringTemplate,
 ) {
-    for member in &template.batch {
-        match member.executor {
-            tasks::Executor::Person(_) => return,
-            tasks::Executor::Agent { .. } | tasks::Executor::Procedure { .. } => {}
-        }
-    }
-    for task in domain.core.tasks.recurring_tasks(project) {
-        if domain.core.tasks.recurring_template(task).expect("identified recurring task").key == template.key {
-            return;
-        }
-    }
-    let Some(policy) = domain.core.authority.policy(project) else { return };
-    if !authority::at_most(&authority_value(&authority), &policy.ceiling, &domain.core.authority.rules().implies)
-        || domain.core.settings.period_budget > policy.period_spend
-    {
+    if !domain.core.recurring_admit(project, &authority, &template) {
         return;
     }
     let period = domain.core.settings.period;
@@ -5345,23 +4803,8 @@ fn brief_outputs(
                     domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
                     continue;
                 };
-                let mut findings = Queue::with_capacity(
-                    authority::max_out(domain.core.authority.limits()).expect("authority check bound"),
-                );
-                if authority::check_run(
-                    &domain.core.authority,
-                    &authority::RunAsk {
-                        project: context.project,
-                        authority: authority_value(&context.authority),
-                        numbers: authority_numbers(context.numbers),
-                        budget: authority::left(authority_numbers(context.numbers))
-                            .min(domain.core.authority.rules().maximum_run_spend),
-                        wall: env.wall,
-                        accounts: Box::new([domain.core.accounts.usable(domain.core.settings.account)]),
-                        writes: workspace.writes.clone(),
-                    },
-                    &mut findings,
-                ) != authority::Answer::Allow
+                if domain.core.run_admission(&context, env.wall, workspace.writes.clone())
+                    != jig_core::RunAdmission::Allow
                 {
                     domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::Effects }));
                     continue;
@@ -5384,13 +4827,7 @@ fn brief_outputs(
                         .is_ok(),
                     "claim proof reserved before child mutation"
                 );
-                let mut turns = List::with_capacity(transcript.turns.len());
-                if transcript.bytes <= u64::from(domain.core.settings.resume_bytes) {
-                    let mut kept = transcript.turns;
-                    for _ in 0..kept.len() {
-                        turns.push(kept.pop().expect("counted transcript turn")).expect("bounded transcript turns");
-                    }
-                }
+                let turns = domain.core.resumed_turns(transcript);
                 let assignment = Assignment {
                     task,
                     attempt,
@@ -5407,7 +4844,7 @@ fn brief_outputs(
                     saved: forge_route::saved_tags(&context.saved, domain.config.forge_connector)
                         .expect("task saved names were admitted by the root"),
                     workspace: workspace.workspace.clone(),
-                    transcript: turns.into_boxed(),
+                    transcript: turns,
                     answered: {
                         let mut answered = List::with_capacity(domain.limits.call_records);
                         for (&key, _) in &domain.core.call_parts {
@@ -6237,8 +5674,6 @@ fn transcript_loaded(
     }
     let Some(Some(Read::Transcript { task })) = domain.result_reads.get(Id::from_token(waiter)) else { return };
     let task = *task;
-    let transcript = domain.core.transcripts.get_mut(&task).expect("load belongs to prepared task");
-    let bound = u64::from(domain.core.settings.resume_bytes);
     for row in rows {
         let turn = match row {
             Record::Turn(turn) => turn,
@@ -6255,42 +5690,10 @@ fn transcript_loaded(
                 return;
             }
         };
-        if turn.task != task || turn.attempt > transcript.previous_attempt || turn.attempt == 0 || turn.turn == 0 {
+        if !domain.core.append_transcript(task, turn) {
             transcript_failed(domain, waiter);
             return;
         }
-        let length = u64::try_from(turn.transcript.len()).expect("stored turn size fits u64");
-        let Some(total) = transcript.bytes.checked_add(length) else {
-            transcript_failed(domain, waiter);
-            return;
-        };
-        transcript.bytes = total;
-        if length == 0 {
-            continue;
-        }
-        let body = if length > bound {
-            let start = turn
-                .transcript
-                .len()
-                .checked_sub(usize::try_from(bound).expect("u32 bound fits usize"))
-                .expect("oversize turn has tail");
-            Box::<[u8]>::from(turn.transcript.get(start..).expect("tail starts inside stored turn"))
-        } else {
-            turn.transcript
-        };
-        let body_len = u64::try_from(body.len()).expect("bounded turn fits u64");
-        for _ in 0..transcript.turns.len() {
-            if transcript.kept.checked_add(body_len).expect("two bounded tails") <= bound {
-                break;
-            }
-            let old = transcript.turns.pop().expect("overfull transcript has an older turn");
-            transcript.kept = transcript
-                .kept
-                .checked_sub(u64::try_from(old.len()).expect("bounded old turn"))
-                .expect("old turn was counted");
-        }
-        transcript.turns.push(body);
-        transcript.kept = transcript.kept.checked_add(body_len).expect("bounded transcript tail");
     }
     if let Some(after) = next {
         request_load(domain, waiter, Range::TaskTranscript { task }, Some(after), out);
@@ -6310,8 +5713,7 @@ fn start_brief(domain: &mut Domain, env: &Env<Limits>, task: u64) {
     if current.phase != tasks::Phase::Active(tasks::Active::Preparing) || current.last_message != context.last_message {
         return;
     }
-    let transcript = domain.core.transcripts.get(&task).expect("prepared transcript state");
-    let oversized = transcript.bytes > u64::from(domain.core.settings.resume_bytes);
+    let oversized = domain.core.transcript_oversized(task);
     let mut wanted = List::with_capacity(domain.limits.brief.sections);
     let Some(task_text) = read_core(domain, task, TaskBriefPart::Spec) else {
         domain.work.push(Work::Tasks(tasks::Event::PreparationFailed { task }));
@@ -7866,20 +7268,11 @@ fn discard_after_stop(domain: &mut Domain, event: Event) {
 }
 
 fn current_proof(domain: &Domain, task: u64, attempt: u64) -> bool {
-    match domain.core.proofs.get(&task) {
-        Some(proof) => proof.attempt == attempt,
-        None => false,
-    }
+    domain.core.current_proof(task, attempt)
 }
 
 fn remember_unpriced_terminal(domain: &mut Domain, run: Token, attempt: Token, end: tasks::End) {
-    let proof = domain.core.proofs.get_mut(&run.raw()).expect("current fleet terminal has pre-reserved proof");
-    assert!(proof.attempt == attempt.raw(), "fleet terminal belongs to current proof");
-    let cumulative = match proof.turn {
-        Some(turn) => turn.cumulative,
-        None => 0,
-    };
-    proof.terminal = Some(TerminalRecord { task: run.raw(), attempt: attempt.raw(), cumulative, end });
+    domain.core.remember_unpriced_terminal(run, attempt, end);
 }
 
 fn valid_connector_answer(answer: &CallAnswer, deployment: &crate::Deployment, limits: &Limits) -> bool {
