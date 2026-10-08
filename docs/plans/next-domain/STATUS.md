@@ -474,6 +474,10 @@ and workspace suites remain within their existing budgets.
 | temper 02.3 restart steps | merged and pushed | c6602fde | Acknowledged restored records, fresh live reads, and outbox settlement separately; root waits for each step before resuming procedures. Gate: fmt/clippy; 1,155 focused / 1.401 s; 28 fuzzy / 5.141 s. |
 | temper 02.4 effects worlds | merged and pushed | 5227d73d | Checked keyed, conditional, idempotent, and unrecoverable effects across deadlines, late copies, competing writers, and drawn restart cuts; corrected missing-key recovery. Gate: fmt/clippy; 1,160 focused / 1.394 s; 29 fuzzy / 6.542 s. |
 | temper 02.5 creation recovery | merged and pushed | bf011a73 | Opening a pull request is conditional; a closed one is drift. Branch creation is unrecoverable and a missing branch is held after its deadline. Late fake-forge writes stay within their attempt's lifetime. Gate: fmt/clippy; 1,167 focused / 1.474 s; 29 fuzzy / 6.398 s. |
+| temper 03.1 projections and goal topics | merged and pushed | 8cfab640 | Retained complete goal plans, milestone history, phases and titles through final projection settlement; subscribed goal subtrees to landing overlap and head CI. Owned projection issues have no participation subscription. Gate: fmt/clippy; 1,228 focused / 3.176 s; 37 fuzzy / 9.171 s. |
+| temper 03.2 reads, workspace items and run results | merged and pushed | 67b77edd | Added bounded immutable-head file reads beside typed pull diffs and Forgejo job logs, through the read reply door; connector selects sized checkout starts, saved work, merges and read-only context. Run answers confirm pushed heads; unreported destinations are read after the terminal. Gate: fmt/clippy; 1,230 focused / 3.498 s; 37 fuzzy / 8.995 s. |
+| temper 03.3 drift, adoption and resource kinds | merged and pushed | 6ff13d6b | Held outside/backward writer moves with durable change/time evidence, checked lost-run ancestry, retained closed/retargeted pull facts, refreshed permissions/settings/protection after refusals and rechecked deployment prefixes. Reported resource roles and hold kinds; the forge has no counted pools. Gate: fmt/clippy; 1,242 focused / 1.881 s; 37 fuzzy / 8.990 s. |
+| temper 03.4 connector world contract | merged and pushed | bc24a1d1 | Checked repeated waiting-step decisions and state, classified delivery once per subscriber despite repeated hints, completed-section drop/token reuse and lost-run head confirmation. Existing worlds cover approval freshness, head changes before merge, handover/drop and idle calls with ten times the history; temper 02 covers recovery and restart cuts. Gate: fmt/clippy; 1,245 focused / 1.841 s; 37 fuzzy / 4.959 s. Serial forge worlds: 70 focused / 0.395 s; 3 fuzzy / 0.125 s, below the allowed increases alone (1 s / 5 s), satisfying the pre-02-plus-allowance budgets even against a zero baseline. |
 | jig 14.1 worker host carve | merged and pushed | 0ccae2bc, 69e5a044, a973b402, 1b2e5cd7, 6ee0a224, 59e3d882, 2dc71c61 | Replaced checkout and agent details with workspace and agent capabilities, then moved the host and its world into jig with history. Gate: fmt/clippy; 1,058 focused / 2.192 s; 27 fuzzy / 4.978 s. |
 | jig 14.2 hosted runs | merged and pushed | 9edd0389, 08143ee3, 572c1d55, 686b981e | Bounced messages held through failed preparation or cancellation, started itemless runs without a workspace, and covered the hosted lifecycle. Gate: fmt/clippy; 1,062 focused / 1.228 s; 27 fuzzy / 4.536 s. |
 | jig 14.3 turns, facts and contact | merged and pushed | 44bcc229, 07ef60bf | Kept bounded agent facts and retained turns in jig, with exact ACK credit and root link retry, contact and shutdown routing. Gate: fmt/clippy; 1,065 focused / 1.225 s; 27 fuzzy / 2.639 s. |
@@ -535,3 +539,32 @@ and workspace suites remain within their existing budgets.
 | jig 15.4 negative worlds and integration guide | merged and pushed | ce77e10b | Caught six broken roots and four broken connectors through independent observations, with a faithful cold-restart control; checked restart ordering, stable attempt deadlines and full live task/host memory. Documented application and scenario adapters for later roots. Gate: fmt/clippy; 1,210 focused / 2.356 s; 37 fuzzy / 8.529 s. Serial conformance: 15 focused / 0.617 s; 2 fuzzy / 2.862 s, within 1.5 s / 8 s. |
 | jig 20.1 projection authority | merged and pushed | aa488c74 | Added project policy grants for projections and authenticated policy changes; checked each connector-described creation, edit, milestone and closure independently of task grants and spend. Refusals produce durable goal news; restart and narrowed-policy stories preserve admission and recovery fences. Gate: fmt/clippy; 1,214 focused / 1.753 s; 37 fuzzy / 7.384 s. Serial core: 105 focused / 0.839 s; 6 fuzzy / 0.833 s. |
 | jig 20.2 complete projection feed | merged and pushed | 1ce08e40 | Added whole bounded subtree feeds once per connector per decision, stable lifecycle/history milestone identities, and split durable projection rows retained after goal ending through final connector settlement. Temper translates the feed and releases issue state after desired writes settle. Grandchild ending, cold restart, delayed closing write and last-connector cleanup stories pass; route and memory bounds include retained plans and handoffs. Gate: fmt/clippy; 1,223 focused / 1.878 s; 37 fuzzy / 6.033 s. Serial core/task measures: 197 focused / 1.505 s; 7 fuzzy / 4.346 s. |
+
+### temper 03 boundary and handoff
+
+- Root to forge: adopted repositories, names and holds, writer claims and run
+  terminals; typed effect descriptions/keeps/makes, judges and procedure steps;
+  complete goal projection feeds, topic subscriptions and bounded section tokens.
+- Forge to root: durable records and erasures, sized retained values and handover,
+  classified news, described projection effects, procedure decisions and verdicts,
+  per-resource roles/hold kinds, release and restart acknowledgements; typed API
+  calls go to the provider adapter. Workspace items carry their complete byte size.
+- **Provider limitation, nonblocking for this session:** Forgejo REST branch reads
+  identify heads and comparisons prove ancestry, but neither identifies the pusher
+  of a forward move if its authenticated webhook is lost. Fresh reads confirm a
+  webhook's head before using its actor; run answers confirm reported heads, and
+  lost-run terminals read and compare unreported heads. Proposal: the provider
+  adapter preserves authenticated push actor/head metadata; when that metadata is
+  unavailable, retain the move as unconfirmed until terminal reads. Such reads
+  cannot establish the identity behind an unreported outside forward push.
+- **Integration handoff:** the connector reports per-resource role/hold facts;
+  jig-core currently ignores its generic `Resource` event. This does not block
+  session 03's connector reporting. Consuming those reports is required before
+  later session 05 signs off generic dynamic resource admission. Proposal: jig's
+  authorized owner adds retained resource facts and applies updates to admission
+  and effective access; temper 05 routes them and checks changing-resource stories
+  on the conformance world. Current private-branch admission uses the same
+  connector hold constant, and current permission checks consult forge facts.
+- No design documents, jig sources, dependency pins or other repositories changed
+  in this session. Session 05 still supplies Temper's reference root shape and
+  application conformance composition.
