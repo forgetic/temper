@@ -190,7 +190,7 @@ at a time on each (connectors.md, section 4):
 
 | Effect | What it is | Recovery class (jig's `connectors.md`, 4.3) | Found again after an uncertain failure |
 |---|---|---|---|
-| open a pull request | a creation: from a branch into its landing branch, with a title, a body and a key | conditional: only while no pull request for its branches is open | by its branches: the newest pull request for them, open or not |
+| open a pull request | a creation: from a branch into its landing branch, with a title, a body and a key | conditional: only while no pull request for its branches is open; Forgejo keeps it, closed or not | by its branches: the newest pull request for them, open or not |
 | edit a pull request's title or body | a set | idempotent | written again |
 | update a pull request from its base | a transition: the base's tip merged into its branch, by the forge | unrecoverable | its head contains the base tip it asked for |
 | merge a pull request | a transition, conditional on its exact head | conditional | merged, and at which commit |
@@ -201,22 +201,23 @@ at a time on each (connectors.md, section 4):
 | create an issue | a creation, with a key | unrecoverable | by its key, among the issues changed since the entry's start |
 | edit, close, reopen an issue | a set | idempotent | written again |
 | set a pull request's reviewers | a set | idempotent | written again |
-| create a branch at a commit | a creation, named | conditional: only while no branch of that name exists | the branch exists at that commit |
+| create a branch at a commit | a creation, named | unrecoverable: another hand can delete it, and nothing then shows it was made | the branch exists at that commit |
 | delete a branch | a set: temper's own branches only | idempotent | it is gone |
 
 - **Classes follow what Forgejo offers.** It keeps no key it would refuse
   a second creation by, so nothing temper makes is keyed. A pull request
-  or a branch is created only from a state Forgejo checks (none open for
-  those branches, no branch of that name), so a late copy fails while
-  the first stands. temper removes its own creations only once their
-  entries have settled; a late copy lands again only if another hand
-  removed the first within the write's lifetime, which is drift
-  (section 11 of jig's `connectors.md`), and the copy carries the same
-  key, so the forge finds it.
+  is opened only while none is open for its branches, and Forgejo keeps
+  every pull request, closed or not, so the state it leads to is always
+  found: a first another hand closed is found closed, which is drift
+  (jig's `connectors.md`, section 11). A branch is created only while
+  none of its name exists, but another hand can delete it, and then
+  nothing shows it was made: its creation is unrecoverable. Every class
+  rests on a copy landing within its write's lifetime, or never (jig's
+  `connectors.md`, 4.3).
 - **An unrecoverable creation is looked for first:** an uncertain review,
-  comment, issue or update found by its key, or by the state it leads
-  to, is made; one not found holds its task for a person, and is never
-  sent again by temper on its own.
+  comment, issue, update or branch found by its key, or by the state it
+  leads to, is made; one not found by its deadline holds its task for a
+  person, and is never sent again by temper on its own.
 - **Keys are carried** in what temper creates: a marker at the head of a
   body, a comment or a review, hidden where the forge renders it
   (`docs/design/forge.md`, section 4). A pull request's key is its
