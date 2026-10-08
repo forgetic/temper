@@ -23,7 +23,7 @@ mod outbox;
 mod tests;
 pub use boundary::{
     Attempt, Cached, Condition, Delivery, Echo, Effect, Entry, Event, Key, LiveRecord, Made, Outcome, Position,
-    RecoveryClock, RepositoryRecord, Request, Resource, Stored, Watch, What,
+    Recovery, RecoveryClock, RepositoryRecord, Request, Resource, Stored, Watch, What, recovery,
 };
 pub use domain::{Domain, fire, max_out, resume, step};
 pub use facts::{Fact, Priority};

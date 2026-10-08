@@ -1,7 +1,8 @@
 use super::{LIMITS, REPO, Sent, at};
 use crate::api::{self, Answer, Error, Op, Read, Write};
 use crate::{
-    Condition, Domain, Effect, Entry, Event, Limits, Made, Outcome, RecoveryClock, Request, fire, max_out, resume, step,
+    Condition, Domain, Effect, Entry, Event, Limits, Made, Outcome, Recovery, RecoveryClock, Request, fire, max_out,
+    recovery, resume, step,
 };
 use alloc::boxed::Box;
 use skein_lib::{Duration, Env, List, Map, Queue, Wall};
@@ -135,6 +136,26 @@ impl Harness {
 }
 fn comment() -> Write {
     Write::Post { number: 9, key: Box::from(&b"deployment:task:milestone"[..]), body: Box::from(&b"done"[..]) }
+}
+#[test]
+fn recovery_classes_follow_forgejo_guarantees() {
+    assert_eq!(recovery(&comment()), Recovery::Unrecoverable);
+    assert_eq!(
+        recovery(&Write::CreateIssue { key: Box::from(&b"marker"[..]), title: Box::new([]), body: Box::new([]) }),
+        Recovery::Unrecoverable,
+    );
+    assert_eq!(recovery(&Write::Update { number: 9 }), Recovery::Unrecoverable);
+    assert_eq!(recovery(&Write::Merge { number: 9, head: [1; 32] }), Recovery::Conditional);
+    assert_eq!(
+        recovery(&Write::OpenPull {
+            title: Box::new([]),
+            body: Box::new([]),
+            head: Box::from(&b"topic"[..]),
+            base: Box::from(&b"main"[..]),
+        }),
+        Recovery::Keyed,
+    );
+    assert_eq!(recovery(&Write::Close { number: 9 }), Recovery::Idempotent);
 }
 fn summary() -> api::Summary {
     api::Summary {

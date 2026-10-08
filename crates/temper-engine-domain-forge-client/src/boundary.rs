@@ -26,6 +26,53 @@ pub struct Effect {
     pub write: Write,
     pub condition: Condition,
 }
+/// How Forgejo v16.0.5 can recover a write whose answer was lost
+/// (jig's domain/connectors.md, section 4.3).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Recovery {
+    /// Forgejo refuses another creation with the same identity.
+    Keyed,
+    /// Forgejo checks the state named by the write as it applies it.
+    Conditional,
+    /// Repeating the write produces the same final state.
+    Idempotent,
+    /// Forgejo offers neither a deduplicating key nor an atomic condition.
+    Unrecoverable,
+}
+/// The recovery class declared by each forge effect kind. A client-side
+/// preflight does not make a write conditional: a late copy can pass it.
+#[must_use]
+#[expect(clippy::match_same_arms, reason = "each forge kind declares its own recovery reason")]
+pub fn recovery(write: &Write) -> Recovery {
+    match write {
+        // Forgejo refuses a second open pull request for the same head and base.
+        Write::OpenPull { .. } => Recovery::Keyed,
+        // A branch name is unique, and creation refuses an occupied name.
+        Write::CreateBranch { .. } => Recovery::Keyed,
+        // Forgejo checks the requested pull head when applying a merge.
+        Write::Merge { .. } => Recovery::Conditional,
+        // Issue creation has no server-enforced key; a marker only finds copies.
+        Write::CreateIssue { .. } => Recovery::Unrecoverable,
+        // A comment marker can be searched, but does not refuse a late copy.
+        Write::Post { .. } => Recovery::Unrecoverable,
+        // A review marker and a client-side head check do not deduplicate it.
+        Write::Review { .. } => Recovery::Unrecoverable,
+        // Forgejo's update checks neither the old head nor an operation id.
+        Write::Update { .. } => Recovery::Unrecoverable,
+        // Repeating an edit writes the same title and body.
+        Write::Edit { .. } => Recovery::Idempotent,
+        // Repeating the reviewer set writes the same members.
+        Write::SetReviewers { .. } => Recovery::Idempotent,
+        // Repeating close leaves the item closed.
+        Write::Close { .. } => Recovery::Idempotent,
+        // Repeating reopen leaves the item open.
+        Write::Reopen { .. } => Recovery::Idempotent,
+        // The context on a commit is a set value.
+        Write::Status { .. } => Recovery::Idempotent,
+        // Repeating deletion leaves the named branch absent.
+        Write::DeleteBranch { .. } => Recovery::Idempotent,
+    }
+}
 /// First-write search position. Never advanced by retries or restoration.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Position {
