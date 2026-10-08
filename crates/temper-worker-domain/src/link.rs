@@ -60,17 +60,16 @@ use alloc::boxed::Box;
 use crate::wire;
 use jig_host as host;
 use skein_lib::bytes::copy_of;
-use skein_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Time, Token};
+use skein_lib::{Deadlines, Duration, Env, List, Queue, Rng, Time, Token};
 use temper_worker_domain_checkout as checkout;
 
-use crate::boundary::{Hello, Hosted, Phase, Request};
+use crate::boundary::{Hello, Hosted, Request};
 use crate::limits::{self, Limits};
 use crate::translate;
 
 #[derive(Debug)]
 pub(crate) struct Link {
     state: State,
-    v2: bool,
     turns: crate::turns::Turns,
     alarms: Deadlines<Alarm>,
     rng: Rng,
@@ -84,12 +83,9 @@ pub(crate) struct Link {
     shut: bool,
     /// The answers the engine has yet to acknowledge, by the names of their
     /// runs and attempts: sent, or waiting for a channel.
-    answers: Map<Named, wire::Answer>,
     /// Relays and bounces made while the channel was down, oldest first.
     relays: Queue<Relay>,
     bounces: Queue<Bounced>,
-    /// Answers given up.
-    abandoned: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -112,13 +108,6 @@ pub(crate) enum Alarm {
     Grace,
 }
 
-/// A run's attempt, by the engine's names.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub(crate) struct Named {
-    run: Token,
-    attempt: Token,
-}
-
 /// A relay for the engine, held while the channel is down.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Relay {
@@ -130,17 +119,7 @@ pub(crate) struct Relay {
 
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub(crate) enum RelayBody {
-    Legacy { stable: Option<Token>, body: Box<[u8]> },
     Typed { name: Box<[u8]>, tool: Box<[u8]>, writes: bool, input: Box<[u8]>, deadline: Duration },
-}
-
-impl RelayBody {
-    fn requires_v2(&self) -> bool {
-        match self {
-            Self::Legacy { stable: None, .. } => false,
-            Self::Legacy { stable: Some(_), .. } | Self::Typed { .. } => true,
-        }
-    }
 }
 
 /// A bounce for the engine, held while the channel is down.
@@ -170,17 +149,14 @@ impl Link {
         let bounces = limits::bounces(limits).expect("worst_case accepted the limits");
         Link {
             state: State::Down,
-            v2: false,
             turns: crate::turns::Turns::new(limits),
             alarms,
             rng: Rng::new(seed),
             failed: 0,
             past: false,
             shut: false,
-            answers: Map::with_capacity(limits.host.slots),
             relays: Queue::with_capacity(limits.stalled),
             bounces: Queue::with_capacity(bounces),
-            abandoned: 0,
         }
     }
 
@@ -203,7 +179,7 @@ impl Link {
 
     /// Answers the engine has yet to acknowledge.
     pub(crate) fn held(&self) -> u32 {
-        self.answers.len().saturating_add(self.turns.held())
+        self.turns.held()
     }
 
     /// Relays and bounces waiting for a channel.
@@ -212,7 +188,7 @@ impl Link {
     }
 
     pub(crate) const fn abandoned(&self) -> u64 {
-        self.abandoned.saturating_add(self.turns.abandoned())
+        self.turns.abandoned()
     }
 
     pub(crate) const fn is_shut(&self) -> bool {
@@ -221,7 +197,7 @@ impl Link {
 
     /// Whether the link keeps the answer of the run `run`'s attempt `attempt`.
     pub(crate) fn holds(&self, run: Token, attempt: Token) -> bool {
-        self.answers.contains_key(&Named { run, attempt }) || self.turns.holds(run, attempt)
+        self.turns.holds(run, attempt)
     }
 
     /// Fires the link's alarm due at `env.now`, if there is one.
@@ -237,7 +213,7 @@ impl Link {
             None => false,
         };
         if turn_due {
-            self.turns.fire(env.now, self.v2 && self.is_up(), host, out);
+            self.turns.fire(env.now, self.is_up(), host, out);
             return Some(Fired::Turn);
         }
         let alarm = self.alarms.expire(env.now)?;
@@ -258,40 +234,21 @@ impl Link {
     /// A reply-bearing assignment cannot enter this link's runtime mode.
     pub(crate) fn refuse_version(&self, run: Token, attempt: Token, out: &mut Queue<Request>) {
         assert!(self.is_up(), "an assignment arrives on an open channel");
-        if self.v2 {
-            let ending = wire::EndingV2::Refused(wire::Refusal::Invalid(wire::Invalid::Version));
-            out.push(Request::AnswerV2 { run, attempt, answer: wire::AnswerV2 { turns: 0, spent: 0, ending } });
-        } else {
-            // Charter is the v1 unsupported-lifecycle refusal; its frozen
-            // schema has no version-specific invalid code.
-            let answer = wire::Answer::Refused(wire::Refusal::Invalid(wire::Invalid::Charter));
-            out.push(Request::Answer { run, attempt, answer });
-        }
+        let ending = wire::EndingV2::Refused(wire::Refusal::Invalid(wire::Invalid::Version));
+        out.push(Request::AnswerV2 { run, attempt, answer: wire::AnswerV2 { turns: 0, spent: 0, ending } });
     }
 
     /// Refuse an assignment whose application workspace cannot be admitted.
-    pub(crate) fn refuse(
-        &self,
-        run: Token,
-        attempt: Token,
-        refusal: wire::Refusal,
-        next: bool,
-        out: &mut Queue<Request>,
-    ) {
+    pub(crate) fn refuse(&self, run: Token, attempt: Token, refusal: wire::Refusal, out: &mut Queue<Request>) {
         assert!(self.is_up(), "an assignment arrives on an open channel");
-        if next {
-            let ending = wire::EndingV2::Refused(refusal);
-            out.push(Request::AnswerV2 { run, attempt, answer: wire::AnswerV2 { turns: 0, spent: 0, ending } });
-        } else {
-            out.push(Request::Answer { run, attempt, answer: wire::Answer::Refused(refusal) });
-        }
+        let ending = wire::EndingV2::Refused(refusal);
+        out.push(Request::AnswerV2 { run, attempt, answer: wire::AnswerV2 { turns: 0, spent: 0, ending } });
     }
 
     /// The channel opened: the hello is next, made once the host reports.
-    pub(crate) fn connected(&mut self) {
+    pub(crate) fn connected_v2(&mut self) {
         assert!(self.state == State::Dialling, "a channel opens once, for a dial in flight");
         self.state = State::Up { proved: false };
-        self.v2 = false;
         self.past = false;
         self.alarms.cancel(Alarm::Grace);
     }
@@ -333,41 +290,16 @@ impl Link {
         self.shut = true;
     }
 
-    /// The answer for the run `run`'s attempt `attempt`: kept until the engine
-    /// acknowledges it, or the worker gives it up, and sent now if there is a
-    /// channel. A refusal goes once, now.
-    pub(crate) fn answer(&mut self, run: Token, attempt: Token, answer: wire::Answer, out: &mut Queue<Request>) {
-        let refused = match answer {
-            wire::Answer::Refused(_) => true,
-            wire::Answer::Ended { .. } | wire::Answer::Parked { .. } | wire::Answer::Failed { .. } => false,
-        };
-        if refused {
-            // An assignment comes on an open channel, and is refused in the
-            // step it comes in.
-            assert!(self.is_up(), "a refusal is made with the channel open");
-            out.push(Request::Answer { run, attempt, answer });
-            return;
-        }
-        if self.is_up() {
-            out.push(Request::Answer { run, attempt, answer: copy(&answer) });
-        }
-        // The host counts the answers kept against its slots: no more than
-        // those.
-        let fresh = self.answers.insert(Named { run, attempt }, answer).expect("room for an answer of every slot");
-        assert!(fresh.is_none(), "an attempt is answered once");
-    }
-
     /// The engine has the answer for the run `run`'s attempt `attempt`. One
     /// the link does not keep was acknowledged already, or was a refusal.
     pub(crate) fn acknowledged(&mut self, run: Token, attempt: Token, host: &host::Domain) {
-        self.answers.remove(&Named { run, attempt });
         self.turns.answer_acknowledged(run, attempt, host);
     }
 
     /// A relay for the engine: now if the channel is open, kept until it is
     /// otherwise.
     pub(crate) fn relay(&mut self, relay: Relay, host: &host::Domain, out: &mut Queue<Request>) {
-        if self.is_up() && (!relay.body.requires_v2() || self.v2) {
+        if self.is_up() {
             return out.push(request(relay));
         }
         // Room is made by dropping the relays their calls no longer wait for:
@@ -426,16 +358,12 @@ impl Link {
         out: &mut Queue<Request>,
     ) {
         let count = u32::try_from(runs.len()).expect("the host reports no more runs than its slots");
-        let mut hosting =
-            List::with_capacity(count.saturating_add(self.answers.len()).saturating_add(self.turns.held()));
+        let mut hosting = List::with_capacity(count.saturating_add(self.turns.held()));
         for run in runs {
             let hosted = Hosted { run: run.run, attempt: run.attempt, phase: translate::phase(run.phase) };
             hosting.push(hosted).expect("room for every run reported");
         }
-        for (named, _) in &self.answers {
-            let hosted = Hosted { run: named.run, attempt: named.attempt, phase: Phase::Answered };
-            hosting.push(hosted).expect("room for every answer kept");
-        }
+
         self.turns.hosting(&mut hosting);
         let mut workstreams = List::with_capacity(checkout.workspaces());
         for nth in 0..checkout.workspaces() {
@@ -447,30 +375,20 @@ impl Link {
         // A worker shutting down takes no more work.
         let slots = if self.shut { 0 } else { limits.host.slots };
         let hello = Hello { slots, workstreams: workstreams.into_boxed(), hosting: hosting.into_boxed() };
-        if self.v2 {
-            out.push(Request::HelloV2 {
-                hello,
-                graces: limits::declared_graces(limits).expect("startup checked the stop bound"),
-                push_deadline: limits::push_deadline(limits).expect("startup checked push bound"),
-            });
-            self.turns.hello(host, out);
-        } else {
-            out.push(Request::Hello { hello });
-        }
-        for (named, answer) in &self.answers {
-            out.push(Request::Answer { run: named.run, attempt: named.attempt, answer: copy(answer) });
-        }
+        out.push(Request::HelloV2 {
+            hello,
+            graces: limits::declared_graces(limits).expect("startup checked the stop bound"),
+            push_deadline: limits::push_deadline(limits).expect("startup checked push bound"),
+        });
+        self.turns.hello(host, out);
+
         let queued = self.relays.len();
         for _ in 0..queued {
             let Some(relay) = self.relays.pop() else {
                 break;
             };
             if host.is_relayed(relay.call) {
-                if !relay.body.requires_v2() || self.v2 {
-                    out.push(request(relay));
-                } else {
-                    self.relays.push(relay);
-                }
+                out.push(request(relay));
             }
         }
         for _ in 0..self.bounces.capacity() {
@@ -489,29 +407,15 @@ impl Link {
             return false;
         }
         self.turns.give_up(host);
-        for _ in 0..self.answers.capacity() {
-            let Some((named, _)) = self.answers.first() else {
-                break;
-            };
-            let named = *named;
-            self.answers.remove(&named);
-            self.abandoned = self.abandoned.saturating_add(1);
-        }
+
         true
     }
 
-    pub(crate) fn connected_v2(&mut self) {
-        self.connected();
-        self.v2 = true;
-    }
-    pub(crate) fn is_v2(&self) -> bool {
-        self.v2
-    }
     pub(crate) fn answer_v2(&mut self, run: Token, attempt: Token, answer: wire::AnswerV2, out: &mut Queue<Request>) {
-        self.turns.answer(run, attempt, answer, self.v2 && self.is_up(), out);
+        self.turns.answer(run, attempt, answer, self.is_up(), out);
     }
     pub(crate) fn turn(&mut self, run: Token, attempt: Token, turn: wire::Turn, out: &mut Queue<Request>) {
-        if self.v2 && self.is_up() {
+        if self.is_up() {
             out.push(Request::Turn { run, attempt, turn });
         }
     }
@@ -537,32 +441,8 @@ pub(crate) const ALARMS: u32 = 2;
 fn request(relay: Relay) -> Request {
     let Relay { run, attempt, call, body } = relay;
     match body {
-        RelayBody::Legacy { stable: Some(name), body } => {
-            Request::RelayV2 { run, attempt, call: name, delivery: call, body }
-        }
-        RelayBody::Legacy { stable: None, body } => Request::Relay { run, attempt, call, body },
         RelayBody::Typed { name, tool, writes, input, deadline } => {
             Request::RelayTyped { run, attempt, call: name, delivery: call, tool, writes, input, deadline }
         }
     }
-}
-
-/// A copy of `answer`, to send while the link keeps it.
-fn copy(answer: &wire::Answer) -> wire::Answer {
-    match answer {
-        wire::Answer::Refused(refusal) => wire::Answer::Refused(*refusal),
-        wire::Answer::Ended { outcome, work } => {
-            wire::Answer::Ended { outcome: copy_of(outcome), work: copy_work(work) }
-        }
-        wire::Answer::Parked { snapshot, work } => {
-            wire::Answer::Parked { snapshot: snapshot.clone(), work: copy_work(work) }
-        }
-        wire::Answer::Failed { failure, detail, work } => {
-            wire::Answer::Failed { failure: *failure, detail: copy_of(detail), work: copy_work(work) }
-        }
-    }
-}
-
-fn copy_work(work: &wire::Work) -> wire::Work {
-    wire::Work { landed: work.landed.clone(), saved: work.saved.clone() }
 }

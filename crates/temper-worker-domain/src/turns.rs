@@ -37,7 +37,13 @@ pub(crate) struct Turns {
 
 impl Turns {
     pub(crate) fn new(limits: &Limits) -> Turns {
-        let capacity = limits.host.slots.checked_mul(limits.host.turns).expect("worst_case accepted turn capacity");
+        let capacity = limits
+            .host
+            .slots
+            .checked_mul(limits.host.turns)
+            .expect("checked per-run capacity")
+            .checked_mul(2)
+            .expect("worst_case accepted turn capacity");
         Turns {
             answers: Map::with_capacity(limits.host.slots),
             retry: Deadlines::with_capacity(capacity),

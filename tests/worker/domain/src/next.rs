@@ -6,9 +6,9 @@ use std::collections::VecDeque;
 use std::fmt::{self, Write};
 
 use skein_lib::{Duration, Env, Queue, Rng, Time, Token, Wall};
-use temper_worker_domain::agent::channel::{self, Ask, Down, FinishV2, Up};
+use temper_worker_domain::agent::{self as channel, Answer, Ask, CallName, Down, RunResult, Up};
 use temper_worker_domain::checkout::git::{Commit, Done, Op, Want};
-use temper_worker_domain::wire::{self as host, Access, Assignment, AssignmentV2, Repository, Start, Workspace};
+use temper_worker_domain::wire::{self as host, Access, Assignment, AssignmentTyped, Repository, Start, Workspace};
 use temper_worker_domain::{Domain, Event, Limits, Request, fire, max_out, step, worst_case};
 use temper_world::heap::Meter;
 
@@ -18,7 +18,7 @@ const PROCESS: Token = Token::new(777);
 const HEAD: [u8; 32] = [11; 32];
 const BASE: [u8; 32] = [23; 32];
 const LANDED: [u8; 32] = [47; 32];
-const TRANSCRIPT: &[u8] = b"turn-0;call-51:committed;call-tail";
+const TRANSCRIPT: &[u8] = b"committed-turn";
 const PATH: &[u8] = b"src/merge.rs";
 const TURN_BYTES: u64 = 24;
 const CAPACITY: usize = 2048;
@@ -114,7 +114,7 @@ impl World {
         let mut limits = crate::LIMITS;
         limits.host.slots = 1;
         limits.checkout.repositories = 1;
-        limits.host.transcript_bytes = u64::try_from(TRANSCRIPT.len()).expect("bounded");
+        limits.host.transcript_bytes = u64::try_from(TRANSCRIPT.len() + size_of::<Box<[u8]>>()).expect("bounded");
         limits.host.turn_bytes = TURN_BYTES;
         limits.checkout.conflicts = 1;
         limits.checkout.path_bytes = u32::try_from(PATH.len()).expect("bounded");
@@ -123,7 +123,9 @@ impl World {
         limits.agent.conflicts = limits.checkout.conflicts;
         limits.agent.path_bytes = limits.checkout.path_bytes;
         limits.host.turns = settings.turns;
+        limits.agent.turns = settings.turns;
         limits.host.turn_queue_bytes = u64::from(settings.byte_slots) * TURN_BYTES;
+        limits.agent.unacknowledged_bytes = limits.host.turn_queue_bytes;
         limits.turn_backoff = Duration::from_millis(10);
         if !keep {
             limits.host.facts = 0;
@@ -310,9 +312,10 @@ impl World {
                 assert_eq!(Some(owner), self.agent);
                 assert_eq!(process, PROCESS);
                 match message {
-                    Down::StartV2 { charter, transcript, repositories, grants } => {
+                    Down::Start { start, .. } => {
+                        let channel::Start { charter, transcript, directories: repositories, grants, .. } = start;
                         assert_eq!(&*charter, b"charter");
-                        assert_eq!(transcript.as_deref(), Some(TRANSCRIPT));
+                        assert_eq!(transcript.as_deref(), Some([Box::<[u8]>::from(TRANSCRIPT)].as_slice()));
                         assert_eq!(repositories.len(), 1);
                         assert!(grants.is_empty());
                         if self.settings.merging {
@@ -324,23 +327,23 @@ impl World {
                     Down::Answer { call, reply } => {
                         assert_eq!(call, Token::new(71));
                         match reply {
-                            channel::Reply::Pushed(channel::Push::Conflicted { repository, files }) => {
-                                assert_eq!(repository, 0);
-                                assert_eq!(&*files, [Box::<[u8]>::from(PATH)]);
+                            channel::Reply::Delivery(channel::Delivery::Refused(refusal)) => {
+                                assert_eq!(refusal.marker().expect("conflict marker").path(), PATH);
                             }
-                            channel::Reply::Pushed(channel::Push::Done) => {}
-                            channel::Reply::Pushed(
-                                channel::Push::Moved | channel::Push::Failed { .. } | channel::Push::Nothing,
+                            channel::Reply::Delivery(channel::Delivery::Delivered(_)) => {}
+                            other @ (channel::Reply::Host { .. }
+                            | channel::Reply::Delivery(
+                                channel::Delivery::Nothing | channel::Delivery::Stale | channel::Delivery::Failed(_),
                             )
-                            | channel::Reply::Relayed { .. }
                             | channel::Reply::Busy
                             | channel::Reply::Unavailable
                             | channel::Reply::Withdrawn
-                            | channel::Reply::TooLarge => panic!("unexpected push result: {reply:?}"),
+                            | channel::Reply::TooLarge) => panic!("unexpected delivery result: {other:?}"),
                         }
                     }
-                    Down::Start { .. } | Down::Event { .. } | Down::Grant { .. } | Down::Cancel => {
-                        panic!("unexpected v1 or unscripted down record")
+                    Down::Acknowledge { .. } => {}
+                    Down::Message { .. } | Down::Grant { .. } | Down::Cancel => {
+                        panic!("unscripted down record")
                     }
                 }
                 self.owed.push_back(Event::Sent { owner });
@@ -355,11 +358,7 @@ impl World {
                 assert_eq!(Some(owner), self.agent);
                 assert_eq!(process, PROCESS);
             }
-            Request::Hello { .. }
-            | Request::Answer { .. }
-            | Request::Relay { .. }
-            | Request::RelayV2 { .. }
-            | Request::RelayTyped { .. }
+            Request::RelayTyped { .. }
             | Request::Bounced { .. }
             | Request::Rejected { .. }
             | Request::Exhausted { .. }
@@ -420,6 +419,28 @@ impl World {
         }
     }
 
+    fn deliver(&mut self, completion: u32) {
+        use skein_lib::{List, Writer};
+        use smith_channel::{CEILINGS, DeliverAsk, DeliverAskParts, Field, FieldParts};
+        let mut fields = List::with_capacity(2);
+        for (name, text) in [(b"title".as_slice(), b"short title".as_slice()), (b"body", b"a separate, longer body")] {
+            fields
+                .push(
+                    Field::new(&CEILINGS, FieldParts { name: Box::from(name), text: Box::from(text) }).expect("field"),
+                )
+                .expect("two fields");
+        }
+        let value = DeliverAsk::new(&CEILINGS, DeliverAskParts { fields }).expect("delivery fields");
+        let mut writer = Writer::new(usize::try_from(value.measure()).expect("bounded encoded length"));
+        value.encode(&mut writer).expect("sized delivery");
+        self.say(Up::Call {
+            call: Token::new(71),
+            name: CallName { activation: ATTEMPT.raw(), completion, position: 0 },
+            deadline: self.env.now.saturating_add(Duration::from_secs(60)),
+            ask: Ask::Deliver { fields: writer.finish() },
+        });
+    }
+
     fn say(&mut self, message: Up) {
         assert!(self.reading, "the agent may speak only after a granted read");
         self.reading = false;
@@ -461,7 +482,7 @@ impl World {
             },
             access: Access::WritableV2 { push: Box::from(&b"topic"[..]), expected: Some(HEAD) },
         };
-        let assignment = AssignmentV2 {
+        let assignment = AssignmentTyped {
             assignment: Assignment {
                 run: RUN,
                 attempt: ATTEMPT,
@@ -471,25 +492,15 @@ impl World {
                 snapshot: None,
                 grants: Box::new([]),
             },
-            transcript: Some(Box::from(TRANSCRIPT)),
+            turns: Box::new([Box::from(TRANSCRIPT)]),
+            answered: Box::new([]),
         };
-        self.send(Event::AssignV2 { assignment });
-        self.say(Up::Call {
-            call: Token::new(71),
-            ask: Ask::PushV2 {
-                title: Box::from(&b"short title"[..]),
-                body: Box::from(&b"a separate, longer body"[..]),
-            },
-        });
+        self.send(Event::AssignTyped { assignment });
+        self.say(Up::Admitted);
+        self.deliver(1);
         if self.settings.merging {
             self.unresolved = false;
-            self.say(Up::Call {
-                call: Token::new(71),
-                ask: Ask::PushV2 {
-                    title: Box::from(&b"short title"[..]),
-                    body: Box::from(&b"a separate, longer body"[..]),
-                },
-            });
+            self.deliver(2);
         }
         let count = u32::try_from(self.rng.between(3, 7)).expect("bounded turns");
         let mut committed = 0;
@@ -499,7 +510,7 @@ impl World {
                     .expect("bounded body");
             self.say(Up::Turn {
                 turn: channel::Turn {
-                    turn: number,
+                    number,
                     spent: u64::from(number) * 17,
                     read: None,
                     body: vec![u8::try_from(number).expect("bounded"); length].into_boxed_slice(),
@@ -514,6 +525,10 @@ impl World {
             self.stats.busy += 1;
             self.reconnect();
             assert!(retained <= self.settings.turns);
+            if retained == self.settings.turns {
+                committed += 1;
+                self.ack(committed);
+            }
             for _ in 0..self.settings.turns {
                 if self.reading {
                     break;
@@ -528,7 +543,9 @@ impl World {
             committed += 1;
             self.ack(committed);
         }
-        self.say(Up::FinishV2 { turns: count, spent: u64::from(count) * 17 + 9, finish: FinishV2::Parked });
+        self.say(Up::Answer {
+            answer: Answer { turns: count, spent: u64::from(count) * 17 + 9, result: RunResult::Parked },
+        });
         let agent = self.agent.expect("live agent");
         self.send(Event::Exited { owner: agent });
         assert!(self.reading);
@@ -569,7 +586,7 @@ impl World {
             assert!(self.domain.is_done());
         }
         assert_eq!(self.stats.turns, count);
-        assert!(self.stats.copies >= count * 3);
+        assert!(self.stats.copies >= count * 2);
     }
 }
 

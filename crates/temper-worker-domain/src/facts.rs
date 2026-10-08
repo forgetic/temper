@@ -11,7 +11,7 @@
 //! to it as it is ([`crate::Told`]).
 
 use jig_host as host;
-use temper_worker_domain_agent as agent;
+use smith_host_domain as agent;
 use temper_worker_domain_checkout as checkout;
 
 /// Something that happened in a child domain, or to the engine link.

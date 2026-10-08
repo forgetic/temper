@@ -10,7 +10,8 @@ fn v2_runtime_random_turn_sizes_and_tiny_windows_settle() {
         let result = std::panic::catch_unwind(|| {
             let mut world = World::new(settings);
             world.run();
-            assert!(world.stats().peak_retained <= turns);
+            // Stopping also takes the independent agent window already sent.
+            assert!(world.stats().peak_retained <= turns * 2);
         });
         assert!(result.is_ok(), "v2 runtime seed {seed}, settings {settings:?}");
     }

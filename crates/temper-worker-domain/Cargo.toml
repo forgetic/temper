@@ -8,7 +8,6 @@ publish.workspace = true
 
 [dependencies]
 skein-lib.workspace = true
-temper-worker-domain-agent.workspace = true
 temper-worker-domain-checkout.workspace = true
 jig-host.workspace = true
 smith-channel.workspace = true

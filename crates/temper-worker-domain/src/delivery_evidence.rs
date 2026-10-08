@@ -2,9 +2,12 @@
 //! `domain/hosts.md`, sections 7 and 9). The versioned Smith channel codec
 //! owns the bytes; jig stores and forwards them without interpreting them.
 
+#[cfg(test)]
 use alloc::boxed::Box;
 
-use skein_lib::{List, Reader, Writer};
+#[cfg(test)]
+use skein_lib::Writer;
+use skein_lib::{List, Reader};
 use smith_channel as wire;
 use smith_host_domain as smith;
 
@@ -38,7 +41,7 @@ pub(crate) fn valid_answered(calls: &[AnsweredCall], evidence_bytes: u64) -> boo
 }
 
 /// Encode a Smith delivery as bounded, versioned evidence for a settled call.
-#[cfg_attr(not(test), expect(dead_code, reason = "the Smith agent route begins in the next increment"))]
+#[cfg(test)]
 pub(crate) fn encode(delivery: smith::Delivery) -> Option<Box<[u8]>> {
     let limits = &wire::CEILINGS;
     let value = match delivery {
@@ -132,6 +135,7 @@ pub(crate) fn decode(evidence: &[u8]) -> Option<smith::Delivery> {
     }
 }
 
+#[cfg(test)]
 fn encode_reason(reason: smith::DeliveryReason) -> wire::DeliveryReason {
     match reason {
         smith::DeliveryReason::Unreachable => wire::DeliveryReason::Unreachable,

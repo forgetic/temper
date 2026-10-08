@@ -10,12 +10,10 @@ use crate::wire;
 use jig_host as host;
 use skein_lib::bytes::copy_of;
 use skein_lib::{List, Token};
-use temper_worker_domain_agent::{self as agent, channel};
+use smith_host_domain as agent;
 use temper_worker_domain_checkout::{self as checkout, git};
 
 use crate::boundary::Phase;
-use crate::domain::Domain;
-use crate::workspace;
 
 /// The title of the commit that saves a run's unfinished work.
 pub(crate) const SAVED: &[u8] = b"Save unfinished work";
@@ -37,7 +35,6 @@ fn repository(repository: wire::Repository) -> checkout::Repository {
     let wire::Repository { tag: _, name, remote, start, access, identity } = repository;
     let (push, expected) = match access {
         wire::Access::ReadOnly => (None, None),
-        wire::Access::Writable { push } => (Some(push), None),
         wire::Access::WritableV2 { push, expected } => {
             let expected = match expected {
                 Some(raw) => Some(git::Commit::new(raw)),
@@ -99,11 +96,6 @@ pub(crate) const fn preparation(failure: wire::Preparation, resource: Token) -> 
     }
 }
 
-/// The commit message of a run's push: what the run said, as its title.
-pub(crate) fn message(message: Box<[u8]>) -> checkout::Message {
-    checkout::Message { title: message, body: Box::new([]) }
-}
-
 /// The commit message of a save.
 pub(crate) fn saved() -> checkout::Message {
     checkout::Message { title: copy_of(SAVED), body: Box::new([]) }
@@ -148,14 +140,6 @@ fn landing(landing: checkout::Landing) -> wire::Landing {
     }
 }
 
-pub(crate) fn ask(ask: channel::Ask) -> host::Ask {
-    match ask {
-        channel::Ask::PushV2 { title, body } => host::Ask::DeliverV2 { title, body },
-        channel::Ask::Push { message } => host::Ask::Deliver { message },
-        channel::Ask::Relay { body } => host::Ask::Relay { body },
-    }
-}
-
 pub(crate) const fn delivery_outcome(result: &wire::Push) -> host::DeliveryOutcome {
     match result {
         wire::Push::Done => host::DeliveryOutcome::Delivered,
@@ -163,29 +147,6 @@ pub(crate) const fn delivery_outcome(result: &wire::Push) -> host::DeliveryOutco
         wire::Push::Moved => host::DeliveryOutcome::Stale,
         wire::Push::Conflicted { .. } => host::DeliveryOutcome::Refused,
         wire::Push::Failed { .. } => host::DeliveryOutcome::Failed,
-    }
-}
-
-pub(crate) fn reply(domain: &Domain, reply: host::Reply) -> channel::Reply {
-    match reply {
-        host::Reply::Relayed { answer } => channel::Reply::Relayed { answer },
-        host::Reply::Delivered(delivery) => {
-            channel::Reply::Pushed(push(workspace::delivery_reply(domain, delivery.left)))
-        }
-        host::Reply::Unavailable => channel::Reply::Unavailable,
-        host::Reply::Withdrawn => channel::Reply::Withdrawn,
-        host::Reply::Busy => channel::Reply::Busy,
-    }
-}
-
-pub(crate) fn answer(answer: host::Answer, work: wire::Work, preparation: Option<wire::Preparation>) -> wire::Answer {
-    match answer {
-        host::Answer::Refused(refusal) => wire::Answer::Refused(host_refusal(refusal)),
-        host::Answer::Ended { outcome, work: _ } => wire::Answer::Ended { outcome, work },
-        host::Answer::Parked { snapshot, work: _ } => wire::Answer::Parked { snapshot, work },
-        host::Answer::Failed { failure, detail, work: _ } => {
-            wire::Answer::Failed { failure: host_failure(failure, preparation), detail, work }
-        }
     }
 }
 
@@ -230,39 +191,10 @@ const fn host_failure(failure: host::Failure, preparation: Option<wire::Preparat
     }
 }
 
-fn push(push: wire::Push) -> channel::Push {
-    match push {
-        wire::Push::Conflicted { repository, files } => channel::Push::Conflicted { repository, files },
-        wire::Push::Done => channel::Push::Done,
-        wire::Push::Moved => channel::Push::Moved,
-        wire::Push::Failed { failure } => channel::Push::Failed { failure: channel_failure(&failure) },
-        wire::Push::Nothing => channel::Push::Nothing,
-    }
-}
-
-pub(crate) fn finish(finish: channel::Finish) -> wire::Finish {
-    match finish {
-        channel::Finish::Ended { outcome } => wire::Finish::Ended { outcome },
-        channel::Finish::Parked { snapshot } => wire::Finish::Parked { snapshot },
-        channel::Finish::Failed { failure } => wire::Finish::Failed { failure: run_failure(failure) },
-    }
-}
-
-const fn run_failure(failure: channel::RunFailure) -> wire::RunFailure {
-    match failure {
-        channel::RunFailure::Model => wire::RunFailure::Model,
-        channel::RunFailure::Budget => wire::RunFailure::Budget,
-        channel::RunFailure::Policy => wire::RunFailure::Policy,
-        channel::RunFailure::Cancelled => wire::RunFailure::Cancelled,
-        channel::RunFailure::Stale => wire::RunFailure::Stale,
-        channel::RunFailure::Exhausted => wire::RunFailure::Exhausted,
-    }
-}
-
 pub(crate) const fn fault(fault: agent::Fault) -> host::AgentFailure {
     match fault {
         agent::Fault::Exited => host::AgentFailure::Exited,
-        agent::Fault::Rules => host::AgentFailure::Rules,
+        agent::Fault::Rules | agent::Fault::TooLarge => host::AgentFailure::Rules,
         agent::Fault::NoProgress => host::AgentFailure::NoProgress,
         agent::Fault::WallTime => host::AgentFailure::WallTime,
     }
@@ -272,7 +204,7 @@ pub(crate) const fn bounce(bounce: agent::Bounce) -> wire::Bounce {
     match bounce {
         agent::Bounce::TooLarge => wire::Bounce::TooLarge,
         agent::Bounce::Full => wire::Bounce::Full,
-        agent::Bounce::Ending => wire::Bounce::Ending,
+        agent::Bounce::ReusedName | agent::Bounce::Ending => wire::Bounce::Ending,
     }
 }
 
@@ -296,38 +228,6 @@ const fn push_reason(fault: git::Fault) -> wire::PushReason {
         git::Fault::Broken => wire::PushReason::Broken,
         git::Fault::TimedOut => wire::PushReason::TimedOut,
         git::Fault::Cancelled => wire::PushReason::Cancelled,
-    }
-}
-
-fn channel_failure(failure: &wire::PushFailure) -> agent::PushFailure {
-    let wire::PushFailure { repository, reason, diagnostic } = failure;
-    let reason = match reason {
-        wire::PushReason::MissingRepository => agent::PushReason::MissingRepository,
-        wire::PushReason::MissingBranch => agent::PushReason::MissingBranch,
-        wire::PushReason::MissingCommit => agent::PushReason::MissingCommit,
-        wire::PushReason::Refused => agent::PushReason::Refused,
-        wire::PushReason::Unreachable => agent::PushReason::Unreachable,
-        wire::PushReason::Broken => agent::PushReason::Broken,
-        wire::PushReason::TimedOut => agent::PushReason::TimedOut,
-        wire::PushReason::Cancelled => agent::PushReason::Cancelled,
-        wire::PushReason::Unavailable => agent::PushReason::Unavailable,
-        wire::PushReason::Busy => agent::PushReason::Busy,
-        wire::PushReason::TooLarge => agent::PushReason::TooLarge,
-        wire::PushReason::Nothing => agent::PushReason::Nothing,
-        wire::PushReason::Unknown => agent::PushReason::Unknown,
-    };
-    agent::PushFailure {
-        repository: *repository,
-        reason,
-        diagnostic: agent::PushDiagnostic::new(diagnostic.output(), diagnostic.cut()),
-    }
-}
-
-pub(crate) fn finish_v2(finish: channel::FinishV2) -> wire::FinishV2 {
-    match finish {
-        channel::FinishV2::Ended { outcome } => wire::FinishV2::Ended { outcome },
-        channel::FinishV2::Parked => wire::FinishV2::Parked,
-        channel::FinishV2::Failed { failure } => wire::FinishV2::Failed { failure: run_failure(failure) },
     }
 }
 
@@ -384,4 +284,21 @@ pub(crate) fn summarize(push: Box<[wire::Landing]>) -> wire::Push {
     } else {
         wire::Push::Nothing
     }
+}
+
+/// The specified opaque name: activation, completion, position, all big endian.
+pub(crate) fn call_name(name: agent::CallName) -> [u8; 16] {
+    let mut writer = skein_lib::Writer::new(16);
+    writer.put(&name.activation.to_be_bytes()).expect("sized call name");
+    writer.put(&name.completion.to_be_bytes()).expect("sized call name");
+    writer.put(&name.position.to_be_bytes()).expect("sized call name");
+    writer.finish().as_ref().try_into().expect("sixteen call-name bytes")
+}
+
+pub(crate) fn named(bytes: &[u8]) -> Option<agent::CallName> {
+    if bytes.len() != 16 {
+        return None;
+    }
+    let mut reader = skein_lib::Reader::new(bytes);
+    Some(agent::CallName { activation: reader.u64()?, completion: reader.u32()?, position: reader.u32()? })
 }

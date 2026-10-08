@@ -25,7 +25,7 @@
 //!   come after its attempt's answer, as may the run's facts ([`Told`]): the
 //!   engine drops them.
 //! - io's agent processes and their channels, as the agent child domain defines
-//!   them (`temper_worker_domain_agent`): a [`Request::Spawn`] is ended by one
+//!   them (`smith_host_domain`): a [`Request::Spawn`] is ended by one
 //!   [`Event::Spawned`] or [`Event::Unspawned`]; a [`Request::Send`] by one
 //!   [`Event::Sent`] or [`Event::Unsent`]; a [`Request::Read`] by one
 //!   [`Event::Received`], [`Event::Malformed`] or [`Event::Hangup`]; a
@@ -49,7 +49,7 @@ use alloc::boxed::Box;
 
 use crate::wire;
 use skein_lib::{Duration, Time, Token};
-use temper_worker_domain_agent::{self as agent, channel};
+use smith_host_domain::{self as agent, channel};
 use temper_worker_domain_checkout::git;
 
 /// protocol -> domain
@@ -80,17 +80,6 @@ pub enum Event {
         answer: Box<[u8]>,
     },
     ConnectedV2,
-    /// Stable wire call name and the exact local delivery it answers.
-    RelayedV2 {
-        run: Token,
-        attempt: Token,
-        call: Token,
-        delivery: Token,
-        answer: Box<[u8]>,
-    },
-    AssignV2 {
-        assignment: wire::AssignmentV2,
-    },
     AcknowledgeTurn {
         run: Token,
         attempt: Token,
@@ -101,23 +90,8 @@ pub enum Event {
         attempt: Token,
         turn: u32,
     },
-    /// The channel to the engine opened: the worker says hello next.
-    Connected,
     /// Terminal for `Dial`: the channel to the engine closed, or never opened.
     Lost,
-    /// From the engine, a call: host the run of `assignment`, and answer once
-    /// it has ended.
-    Assign {
-        assignment: wire::Assignment,
-    },
-    /// From the engine: an inbound event for the run `run`'s attempt
-    /// `attempt`.
-    Inbound {
-        run: Token,
-        attempt: Token,
-        name: Token,
-        event: Box<[u8]>,
-    },
     /// From the engine: cancel the run `run`'s attempt `attempt`.
     Cancel {
         run: Token,
@@ -127,14 +101,6 @@ pub enum Event {
         run: Token,
         attempt: Token,
         grant: wire::Grant,
-    },
-    /// From the engine: the answer to the relayed call `call` of the run
-    /// `run`'s attempt `attempt`.
-    Relayed {
-        run: Token,
-        attempt: Token,
-        call: Token,
-        answer: Box<[u8]>,
     },
     /// Terminal for a cancelled relay delivery and wait.
     RelayCancelled {
@@ -234,34 +200,9 @@ pub enum Request {
         attempt: Token,
         answer: wire::AnswerV2,
     },
-    RelayV2 {
-        run: Token,
-        attempt: Token,
-        call: Token,
-        delivery: Token,
-        body: Box<[u8]>,
-    },
     /// Open the channel to the engine. Ended by one `Lost`, after a
     /// `Connected` if it opened.
     Dial,
-    /// To the engine, first on every channel: what the worker is and hosts.
-    Hello {
-        hello: Hello,
-    },
-    /// To the engine, the answer to an `Assign`: exactly one per assignment.
-    Answer {
-        run: Token,
-        attempt: Token,
-        answer: wire::Answer,
-    },
-    /// To the engine: a host call of the run `run`'s attempt `attempt`, which
-    /// the worker names `call`, relayed as it is.
-    Relay {
-        run: Token,
-        attempt: Token,
-        call: Token,
-        body: Box<[u8]>,
-    },
     /// Cancel a relay delivery and wait. Its original request still ends
     /// exactly once with `Relayed` or `RelayCancelled`; remote effects remain.
     CancelRelay {

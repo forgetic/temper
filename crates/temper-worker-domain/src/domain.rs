@@ -16,7 +16,7 @@
 
 use jig_host as host;
 use skein_lib::{Env, Id, Map, Queue, Slab, Time, Token};
-use temper_worker_domain_agent as agent;
+use smith_host_domain as agent;
 use temper_worker_domain_checkout as checkout;
 
 use crate::boundary::{Event, Request, Told};
@@ -33,13 +33,13 @@ use crate::workspace::{Items, Workspace};
 /// kept while the engine was out of reach.
 /// The loop reserves this much room in `out` before calling it.
 #[must_use]
-pub const fn max_out(limits: &Limits) -> u32 {
-    let bounces = limits.host.slots.saturating_mul(limits.host.held.saturating_add(limits.agent.events));
+pub fn max_out(limits: &Limits) -> u32 {
+    let bounces = limits.host.slots.saturating_mul(limits.host.held.saturating_add(limits.agent.messages));
     limits::routed(limits)
         .saturating_add(limits.host.slots)
         .saturating_add(limits.stalled)
         .saturating_add(bounces)
-        .saturating_add(limits.host.slots.saturating_mul(limits.host.turns))
+        .saturating_add(limits.host.slots.saturating_mul(limits.host.turns).saturating_mul(2))
 }
 
 /// The worker domain's state: its child domains', the engine link, what it
@@ -50,6 +50,7 @@ pub struct Domain {
     pub(crate) host: host::Domain,
     pub(crate) checkout: checkout::Domain,
     pub(crate) agent: agent::Domain,
+    pub(crate) bindings: crate::agents::Bindings,
     pub(crate) link: Link,
     /// The workspaces the host asked for, until the checkout has released
     /// them.
@@ -81,6 +82,7 @@ impl Domain {
             host: host::Domain::new(&limits.host),
             checkout: checkout::Domain::new(&limits.checkout),
             agent: agent::Domain::new(&limits.agent),
+            bindings: crate::agents::Bindings::new(limits),
             link: Link::new(limits, seed),
             workspaces: Slab::with_capacity(slots),
             items: Slab::with_capacity(slots.saturating_add(1)),
@@ -268,7 +270,10 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
             }
         }
     } else if agent_due {
-        assert!(domain.agent_out.room() >= agent::MAX_OUT, "an entry point steps the agents no more than its bound");
+        assert!(
+            domain.agent_out.room() >= agent::max_out(&env.limits.agent),
+            "an entry point steps the agents no more than its bound"
+        );
         agent::fire(&mut domain.agent, &route::agent_env(env), &mut domain.agent_out);
     }
     settle(domain, env, out);

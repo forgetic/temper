@@ -14,7 +14,7 @@ fn fenced_turns_survive_busy_reconnect_and_crossed_acknowledgements() {
     assert!(stats.copies > stats.turns);
     assert_eq!(stats.busy, stats.turns);
     assert!(stats.reconnects > stats.turns);
-    assert!(stats.peak_retained <= 3);
+    assert!(stats.peak_retained <= 6);
     assert_eq!(stats.saves, 1);
 }
 

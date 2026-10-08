@@ -31,7 +31,6 @@ members = [
     "jig/crates/jig-core-tasks",
     "jig/crates/jig-core-views",
     "crates/temper-worker-domain",
-    "crates/temper-worker-domain-agent",
     "crates/temper-worker-domain-checkout",
     "jig/crates/jig-host",
     "jig/crates/jig-charter",
@@ -52,7 +51,6 @@ members = [
     "jig/tests/tasks",
     "jig/tests/views",
     "tests/fake-forge",
-    "tests/worker/agent",
     "tests/worker/checkout",
     "jig/tests/host",
     "tests/worker/domain",
@@ -112,7 +110,6 @@ temper-engine-domain-forge-issues = { path = "crates/temper-engine-domain-forge-
 temper-engine-domain-forge = { path = "crates/temper-engine-domain-forge" }
 jig-core-views = { path = "jig/crates/jig-core-views" }
 temper-worker-domain = { path = "crates/temper-worker-domain" }
-temper-worker-domain-agent = { path = "crates/temper-worker-domain-agent" }
 temper-worker-domain-checkout = { path = "crates/temper-worker-domain-checkout" }
 jig-host = { path = "jig/crates/jig-host" }
 jig-charter = { path = "jig/crates/jig-charter" }

@@ -23,13 +23,6 @@ pub struct Assignment {
     pub grants: Box<[Grant]>,
 }
 
-/// An explicit second-version assignment. A snapshot is invalid here.
-#[derive(PartialEq, Eq, Hash, Debug)]
-pub struct AssignmentV2 {
-    pub assignment: Assignment,
-    pub transcript: Option<Box<[u8]>>,
-}
-
 /// The agent's ordered committed conversation state for a new activation.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct AssignmentTyped {
@@ -117,53 +110,9 @@ pub enum Access {
         expected: Option<[u8; 32]>,
     },
     ReadOnly,
-    /// A change is pushed to `push`.
-    Writable {
-        push: Box<[u8]>,
-    },
 }
 
 /// A host call of a run.
-#[derive(PartialEq, Eq, Hash, Debug)]
-pub enum Ask {
-    PushV2 {
-        title: Box<[u8]>,
-        body: Box<[u8]>,
-    },
-    /// Commit what the checkout holds, with `message`, and push it. The host
-    /// serves it.
-    Push {
-        message: Box<[u8]>,
-    },
-    /// A forge read or an outlet, relayed to the engine as it is.
-    Relay {
-        body: Box<[u8]>,
-    },
-}
-
-/// The answer to a host call.
-#[derive(PartialEq, Eq, Hash, Debug)]
-#[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
-pub enum Reply {
-    /// The engine's answer to a relayed call, as it is.
-    Relayed { answer: Box<[u8]> },
-    /// How the push went.
-    Pushed(Push),
-    /// The run is cancelled or ending: nothing was done. A push in flight as
-    /// the run leaves live is waited for, and answered with how it went.
-    Unavailable,
-    /// The run withdrew the relayed call: nothing more is done for it, and
-    /// the engine's answer, if one comes, is dropped.
-    Withdrawn,
-    /// The run has as many calls in flight as it may, or a push in flight
-    /// already: nothing was done. Calls answered within the loop's current
-    /// iteration keep their slots until its reclaim point, so a busy call may
-    /// find room in the next.
-    Busy,
-}
-
-/// How a push went, as the run is told: done only if every repository with a
-/// change landed it. A push the forge refused failed, as the run sees it.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 #[expect(clippy::large_enum_variant, reason = "bounded diagnostics stay inline and are included in worst_case")]
 pub enum Push {
@@ -208,20 +157,6 @@ pub enum Landing {
     Refused,
     /// It had no change.
     Unchanged,
-}
-
-/// The answer to an `Assign`.
-#[derive(PartialEq, Eq, Hash, Debug)]
-pub enum Answer {
-    /// Refused at the entrance: nothing was done.
-    Refused(Refusal),
-    /// The run ended with `outcome`.
-    Ended { outcome: Box<[u8]>, work: Work },
-    /// The run parked, with its snapshot if it had one.
-    Parked { snapshot: Option<Box<[u8]>>, work: Work },
-    /// The run failed, for `failure`; `detail` is for operators, never for an
-    /// LLM.
-    Failed { failure: Failure, detail: Box<[u8]>, work: Work },
 }
 
 /// What a run left on the forge: the repositories its pushes landed in, by

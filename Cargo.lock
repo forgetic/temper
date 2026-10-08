@@ -820,15 +820,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-worker-agent-world"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
- "temper-worker-domain-agent",
- "temper-world",
-]
-
-[[package]]
 name = "temper-worker-checkout-world"
 version = "0.0.0"
 dependencies = [
@@ -847,15 +838,7 @@ dependencies = [
  "skein-lib",
  "smith-channel",
  "smith-host-domain",
- "temper-worker-domain-agent",
  "temper-worker-domain-checkout",
-]
-
-[[package]]
-name = "temper-worker-domain-agent"
-version = "0.0.0"
-dependencies = [
- "skein-lib",
 ]
 
 [[package]]
@@ -870,6 +853,7 @@ name = "temper-worker-domain-world"
 version = "0.0.0"
 dependencies = [
  "skein-lib",
+ "smith-channel",
  "temper-worker-domain",
  "temper-world",
 ]

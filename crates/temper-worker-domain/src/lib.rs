@@ -14,7 +14,7 @@
 //! temper-worker-domain                 faces the protocol; the engine link; routes; translates
 //! ├── jig-host        hosted runs: admit, prepare, start, relay, park or end
 //! ├── temper-worker-domain-checkout    workspaces: prepare, commit, push, save; the cache
-//! └── temper-worker-domain-agent       agent processes: spawn, channel, watchdog, cancel then kill
+//! └── smith-host-domain       agent processes: spawn, channel, watchdog, cancel then kill
 //! ```
 //!
 //! It owns its children's state and routes each event to the child it is for
@@ -55,6 +55,7 @@
 
 extern crate alloc;
 
+mod agents;
 mod assignment;
 mod boundary;
 mod delivery_evidence;
@@ -64,6 +65,7 @@ mod limits;
 mod link;
 mod push;
 mod route;
+mod smith_delivery;
 #[cfg(test)]
 mod tests;
 mod translate;
@@ -77,5 +79,5 @@ pub use facts::Fact;
 pub use limits::{Limits, declared_graces, push_deadline, worst_case};
 // The payloads are the children's: a parent may use its children's types.
 pub use jig_host as host;
-pub use temper_worker_domain_agent as agent;
+pub use smith_host_domain as agent;
 pub use temper_worker_domain_checkout as checkout;
