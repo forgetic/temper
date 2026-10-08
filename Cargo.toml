@@ -8,12 +8,15 @@ members = [
     "crates/temper-engine-smith",
     "jig/crates/jig-core-accounts",
     "jig/testing/jig-test-connector",
+    "jig/testing/jig-test-domain",
+    "jig/testing/jig-fake-store",
     "jig/testing/jig-test-system",
     "jig/testing/jig-ops-fake-production",
     "jig/examples/ops/domain-observability",
     "jig/examples/ops/domain-infrastructure",
     "jig/tests/ops",
     "jig/tests/test-connector",
+    "jig/tests/core",
     "jig/crates/jig-core-authority",
     "jig/crates/jig-core-brief",
     "jig/crates/jig-core-fleet",
@@ -84,6 +87,8 @@ temper-web-view = { path = "crates/temper-web-view" }
 temper-fake-person = { path = "testing/temper-fake-person" }
 jig-core-accounts = { path = "jig/crates/jig-core-accounts" }
 jig-test-connector = { path = "jig/testing/jig-test-connector" }
+jig-test-domain = { path = "jig/testing/jig-test-domain" }
+jig-fake-store = { path = "jig/testing/jig-fake-store" }
 jig-test-system = { path = "jig/testing/jig-test-system" }
 jig-ops-fake-production = { path = "jig/testing/jig-ops-fake-production" }
 jig-ops-domain-observability = { path = "jig/examples/ops/domain-observability" }

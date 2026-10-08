@@ -176,6 +176,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-core-world"
+version = "0.0.0"
+dependencies = [
+ "jig-core",
+ "jig-core-accounts",
+ "jig-core-authority",
+ "jig-core-brief",
+ "jig-core-fleet",
+ "jig-core-notes",
+ "jig-core-people",
+ "jig-core-tasks",
+ "jig-core-views",
+ "jig-fake-store",
+ "jig-test-connector",
+ "jig-test-connector-world",
+ "jig-test-domain",
+ "jig-test-system",
+ "skein-lib",
+ "skein-world",
+]
+
+[[package]]
+name = "jig-fake-store"
+version = "0.0.0"
+dependencies = [
+ "jig-test-connector",
+ "jig-test-domain",
+]
+
+[[package]]
 name = "jig-fleet-world"
 version = "0.0.0"
 dependencies = [
@@ -292,6 +322,20 @@ version = "0.0.0"
 dependencies = [
  "jig-test-connector",
  "jig-test-system",
+ "skein-lib",
+]
+
+[[package]]
+name = "jig-test-domain"
+version = "0.0.0"
+dependencies = [
+ "jig-core",
+ "jig-core-accounts",
+ "jig-core-fleet",
+ "jig-core-notes",
+ "jig-core-people",
+ "jig-core-tasks",
+ "jig-test-connector",
  "skein-lib",
 ]
 
