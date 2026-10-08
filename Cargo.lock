@@ -121,6 +121,7 @@ dependencies = [
  "jig-conformance",
  "jig-core",
  "jig-core-accounts",
+ "jig-core-authority",
  "jig-core-fleet",
  "jig-core-notes",
  "jig-core-people",
