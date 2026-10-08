@@ -200,10 +200,6 @@ dependencies = [
 [[package]]
 name = "jig-fake-store"
 version = "0.0.0"
-dependencies = [
- "jig-test-connector",
- "jig-test-domain",
-]
 
 [[package]]
 name = "jig-fleet-world"
