@@ -47,7 +47,11 @@ impl Harness {
                 Request::Outcome { entry, task: _, outcome } => {
                     match outcome {
                         Outcome::Uncertain => {}
-                        Outcome::Made { .. } | Outcome::Failed(_) | Outcome::Raced { .. } | Outcome::Withdrawn => {
+                        Outcome::Made { .. }
+                        | Outcome::Failed(_)
+                        | Outcome::Raced { .. }
+                        | Outcome::Held
+                        | Outcome::Withdrawn => {
                             self.store.remove(&entry).expect("top removes settled entry");
                         }
                     }
@@ -193,7 +197,7 @@ fn start_and_attempt_are_durable_before_the_first_write() {
     assert_eq!(sent.op, Op::Write(comment()));
     let entry = h.store.get(&1).unwrap();
     assert_eq!(entry.start.unwrap().at, at(100));
-    assert_eq!(entry.attempt.unwrap().deadline, at(110));
+    assert_eq!(entry.attempt.unwrap().deadline, at(111));
     h.answer(sent, Ok(Answer::Commented(42)));
     assert_eq!(h.outcomes.as_slice(), &[(1, Outcome::Made { made: Made::Commented(42), found: false })]);
     assert!(h.store.is_empty());
@@ -224,7 +228,7 @@ fn an_uncertain_comment_is_found_by_key_without_a_second_write() {
     );
 }
 #[test]
-fn restart_keeps_the_original_deadline_despite_backward_wall_or_new_limits() {
+fn restart_keeps_the_original_deadline_and_holds_an_unrecoverable_write() {
     let mut h = Harness::new();
     h.make(1, comment(), Condition::None);
     h.clock();
@@ -235,15 +239,16 @@ fn restart_keeps_the_original_deadline_despite_backward_wall_or_new_limits() {
     h.restart(105, 50, RecoveryClock::Monotonic);
     let find = h.one();
     h.answer(find, Ok(Answer::Item { item: summary(), comments: Box::new([]), more: false }));
-    assert_eq!(h.domain.next_deadline(), Some(at(110)));
+    assert_eq!(h.domain.next_deadline(), Some(at(111)));
     assert_eq!(h.store.get(&1).unwrap(), &original);
     assert!(h.send().is_none());
-    h.fire(110);
+    h.fire(111);
     let find = h.one();
     h.answer(find, Ok(Answer::Item { item: summary(), comments: Box::new([]), more: false }));
-    let retry = h.one();
-    assert_eq!(retry.op, Op::Write(comment()));
-    assert_eq!(h.store.get(&1).unwrap().start, original.start);
+    assert!(h.send().is_none());
+    assert_eq!(h.writes, 1);
+    assert_eq!(h.outcomes.as_slice().last(), Some(&(1, Outcome::Held)));
+    assert!(h.store.is_empty());
 }
 #[test]
 fn a_changed_monotonic_origin_uses_the_saved_absolute_expiry() {
@@ -255,8 +260,8 @@ fn a_changed_monotonic_origin_uses_the_saved_absolute_expiry() {
     h.restart(5, 105, RecoveryClock::Wall);
     let find = h.one();
     h.answer(find, Ok(Answer::Item { item: summary(), comments: Box::new([]), more: false }));
-    assert_eq!(h.domain.next_deadline(), Some(at(10)));
-    assert_eq!(h.store.get(&1).unwrap().attempt.unwrap().expires.as_nanos(), at(110).as_nanos());
+    assert_eq!(h.domain.next_deadline(), Some(at(11)));
+    assert_eq!(h.store.get(&1).unwrap().attempt.unwrap().expires.as_nanos(), at(111).as_nanos());
 }
 #[test]
 fn lane_order_and_cancellation_hold_while_a_capture_call_is_out() {
@@ -406,9 +411,9 @@ fn an_uncertain_set_waits_for_its_original_lifetime_without_neighbor_probes() {
     let write = h.one();
     h.answer(write, Err(Error::Timeout));
     assert!(h.send().is_none());
-    assert_eq!(h.domain.next_deadline(), Some(at(110)));
+    assert_eq!(h.domain.next_deadline(), Some(at(111)));
     assert_eq!(h.writes, 1);
-    h.fire(110);
+    h.fire(111);
     assert!(h.send().is_none());
     let write = h.one();
     assert_eq!(write.op, Op::Write(Write::Close { number: 9 }));
@@ -537,9 +542,9 @@ fn revised_or_unknown_comments_do_not_settle_an_uncertain_creation() {
         h.answer(find, Ok(Answer::Item { item: summary(), comments: Box::new([row]), more: false }));
         assert_eq!(h.outcomes.as_slice(), &[(1, Outcome::Uncertain)]);
         assert_eq!(h.writes, 1);
-        assert_eq!(h.domain.next_deadline(), Some(at(110)));
+        assert_eq!(h.domain.next_deadline(), Some(at(111)));
         assert!(h.send().is_none());
-        h.fire(110);
+        h.fire(111);
         let find = h.one();
         let original = api::Comment {
             provenance: api::Provenance::Original,
@@ -608,7 +613,7 @@ fn review_recovery_rejects_revised_or_unknown_rows_before_classifying_the_head()
             assert_eq!(h.outcomes.as_slice(), &[(1, Outcome::Uncertain)]);
             assert_eq!(h.writes, 1);
             assert_eq!(h.store.get(&1).expect("unknown entry remains").start.expect("durable boundary").review, 5);
-            assert_eq!(h.domain.next_deadline(), Some(at(110)));
+            assert_eq!(h.domain.next_deadline(), Some(at(111)));
             assert!(h.send().is_none());
         }
     }

@@ -48,6 +48,7 @@ fn run(settings: Settings) -> temper_engine_forge_client_world::Stats {
             | Outcome::Failed(_)
             | Outcome::Raced { .. }
             | Outcome::Uncertain
+            | Outcome::Held
             | Outcome::Withdrawn => {}
         }
     }

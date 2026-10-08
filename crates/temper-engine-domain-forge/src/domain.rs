@@ -124,6 +124,15 @@ pub struct Domain {
 }
 
 impl Domain {
+    /// Bind agent and projection keys to the durable deployment ID before
+    /// connector records are restored.
+    pub fn bind_deployment(&mut self, id: [u8; 16], limits: &Limits) -> bool {
+        if !self.client.bind_deployment(id, &limits.client) {
+            return false;
+        }
+        self.namespace = Box::from(id);
+        true
+    }
     /// Construct a connector with a configured client writer and deployment
     /// namespace; invalid limits or writer configuration are refused.
     pub fn new(l: &Limits, seed: u64, config: client::Config) -> Result<Domain, client::api::Error> {
@@ -601,6 +610,7 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                     | client::Outcome::Failed(_)
                     | client::Outcome::Raced { .. }
                     | client::Outcome::Uncertain
+                    | client::Outcome::Held
                     | client::Outcome::Withdrawn => {}
                 }
                 match outcome {
@@ -608,6 +618,7 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                     client::Outcome::Made { .. }
                     | client::Outcome::Failed(_)
                     | client::Outcome::Raced { .. }
+                    | client::Outcome::Held
                     | client::Outcome::Withdrawn => {
                         d.entries.remove(&entry);
                         emit(out, Request::Erase { key: Key::Entry(entry) });
@@ -1874,9 +1885,10 @@ fn change_outcome(d: &mut Domain, env: &Env<Limits>, entry: u64, outcome: client
     row.effect = match outcome {
         client::Outcome::Made { .. } => change::EffectResult::Made,
         client::Outcome::Failed(client::api::Error::Conflict) => change::EffectResult::Conflict,
-        client::Outcome::Failed(_) | client::Outcome::Raced { .. } | client::Outcome::Withdrawn => {
-            change::EffectResult::Failed
-        }
+        client::Outcome::Failed(_)
+        | client::Outcome::Raced { .. }
+        | client::Outcome::Held
+        | client::Outcome::Withdrawn => change::EffectResult::Failed,
         client::Outcome::Uncertain => return,
     };
     row.pending = None;
@@ -1910,6 +1922,7 @@ fn change_outcome(d: &mut Domain, env: &Env<Limits>, entry: u64, outcome: client
         | client::Outcome::Failed(_)
         | client::Outcome::Raced { .. }
         | client::Outcome::Uncertain
+        | client::Outcome::Held
         | client::Outcome::Withdrawn => {}
     }
     emit(out, Request::ChangeDecision { task, decision: change::Decision::None, entry: None, evidence: None });
@@ -2207,7 +2220,10 @@ fn release_outcome(d: &mut Domain, entry: u64, outcome: client::Outcome, out: &m
             }
             None => row.close_pull = None,
         },
-        client::Outcome::Failed(_) | client::Outcome::Raced { .. } | client::Outcome::Withdrawn => {
+        client::Outcome::Failed(_)
+        | client::Outcome::Raced { .. }
+        | client::Outcome::Held
+        | client::Outcome::Withdrawn => {
             row.failed = true;
             emit(out, Request::ReleaseFailed { task });
         }
@@ -2333,47 +2349,20 @@ fn project_write(d: &Domain, row: &IssueRow, effect: issues::Effect, l: &Limits)
 }
 
 fn projection_key(namespace: &[u8], goal: u64, key: issues::Key, l: &Limits) -> Option<Box<[u8]>> {
-    let count = namespace.len().checked_add(3)?.checked_add(8)?.checked_add(9)?;
-    if count > usize::try_from(l.client.op_bytes).ok()? {
-        return None;
-    }
-    let mut bytes = List::with_capacity(u32::try_from(count).ok()?);
-    bytes.push(1).ok()?;
-    let length = u16::try_from(namespace.len()).ok()?.to_be_bytes();
-    for byte in length {
-        bytes.push(byte).ok()?;
-    }
-    for byte in namespace {
-        bytes.push(*byte).ok()?;
-    }
-    for byte in goal.to_be_bytes() {
-        bytes.push(byte).ok()?;
-    }
-    match key {
-        issues::Key::Open => bytes.push(1).ok()?,
-        issues::Key::Body(revision) => {
-            bytes.push(2).ok()?;
-            for byte in revision.to_be_bytes() {
-                bytes.push(byte).ok()?;
-            }
-        }
-        issues::Key::Milestone(milestone) => {
-            let (kind, number) = match milestone {
-                issues::MilestoneKey::PlanAccepted => (3, 0),
-                issues::MilestoneKey::Revision(number) => (4, number),
-                issues::MilestoneKey::ChangeLanded(number) => (5, number),
-                issues::MilestoneKey::ChangeHeld(number) => (6, number),
-                issues::MilestoneKey::Report(number) => (7, number),
-                issues::MilestoneKey::Finished => (8, 0),
-            };
-            bytes.push(kind).ok()?;
-            for byte in number.to_be_bytes() {
-                bytes.push(byte).ok()?;
-            }
-        }
-        issues::Key::Close => bytes.push(9).ok()?,
-    }
-    Some(bytes.into_boxed())
+    let (part, number) = match key {
+        issues::Key::Open => (1, 0),
+        issues::Key::Body(revision) => (2, revision),
+        issues::Key::Milestone(milestone) => match milestone {
+            issues::MilestoneKey::PlanAccepted => (3, 0),
+            issues::MilestoneKey::Revision(number) => (4, number),
+            issues::MilestoneKey::ChangeLanded(number) => (5, number),
+            issues::MilestoneKey::ChangeHeld(number) => (6, number),
+            issues::MilestoneKey::Report(number) => (7, number),
+            issues::MilestoneKey::Finished => (8, 0),
+        },
+        issues::Key::Close => (9, 0),
+    };
+    client::effect_key(namespace, &client::EffectPurpose::Projection { goal, part, number }, l.client.op_bytes)
 }
 
 fn projection_outcome(d: &mut Domain, entry: u64, outcome: client::Outcome, out: &mut Queue<Request>) {
@@ -2400,7 +2389,10 @@ fn projection_outcome(d: &mut Domain, entry: u64, outcome: client::Outcome, out:
                 }
             }
         }
-        client::Outcome::Failed(_) | client::Outcome::Raced { .. } | client::Outcome::Withdrawn => {
+        client::Outcome::Failed(_)
+        | client::Outcome::Raced { .. }
+        | client::Outcome::Held
+        | client::Outcome::Withdrawn => {
             if let Some(before) = row.before.take() {
                 row.state = before;
             }

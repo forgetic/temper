@@ -27,7 +27,7 @@ pub use boundary::{
 };
 pub use domain::{Domain, fire, max_out, resume, step};
 pub use facts::{Fact, Priority};
-pub use identity::{Config, Writer};
+pub use identity::{Config, EffectPurpose, Writer, effect_key};
 pub use limits::{Limits, worst_case};
 /// Checked deep payload bytes of one durable client row.
 #[must_use]

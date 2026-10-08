@@ -7,6 +7,7 @@
 //! before releasing any call from that decision.
 use crate::{Event, Fact, Limits, Priority, Request, Resource, Stored, outbox};
 use crate::{api, bounds, calls, keep};
+use alloc::boxed::Box;
 use skein_lib::{Deadlines, Env, Id, Queue, Rng, Time};
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub(crate) enum Alarm {
@@ -45,6 +46,20 @@ impl Domain {
             return Err(api::Error::TooLarge);
         }
         Ok(Self::construct(l, seed, Some(config)))
+    }
+    /// Rebind the key namespace to the deployment ID loaded from the store,
+    /// before restored entries or live resources are handed to the client.
+    pub fn bind_deployment(&mut self, id: [u8; 16], limits: &Limits) -> bool {
+        let Some(config) = &mut self.config else {
+            return false;
+        };
+        let prior = core::mem::replace(&mut config.namespace, Box::from(id));
+        if crate::identity::valid(config, limits) {
+            true
+        } else {
+            config.namespace = prior;
+            false
+        }
     }
     fn construct(l: &Limits, seed: u64, config: Option<crate::Config>) -> Domain {
         assert!(crate::worst_case(l).is_some(), "forge client limits are valid");

@@ -228,6 +228,8 @@ pub enum Outcome {
     Raced { made: Made, why: Error },
     /// The write may still land and will be sought again.
     Uncertain,
+    /// The write may still land, but Forgejo cannot make its retry safe.
+    Held,
     /// The top withdrew the unsent effect.
     Withdrawn,
 }

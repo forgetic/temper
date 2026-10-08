@@ -936,15 +936,13 @@ impl Domain {
                 projects.push(owner.project).expect("configured projects bounded");
             }
         }
-        let mut forge = forge::Domain::new(
-            &limits.forge,
-            config.seed,
-            core::mem::replace(
-                &mut config.forge,
-                forge_client::Config { namespace: Box::new([]), writers: Box::new([]) },
-            ),
-        )
-        .expect("valid forge configuration");
+        let mut forge_config = core::mem::replace(
+            &mut config.forge,
+            forge_client::Config { namespace: Box::new([]), writers: Box::new([]) },
+        );
+        forge_config.namespace = Box::from(config.deployment);
+        let mut forge =
+            forge::Domain::new(&limits.forge, config.seed, forge_config).expect("valid forge configuration");
         let built = policy_translate::build_landing(
             &config.landing.deployment,
             false,
@@ -7319,6 +7317,10 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             }
         }
         Record::Deployment(deployment) => {
+            if !domain.forge.bind_deployment(deployment.id, &env.limits.forge) {
+                domain.startup = Startup::Failed;
+                return;
+            }
             match domain.core.restore_core(jig_core::CoreRecord::Deployment(deployment), &core_limits(&env.limits)) {
                 jig_core::Restored::Deployment { commits } => {
                     domain.journal = Journal::from_durable(&root_journal_limits(&env.limits), commits);

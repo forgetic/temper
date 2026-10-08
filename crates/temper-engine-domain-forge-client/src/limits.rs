@@ -28,7 +28,10 @@ pub struct Limits {
     pub backoff_max: Duration,
     pub entries: u32,
     pub write_attempts: u32,
+    /// Longest time a sent write may still arrive at Forgejo.
     pub lifetime: Duration,
+    /// Allowance for the wall clock moving forward between hosts or restarts.
+    pub clock_margin: Duration,
     pub resources: u32,
     pub repositories: u32,
     pub poll: Duration,
@@ -54,6 +57,7 @@ pub fn worst_case(l: &Limits) -> Option<u64> {
         || l.entries == 0
         || l.write_attempts == 0
         || l.lifetime == Duration::ZERO
+        || l.clock_margin == Duration::ZERO
         || l.rows == 0
         || l.inbox == 0
         || l.resources == 0

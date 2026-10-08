@@ -21,6 +21,7 @@ const CLIENT: client::Limits = client::Limits {
     entries: 8,
     write_attempts: 3,
     lifetime: Duration::from_secs(10),
+    clock_margin: Duration::from_secs(1),
     resources: 8,
     repositories: 2,
     poll: Duration::from_secs(5),

@@ -243,6 +243,7 @@ fn forge_outcome(text: &mut Text, outcome: &temper_engine_domain_forge_client::O
             forge_error(text, *why)
         }
         temper_engine_domain_forge_client::Outcome::Uncertain => text.add(b"uncertain; connector will find it"),
+        temper_engine_domain_forge_client::Outcome::Held => text.add(b"uncertain; task held for a person"),
         temper_engine_domain_forge_client::Outcome::Withdrawn => text.add(b"withdrawn before write"),
     }
 }

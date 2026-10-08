@@ -22,6 +22,7 @@ const LIMITS: Limits = Limits {
     entries: 4,
     write_attempts: 3,
     lifetime: Duration::from_secs(10),
+    clock_margin: Duration::from_secs(1),
     resources: 4,
     repositories: 2,
     poll: Duration::from_secs(5),
@@ -31,6 +32,25 @@ const LIMITS: Limits = Limits {
     facts: 32,
 };
 const REPO: Repository = Repository { forge: 2, repository: 5 };
+
+#[test]
+fn effect_keys_are_stable_by_purpose_and_separate_deployments() {
+    let purpose = crate::EffectPurpose::Call { task: 7, attempt: 2, completion: 3, position: 4 };
+    let first = crate::effect_key(&[1; 16], &purpose, 44).expect("call key fits");
+    assert_eq!(first, crate::effect_key(&[1; 16], &purpose, 44).expect("same purpose fits"));
+    assert_ne!(first, crate::effect_key(&[2; 16], &purpose, 44).expect("other deployment fits"));
+    assert_ne!(
+        first,
+        crate::effect_key(
+            &[1; 16],
+            &crate::EffectPurpose::Call { task: 7, attempt: 2, completion: 3, position: 5 },
+            44,
+        )
+        .expect("other call fits"),
+    );
+    assert!(crate::effect_key(&[1; 16], &purpose, 43).is_none());
+}
+
 fn at(seconds: u64) -> Time {
     Time::from_nanos(seconds.saturating_mul(1_000_000_000))
 }

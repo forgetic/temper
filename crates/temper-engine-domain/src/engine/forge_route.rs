@@ -370,13 +370,17 @@ fn effect_access(repository: &forge::Repository, what: &forge::What, kind: u16) 
 }
 
 fn effect_key(domain: &Domain, key: CallKey) -> Box<[u8]> {
-    let mut result = List::with_capacity(80);
-    append_hex(&mut result, &domain.core.counters.deployment().id);
-    append_hex(&mut result, &key.task.to_be_bytes());
-    append_hex(&mut result, &key.attempt.to_be_bytes());
-    append_hex(&mut result, &key.completion.to_be_bytes());
-    append_hex(&mut result, &key.position.to_be_bytes());
-    result.into_boxed()
+    forge_client::effect_key(
+        &domain.core.counters.deployment().id,
+        &forge_client::EffectPurpose::Call {
+            task: key.task,
+            attempt: key.attempt,
+            completion: key.completion,
+            position: key.position,
+        },
+        44,
+    )
+    .expect("fixed call key fits its frame")
 }
 
 #[expect(
@@ -1581,20 +1585,10 @@ pub(super) fn start_change(domain: &mut Domain, env: &Env<Limits>, context: &tas
         Some(branch) => branch,
         None => {
             let Some(root) = domain.core.tasks.root(task) else { return false };
-            let root = decimal(root);
-            let task_bytes = decimal(task);
-            let Some(length) = adopted.prefix.len().checked_add(root.len()) else { return false };
-            let Some(length) = length.checked_add(2) else { return false };
-            let Some(length) = length.checked_add(task_bytes.len()) else { return false };
-            if length > usize::try_from(env.limits.forge.name_bytes).expect("u32 fits usize") {
+            let Some(branch) = tree_branch(adopted, root, b'c', task, None, env.limits.forge.name_bytes) else {
                 return false;
-            }
-            let mut out = List::with_capacity(env.limits.forge.name_bytes);
-            append(&mut out, &adopted.prefix);
-            append(&mut out, &root);
-            append(&mut out, b"/c");
-            append(&mut out, &task_bytes);
-            out.into_boxed()
+            };
+            branch
         }
     };
     let Some(parts) = branch_parts(&branch, env.limits.forge.name_bytes) else { return false };
@@ -2260,6 +2254,7 @@ pub(super) fn outputs(
                     }
                     forge_client::Outcome::Withdrawn => jig_core::connector::OutboxOutcome::Withdrawn,
                     forge_client::Outcome::Uncertain => jig_core::connector::OutboxOutcome::Uncertain,
+                    forge_client::Outcome::Held => jig_core::connector::OutboxOutcome::Held { entry },
                 };
                 if let Some(event) = domain.core.connector_outbox(task, result, domain.forge.change(task).is_some()) {
                     domain.work.push(Work::Tasks(event));

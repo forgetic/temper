@@ -11,7 +11,8 @@ use crate::api::{self, Answer, Commit, Error, Op, Read, Repository, Write};
 use crate::calls::{self, Owner};
 use crate::domain::{Alarm, Domain};
 use crate::{
-    Attempt, Condition, Entry, Fact, Limits, Made, Outcome, Position, Priority, RecoveryClock, Request, bounds,
+    Attempt, Condition, Entry, Fact, Limits, Made, Outcome, Position, Priority, Recovery, RecoveryClock, Request,
+    bounds, recovery,
 };
 use skein_lib::{Duration, Env, Map, Queue, Time, Wall};
 
@@ -292,13 +293,10 @@ pub(crate) fn sent(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Que
             if w.entry.start.is_none() {
                 w.entry.start = Some(Position { at: w.clock, ..position });
             }
-            let expires = Wall::from_nanos(env.wall.as_nanos().saturating_add(env.limits.lifetime.as_nanos()));
-            w.entry.attempt = Some(Attempt {
-                sent: env.now,
-                deadline: env.now.saturating_add(env.limits.lifetime),
-                wall: env.wall,
-                expires,
-            });
+            let span = env.limits.lifetime.saturating_add(env.limits.clock_margin);
+            let expires = Wall::from_nanos(env.wall.as_nanos().saturating_add(span.as_nanos()));
+            w.entry.attempt =
+                Some(Attempt { sent: env.now, deadline: env.now.saturating_add(span), wall: env.wall, expires });
             out.push(Request::Progress { entry: w.entry.clone() });
         }
         Phase::Clock
@@ -329,7 +327,7 @@ fn finish(d: &mut Domain, number: u64, outcome: Outcome, out: &mut Queue<Request
     let w = d.outbox.entries.remove(&number).expect("settled entry lives");
     match outcome {
         Outcome::Made { made, .. } | Outcome::Raced { made, .. } => crate::keep::made(d, &w.entry, made, out),
-        Outcome::Failed(_) | Outcome::Uncertain | Outcome::Withdrawn => {}
+        Outcome::Failed(_) | Outcome::Uncertain | Outcome::Held | Outcome::Withdrawn => {}
     }
     d.alarms.cancel(Alarm::Entry(number));
     out.push(Request::Outcome { entry: number, task: w.entry.task, outcome });
@@ -345,15 +343,16 @@ fn remaining(entry: &Entry, clock: RecoveryClock, env: &Env<Limits>) -> Duration
     let attempt = entry.attempt.expect("uncertain entry has an attempt");
     match clock {
         RecoveryClock::Monotonic => attempt.deadline.saturating_since(env.now),
-        RecoveryClock::Wall => Duration::from_nanos(attempt.expires.as_nanos().saturating_sub(env.wall.as_nanos()))
-            .min(attempt.deadline.saturating_since(attempt.sent)),
+        RecoveryClock::Wall => Duration::from_nanos(attempt.expires.as_nanos().saturating_sub(env.wall.as_nanos())),
     }
 }
 fn not_found(d: &mut Domain, env: &Env<Limits>, number: u64, out: &mut Queue<Request>) {
     let w = d.outbox.entries.get(&number).expect("find owns entry");
     let left = remaining(&w.entry, d.outbox.clock, env);
     if left == Duration::ZERO {
-        if w.entry.failures >= env.limits.write_attempts {
+        if recovery(&w.entry.effect.write) == Recovery::Unrecoverable {
+            finish(d, number, Outcome::Held, out);
+        } else if w.entry.failures >= env.limits.write_attempts {
             finish(d, number, Outcome::Failed(Error::Timeout), out);
         } else {
             let phase = check_phase(&w.entry);

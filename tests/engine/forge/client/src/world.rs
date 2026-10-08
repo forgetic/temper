@@ -21,6 +21,7 @@ pub const LIMITS: Limits = Limits {
     entries: 4,
     write_attempts: 5,
     lifetime: Duration::from_secs(10),
+    clock_margin: Duration::from_secs(1),
     resources: 3,
     repositories: 1,
     poll: Duration::from_secs(5),
@@ -348,7 +349,11 @@ impl World {
                 Request::Outcome { entry, outcome, .. } => {
                     match outcome {
                         Outcome::Uncertain => {}
-                        Outcome::Made { .. } | Outcome::Failed(_) | Outcome::Raced { .. } | Outcome::Withdrawn => {
+                        Outcome::Made { .. }
+                        | Outcome::Failed(_)
+                        | Outcome::Raced { .. }
+                        | Outcome::Held
+                        | Outcome::Withdrawn => {
                             self.entries.remove(&entry).expect("top settles stored entry");
                         }
                     }
