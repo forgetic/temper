@@ -5616,3 +5616,40 @@ fn a_typed_call_replay_uses_the_settled_record_without_rendering_again() {
     assert!(!driver.delivered[delivered..].iter().any(|delivery| matches!(delivery, Delivery::Host(host) if matches!(host.as_ref(), engine::HostDelivery::Render { .. }))));
     assert!(driver.delivered[delivered..].iter().any(|delivery| matches!(delivery, Delivery::Host(host) if matches!(host.as_ref(), engine::HostDelivery::Answer { call, .. } if *call==saved))));
 }
+
+#[test]
+fn restart_refuses_live_tasks_or_claims_past_lowered_limits_without_dropping_them() {
+    let (mut driver, _) = chat_driver();
+    driver.send(engine::Event::Ask {
+        reply_to: ReplyTo::new(Token::new(9901)),
+        sign_in: driver.session(),
+        key: [99; 16],
+        ask: people::Ask::StartChat { project: 1, words: b"another live chat".as_slice().into() },
+    });
+    for _ in 0..100 {
+        driver.advance(true);
+    }
+    assert_eq!(driver.store.rows.keys().filter(|key| matches!(key, Key::Tasks(tasks::Key::Live(_)))).count(), 2);
+    assert_eq!(driver.store.rows.values().filter(|row| matches!(row, Record::RunProof(_))).count(), 2);
+    let before = driver.store.rows.clone();
+    let mut task_bounds = limits();
+    task_bounds.tasks.tasks = 1;
+    task_bounds.tasks.project_tasks = 1;
+    task_bounds.tasks.tree_tasks = 1;
+    let mut claim_bounds = limits();
+    claim_bounds.fleet.attempts = 1;
+    for (bounds, step) in
+        [(task_bounds, jig_core::RestartStep::LoadCore), (claim_bounds, jig_core::RestartStep::AdoptRuns)]
+    {
+        let mut store = Store::new();
+        store.rows = before.clone();
+        let mut restarted = Driver::configured(store, config(91), &bounds);
+        for _ in 0..100 {
+            restarted.advance(true);
+        }
+        assert!(restarted.stopped);
+        assert_eq!(restarted.root.restart_failure(), Some(step));
+        assert_eq!(restarted.store.rows, before);
+        assert!(restarted.delivered.is_empty());
+    }
+}

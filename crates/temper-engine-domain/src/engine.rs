@@ -766,6 +766,9 @@ pub enum Request {
 
 #[derive(Debug)]
 enum Work {
+    AdoptRestored,
+    AdoptDone,
+    Restart(jig_core::RestartRequest),
     TypedDecoded { to: ReplyTo, body: Call },
     Core(jig_core::Event),
     Tasks(tasks::Event),
@@ -845,15 +848,6 @@ struct ResultPage {
     next: Option<Key>,
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
-enum Startup {
-    Cold,
-    Loading(Range),
-    Adopting(jig_core::connector::RestartStage),
-    Running,
-    Failed,
-}
-
 /// Root owns every participating child and all unfinished handoffs; no child
 /// effect bypasses its decision journal. Bounded activation contexts replace
 /// raw task peeks; current proofs are root-owned and authentic financial state
@@ -867,7 +861,8 @@ pub struct Domain {
     stop_pending: bool,
     door_pass: bool,
     door_count: u32,
-    startup: Startup,
+    startup_range: Option<Range>,
+    core_header_loaded: bool,
     brief_connectors: Slab<BriefConnector>,
     brief_sections: Map<u64, Box<[BriefSection]>>,
     run_workspaces: Map<u64, PreparedWorkspace>,
@@ -1042,7 +1037,8 @@ impl Domain {
             stop_pending: false,
             door_pass: false,
             door_count: 0,
-            startup: Startup::Cold,
+            startup_range: None,
+            core_header_loaded: false,
             core,
             brief_connectors: Slab::with_capacity(
                 limits
@@ -1084,12 +1080,17 @@ impl Domain {
         }
     }
 
-    /// Pure readiness query: true only after all child/current proof pages validate, tasks
-    /// restoration consequences finish routing, and every restored claim reaches fleet before
-    /// `Loaded`. New work enters only then.
+    /// Identify the core's refused restart step, including a live range that
+    /// no longer fits the configured limits.
+    #[must_use]
+    pub fn restart_failure(&self) -> Option<jig_core::RestartStep> {
+        self.core.restart_failure()
+    }
+
+    /// Decisions open only after the core's restart script completes.
     #[must_use]
     pub fn ready(&self) -> bool {
-        self.startup == Startup::Running && !self.journal.stopped()
+        self.core.restart_ready() && !self.journal.stopped()
     }
 
     /// Pure shell idle query: no immediate internal handoff or issued store operation
@@ -1389,7 +1390,7 @@ pub fn step(domain: &mut Domain, env: &Env<Limits>, event: Event) {
 fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     assert!(domain.limits == env.limits, "root uses configured limits");
     assert!(out.room() >= max_out(&env.limits), "root output room reserved");
-    if domain.journal.stopped() || domain.startup == Startup::Failed {
+    if domain.journal.stopped() || domain.core.restart_failure().is_some() {
         discard_after_stop(domain, event);
         return;
     }
@@ -1466,11 +1467,25 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
             return;
         }
         Event::Start => {
-            if domain.startup != Startup::Cold {
+            let request = domain.core.restart_begin();
+            if request == jig_core::RestartRequest::Idle {
                 return;
             }
-            domain.startup = Startup::Loading(Range::Deployment);
-            request_load(domain, Token::new(u64::MAX), Range::Deployment, None, out);
+            match request {
+                jig_core::RestartRequest::Step(jig_core::RestartStep::LoadCore) => {
+                    domain.startup_range = Some(Range::Deployment);
+                    request_load(domain, Token::new(u64::MAX), Range::Deployment, None, out);
+                }
+                jig_core::RestartRequest::Step(
+                    jig_core::RestartStep::RestoreConnector { .. }
+                    | jig_core::RestartStep::AdoptRuns
+                    | jig_core::RestartStep::ReadAfresh { .. }
+                    | jig_core::RestartStep::SettleOutbox { .. }
+                    | jig_core::RestartStep::Open,
+                )
+                | jig_core::RestartRequest::Idle
+                | jig_core::RestartRequest::Refused { .. } => unreachable!("cold core asks to load itself"),
+            }
             account_event(
                 domain,
                 env,
@@ -1502,7 +1517,7 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
                 out.push(Request::Deliver(Delivery::Refuse { channel }));
                 return;
             }
-            if !header_loaded(domain.startup.clone()) {
+            if !domain.core_header_loaded {
                 if domain.cold_channels.contains_key(&channel) {
                     out.push(Request::Deliver(Delivery::Refuse { channel }));
                     return;
@@ -1523,7 +1538,7 @@ fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Q
             domain.work.push(Work::Fleet(fleet::Event::Hello { channel, hello }));
         }
         Event::Lost { channel } => {
-            if !header_loaded(domain.startup.clone()) {
+            if !domain.core_header_loaded {
                 if let Some(lost) = domain.cold_channels.get_mut(&channel) {
                     *lost = true;
                 }
@@ -1720,6 +1735,10 @@ fn lose_channel(domain: &mut Domain, env: &Env<Limits>, channel: Token) {
 }
 
 fn close(domain: &mut Domain, env: &Env<Limits>, decision: Decision, out: &mut Queue<Request>) {
+    if domain.core.restart_failure().is_some() {
+        out.push(Request::Stop);
+        return;
+    }
     crate::accept_pending(&mut domain.journal, &mut domain.core.counters, &env.limits.journal, decision)
         .expect("root pressure reserved before child mutation");
     if domain.journal.stopped() {
@@ -1859,7 +1878,7 @@ fn send_commit(domain: &mut Domain, out: &mut Queue<Request>) {
 #[expect(clippy::too_many_lines, reason = "root release path routes each held delivery exhaustively")]
 fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
     assert!(out.room() >= max_out(&env.limits), "root ready output room");
-    if domain.journal.stopped() || domain.startup == Startup::Failed {
+    if domain.journal.stopped() || domain.core.restart_failure().is_some() {
         return;
     }
     if !domain.result_pages.is_empty() && route_takes(domain, &env.limits) {
@@ -2003,7 +2022,7 @@ fn resume_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request
         close(domain, env, decision, out);
         return;
     }
-    if domain.ready() || startup_adopting(domain.startup.clone()) {
+    if domain.ready() || connector_restarting(domain) {
         if domain.forge.is_ready() {
             let mut decision =
                 route_decision(domain, &env.limits).expect("journal room checked before connector continuation");
@@ -2044,7 +2063,7 @@ pub fn fire(domain: &mut Domain, env: &Env<Limits>) {
 }
 
 fn fire_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
-    if domain.journal.stopped() || domain.startup == Startup::Failed {
+    if domain.journal.stopped() || domain.core.restart_failure().is_some() {
         return;
     }
     account_fire(domain, env, out);
@@ -2056,7 +2075,7 @@ fn fire_routed(domain: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>)
     if !admits(domain, &env.limits) {
         return;
     }
-    if startup_adopting(domain.startup.clone()) {
+    if connector_restarting(domain) {
         let mut decision =
             route_decision(domain, &env.limits).expect("journal room checked before forge restart timer");
         let mut forge_out = Queue::with_capacity(forge::max_out(&env.limits.forge));
@@ -3041,7 +3060,10 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                 CallAnswer::NoteRefused(jig_core_notes::Refusal::Busy),
                             );
                         }
-                        jig_core::Now::RestoreRefused => domain.startup = Startup::Failed,
+                        jig_core::Now::RestoreRefused => {
+                            let _refused = domain.core.restart_refuse();
+                            domain.stop_pending = true;
+                        }
                         jig_core::Now::Account(_)
                         | jig_core::Now::View(_)
                         | jig_core::Now::NotesIndexed { .. }
@@ -3063,6 +3085,20 @@ fn route_into(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision) {
             break;
         };
         match work {
+            Work::AdoptRestored => {
+                if domain.core.restart_admit_claims() {
+                    for _ in 0..domain.core.adopted.len() {
+                        domain.work.push(Work::Fleet(domain.core.adopted.pop().expect("restored claims")));
+                    }
+                    domain.work.push(Work::Fleet(fleet::Event::Loaded));
+                    domain.work.push(Work::AdoptDone);
+                }
+            }
+            Work::AdoptDone => {
+                let request = domain.core.restart_done(jig_core::RestartStep::AdoptRuns);
+                domain.work.push(Work::Restart(request));
+            }
+            Work::Restart(request) => restart_request(domain, env, decision, request),
             Work::TypedDecoded { to, body } => typed_route::decoded(domain, env, decision, to, body),
             Work::Core(event) => {
                 let routed = jig_core::step(&mut domain.core, &environment_core(env), event);
@@ -4186,7 +4222,7 @@ fn load_outputs(
                     } else if waiter != Token::new(u64::MAX) {
                         results::failed(domain, waiter, people::Refusal::Limit, out);
                     } else {
-                        domain.startup = Startup::Failed;
+                        let _refused = domain.core.restart_refuse();
                         out.push(Request::Stop);
                     }
                     return;
@@ -4243,7 +4279,7 @@ fn load_outputs(
                     return;
                 }
                 if waiter == Token::new(u64::MAX) {
-                    domain.startup = Startup::Failed;
+                    let _refused = domain.core.restart_refuse();
                     out.push(Request::Stop);
                 } else {
                     let archive = match domain.result_reads.get(Id::from_token(waiter)) {
@@ -4524,20 +4560,18 @@ fn startup_page(
     next: Option<Key>,
     out: &mut Queue<Request>,
 ) {
-    let range = match domain.startup.clone() {
-        Startup::Loading(range) => range,
-        Startup::Cold | Startup::Adopting(_) | Startup::Running | Startup::Failed => return,
-    };
+    let Some(range) = domain.startup_range.clone() else { return };
     for row in rows {
         restore_page_row(domain, env, row);
     }
     if range == Range::Deployment {
+        domain.core_header_loaded = true;
         for _ in 0..domain.before_header.len() {
             domain.work.push(domain.before_header.pop().expect("cold worker event"));
         }
     }
     let mut decision = route(domain, env);
-    if domain.startup == Startup::Failed {
+    if domain.core.restart_failure().is_some() {
         out.push(Request::Stop);
         return;
     }
@@ -4561,10 +4595,9 @@ fn startup_page(
     let following = match range {
         Range::Deployment => Some(Range::People),
         Range::People => Some(Range::Tasks),
-        Range::Tasks => Some(Range::Forge),
-        Range::Forge => Some(Range::RunProofs),
+        Range::Tasks => Some(Range::RunProofs),
+        Range::Forge | Range::Calls => None,
         Range::RunProofs => Some(Range::Calls),
-        Range::Calls => None,
         Range::EscalationDecision { .. }
         | Range::ProposalDecision { .. }
         | Range::Turns { .. }
@@ -4583,72 +4616,98 @@ fn startup_page(
         }
         domain.work.push(Work::People(people::Event::Restored));
         route_into(domain, env, &mut decision);
-        if domain.startup == Startup::Failed {
+        if domain.core.restart_failure().is_some() {
             out.push(Request::Stop);
             return;
         }
     }
     if let Some(range) = following {
-        domain.startup = Startup::Loading(range.clone());
+        domain.startup_range = Some(range.clone());
         emit(&mut decision, &env.limits, Delivery::Load { waiter: Token::new(u64::MAX), range, after: None });
         close(domain, env, decision, out);
         return;
     }
-    if !domain.core.restoring_proofs.is_empty() {
-        domain.startup = Startup::Failed;
-        out.push(Request::Stop);
-        return;
-    }
-    domain.startup = Startup::Adopting(jig_core::connector::RestartStage::Restored);
-    domain.work.push(Work::Tasks(tasks::Event::Restored));
-    route_into(domain, env, &mut decision);
-    if domain.startup == Startup::Failed {
-        out.push(Request::Stop);
-        return;
-    }
-    for _ in 0..domain.core.adopted.len() {
-        domain.work.push(Work::Fleet(domain.core.adopted.pop().expect("all restored claims")));
-    }
-    domain.work.push(Work::Fleet(fleet::Event::Loaded));
-    route_into(domain, env, &mut decision);
-    if domain.startup == Startup::Failed {
-        out.push(Request::Stop);
-        return;
-    }
-    domain.work.push(Work::Forge(forge::Event::Restored { clock: forge_client::RecoveryClock::Wall }));
+    domain.startup_range = None;
+    let request = if range == Range::Forge {
+        // The connector confirms that its restored rows have been reconciled.
+        domain.work.push(Work::Forge(forge::Event::Restored { clock: forge_client::RecoveryClock::Wall }));
+        jig_core::RestartRequest::Idle
+    } else {
+        domain.core.restart_done(jig_core::RestartStep::LoadCore)
+    };
+    domain.work.push(Work::Restart(request));
     route_into(domain, env, &mut decision);
     close(domain, env, decision, out);
 }
 
-/// Until jig-core owns the script, the root advances only on the connector's
-/// explicit completion in jig's restart vocabulary.
-fn connector_restart_done(domain: &mut Domain, stage: jig_core::connector::RestartStage) {
-    if domain.startup != Startup::Adopting(stage) {
-        domain.startup = Startup::Failed;
-        return;
-    }
-    match stage {
-        jig_core::connector::RestartStage::Restored => {
-            domain.startup = Startup::Adopting(jig_core::connector::RestartStage::ReadAfresh);
-            domain.work.push(Work::Forge(forge::Event::ReadAfresh));
-        }
-        jig_core::connector::RestartStage::ReadAfresh => {
-            domain.startup = Startup::Adopting(jig_core::connector::RestartStage::Settled);
-            domain.work.push(Work::Forge(forge::Event::SettleOutbox));
-        }
-        jig_core::connector::RestartStage::Settled => {
-            domain.startup = Startup::Running;
-            for _ in 0..domain.core.due.len() {
-                domain.work.push(Work::Activate(domain.core.due.pop().expect("restored due tasks")));
+/// Perform only the step requested by the core; page cursors are transport
+/// state, while restart order and admission belong to jig-core.
+fn restart_request(domain: &mut Domain, env: &Env<Limits>, decision: &mut Decision, request: jig_core::RestartRequest) {
+    match request {
+        jig_core::RestartRequest::Idle => {}
+        jig_core::RestartRequest::Refused { .. } => domain.stop_pending = true,
+        jig_core::RestartRequest::Step(step) => match step {
+            jig_core::RestartStep::LoadCore => {
+                domain.startup_range = Some(Range::Deployment);
+                emit(
+                    decision,
+                    &env.limits,
+                    Delivery::Load { waiter: Token::new(u64::MAX), range: Range::Deployment, after: None },
+                );
             }
-        }
+            jig_core::RestartStep::RestoreConnector { connector } => {
+                assert_eq!(connector, domain.config.forge_connector, "configured forge connector");
+                domain.startup_range = Some(Range::Forge);
+                emit(
+                    decision,
+                    &env.limits,
+                    Delivery::Load { waiter: Token::new(u64::MAX), range: Range::Forge, after: None },
+                );
+            }
+            jig_core::RestartStep::AdoptRuns => {
+                domain.work.push(Work::Tasks(tasks::Event::Restored));
+                // Finish task restoration before draining every emitted claim.
+                domain.work.push(Work::AdoptRestored);
+            }
+            jig_core::RestartStep::ReadAfresh { connector } => {
+                assert_eq!(connector, domain.config.forge_connector, "configured forge connector");
+                domain.work.push(Work::Forge(forge::Event::ReadAfresh));
+            }
+            jig_core::RestartStep::SettleOutbox { connector } => {
+                assert_eq!(connector, domain.config.forge_connector, "configured forge connector");
+                domain.work.push(Work::Forge(forge::Event::SettleOutbox));
+            }
+            jig_core::RestartStep::Open => {
+                let request = domain.core.restart_done(step);
+                assert_eq!(request, jig_core::RestartRequest::Idle, "decisions open once");
+                for _ in 0..domain.core.due.len() {
+                    domain.work.push(Work::Activate(domain.core.due.pop().expect("restored due tasks")));
+                }
+            }
+        },
     }
 }
 
-fn startup_adopting(startup: Startup) -> bool {
-    match startup {
-        Startup::Adopting(_) => true,
-        Startup::Cold | Startup::Loading(_) | Startup::Running | Startup::Failed => false,
+fn connector_restart_done(domain: &mut Domain, stage: jig_core::connector::RestartStage) {
+    let connector = domain.config.forge_connector;
+    let step = match stage {
+        jig_core::connector::RestartStage::Restored => jig_core::RestartStep::RestoreConnector { connector },
+        jig_core::connector::RestartStage::ReadAfresh => jig_core::RestartStep::ReadAfresh { connector },
+        jig_core::connector::RestartStage::Settled => jig_core::RestartStep::SettleOutbox { connector },
+    };
+    let request = domain.core.restart_done(step);
+    domain.work.push(Work::Restart(request));
+}
+
+fn connector_restarting(domain: &Domain) -> bool {
+    match domain.core.restart_step() {
+        Some(
+            jig_core::RestartStep::RestoreConnector { .. }
+            | jig_core::RestartStep::ReadAfresh { .. }
+            | jig_core::RestartStep::SettleOutbox { .. },
+        ) => true,
+        Some(jig_core::RestartStep::LoadCore | jig_core::RestartStep::AdoptRuns | jig_core::RestartStep::Open)
+        | None => false,
     }
 }
 
@@ -5268,28 +5327,6 @@ pub(crate) fn run_charter_bytes(charter: &RunCharter) -> Option<u64> {
     Some(bytes)
 }
 
-fn header_loaded(startup: Startup) -> bool {
-    match startup {
-        Startup::Cold | Startup::Loading(Range::Deployment) | Startup::Failed => false,
-        Startup::Loading(
-            Range::Calls
-            | Range::Tasks
-            | Range::EndedResults
-            | Range::People
-            | Range::Forge
-            | Range::RunProofs
-            | Range::EscalationDecision { .. }
-            | Range::ProposalDecision { .. }
-            | Range::Turns { .. }
-            | Range::TaskTranscript { .. }
-            | Range::TaskResult { .. }
-            | Range::Notes(_),
-        )
-        | Startup::Adopting(_)
-        | Startup::Running => true,
-    }
-}
-
 fn hello_within(hello: &fleet::Hello, limits: &fleet::Limits) -> bool {
     let stop_before_grace = hello.stop_bound < limits.grace;
     if hello.hosting.len() > usize::try_from(limits.slots).expect("u32 fits usize")
@@ -5437,7 +5474,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
         Record::Call(record) => {
             let key = record.key;
             if !valid_connector_answer(&record.answer, &domain.core.counters.deployment(), &env.limits) {
-                domain.startup = Startup::Failed;
+                let _refused = domain.core.restart_refuse();
                 return;
             }
             let part = record.answer.core_part(domain.config.forge_connector);
@@ -5450,22 +5487,23 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                 &core_limits(&env.limits),
             ) != jig_core::Restored::Live
             {
-                domain.startup = Startup::Failed;
+                let _refused = domain.core.restart_refuse();
                 return;
             }
             if let jig_core::CallPart::Connector { .. } | jig_core::CallPart::Effect { .. } = part
                 && domain.connector_calls.insert(key, record.answer).is_err()
             {
-                domain.startup = Startup::Failed;
+                let _refused = domain.core.restart_refuse();
             }
         }
         Record::Deployment(deployment) => {
             if !domain.forge.bind_deployment(deployment.id, &env.limits.forge) {
-                domain.startup = Startup::Failed;
+                let _refused = domain.core.restart_refuse();
                 return;
             }
             match domain.core.restore_core(jig_core::CoreRecord::Deployment(deployment), &core_limits(&env.limits)) {
                 jig_core::Restored::Deployment { commits } => {
+                    domain.core_header_loaded = true;
                     domain.journal = Journal::from_durable(&root_journal_limits(&env.limits), commits);
                 }
                 jig_core::Restored::Live | jig_core::Restored::Archive | jig_core::Restored::Rejected => {
@@ -5475,7 +5513,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
         }
         Record::People(people::Stored::Policy { project, value }) => {
             if !domain.core.restore_policy(&core_limits(&domain.limits), project, value) {
-                domain.startup = Startup::Failed;
+                let _refused = domain.core.restart_refuse();
             }
         }
         Record::People(record) => domain.work.push(Work::People(people::Event::Restore { record })),
@@ -5485,7 +5523,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                 || id > domain.core.counters.deployment().connector_rows
                 || domain.forge_keys.insert(key, id) != Ok(None)
             {
-                domain.startup = Startup::Failed;
+                let _refused = domain.core.restart_refuse();
                 return;
             }
             domain.work.push(Work::Forge(forge::Event::Restore { record: *row }));
@@ -5493,7 +5531,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
         Record::Tasks(record) => match record {
             tasks::Stored::PersonProposal(ref row) => {
                 if !domain.core.restore_task_row(&record) {
-                    domain.startup = Startup::Failed;
+                    let _refused = domain.core.restart_refuse();
                     return;
                 }
                 domain.work.push(Work::People(people::Event::Waiting {
@@ -5507,7 +5545,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             }
             tasks::Stored::Stub(_) => {
                 if !domain.core.restore_task_row(&record) {
-                    domain.startup = Startup::Failed;
+                    let _refused = domain.core.restart_refuse();
                     return;
                 }
                 domain.work.push(Work::Tasks(tasks::Event::Restore { record }));
@@ -5515,7 +5553,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             tasks::Stored::History(_) => unreachable!("history rows excluded from startup"),
             tasks::Stored::Live(ref task) => {
                 if !escalation::supported(domain, task) || !domain.core.restore_task_row(&record) {
-                    domain.startup = Startup::Failed;
+                    let _refused = domain.core.restart_refuse();
                     return;
                 }
                 domain.work.push(Work::People(people::Event::Waiting {
@@ -5532,7 +5570,7 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
             if domain.core.restore_core(jig_core::CoreRecord::RunProof(proof), &core_limits(&env.limits))
                 != jig_core::Restored::Live
             {
-                domain.startup = Startup::Failed;
+                let _refused = domain.core.restart_refuse();
             }
         }
         Record::Notes(_) => unreachable!("notes are loaded on demand, outside startup"),

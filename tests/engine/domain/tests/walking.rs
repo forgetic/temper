@@ -1,3 +1,4 @@
+use jig_core_fleet as fleet;
 use jig_core_people as people;
 use jig_core_tasks as tasks;
 use temper_engine_domain::{Key, Record, Write, engine};
@@ -97,6 +98,7 @@ fn walking_referee_rejects_duplicate_transaction_keys_and_transcripts() {
     assert_eq!(WalkingReferee::default().commit(&writes), Err("same key written twice in one decision"));
     let proof = Record::RunProof(temper_engine_domain::RunProof {
         transcript_from: 0,
+        host: fleet::HostKind::Worker,
         task: task.number,
         attempt: task.attempt,
         offered: None,
@@ -296,6 +298,7 @@ fn walking_referee_rejects_missing_or_split_current_claim_turn_and_terminal_proo
     live.run_spent = 0;
     let initial = Record::RunProof(temper_engine_domain::RunProof {
         transcript_from: 0,
+        host: fleet::HostKind::Worker,
         task: task.number,
         attempt: task.attempt,
         offered: None,
@@ -427,6 +430,7 @@ fn independent_terminal_cut_referee_rejects_missing_or_altered_evidence() {
         Key::RunProof { task: task.number },
         Record::RunProof(temper_engine_domain::RunProof {
             transcript_from: 0,
+            host: fleet::HostKind::Worker,
             task: task.number,
             attempt: task.attempt,
             offered: None,

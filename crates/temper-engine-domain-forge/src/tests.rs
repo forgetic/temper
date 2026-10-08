@@ -353,3 +353,46 @@ fn adoption_without_ci_refuses_an_empty_check_policy() {
     );
     assert!(ready(&mut d).is_empty());
 }
+
+#[test]
+fn restored_ci_subscriptions_are_read_in_the_fresh_step_and_delay_its_completion() {
+    let mut d = domain();
+    outputs(&mut d, Event::Restore { record: Stored::Repository(adopted()) });
+    outputs(
+        &mut d,
+        Event::Restore {
+            record: Stored::Subscription(Subscriber {
+                task: 7,
+                number: 1,
+                topic: Topic::Ci { repository: REPO, head: [4; 32] },
+                own_change: None,
+                paths: Box::new([]),
+            }),
+        },
+    );
+    assert_eq!(
+        outputs(&mut d, Event::Restored { clock: client::RecoveryClock::Monotonic }).as_ref(),
+        &[Request::RestartDone { stage: RestartStage::Restored }]
+    );
+    let fresh = outputs(&mut d, Event::ReadAfresh);
+    assert!(fresh.is_empty(), "the subscription read is scheduled before completion");
+    let calls = ready(&mut d);
+    let Request::Call { call, op: client::api::Op::Read(client::api::Read::Statuses { commit, .. }), .. } = &calls[0]
+    else {
+        panic!("CI statuses requested in fresh step")
+    };
+    assert_eq!(*commit, [4; 32]);
+    let done = outputs(
+        &mut d,
+        Event::Client(client::Event::Answered {
+            call: *call,
+            cost: 1,
+            result: Ok(client::api::Answer::Statuses {
+                ci: client::api::Ci::Passed,
+                statuses: Box::new([]),
+                more: false,
+            }),
+        }),
+    );
+    assert!(done.contains(&Request::RestartDone { stage: RestartStage::ReadAfresh }));
+}

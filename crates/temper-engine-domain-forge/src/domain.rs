@@ -106,6 +106,7 @@ pub struct Domain {
     landings: Map<Token, PendingLanding>,
     lost: Map<Token, PendingLost>,
     pending_ci: Map<Token, PendingCi>,
+    restart_fresh: Option<bool>,
     sequence: u64,
     changes: Map<u64, ChangeRow>,
     steps: Map<Token, PendingStep>,
@@ -172,6 +173,7 @@ impl Domain {
             landings: Map::with_capacity(l.landings),
             lost: Map::with_capacity(l.holds),
             pending_ci: Map::with_capacity(l.subscriptions),
+            restart_fresh: None,
             sequence: 0,
             changes: Map::with_capacity(l.changes),
             steps: Map::with_capacity(l.changes),
@@ -577,7 +579,7 @@ pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Req
         Event::Client(event) => child(d, env, event, out),
         Event::Restore { record } => restore(d, env, record),
         Event::Restored { clock } => restored(d, env, clock, out),
-        Event::ReadAfresh => child(d, env, client::Event::ReadAfresh, out),
+        Event::ReadAfresh => read_afresh(d, env, out),
         Event::SettleOutbox => child(d, env, client::Event::SettleOutbox, out),
     }
 }
@@ -688,10 +690,11 @@ fn drain(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
                     lost_read(d, env, owner, result, out);
                 }
             }
-            client::Request::ReadAfreshDone => emit(out, Request::RestartDone { stage: RestartStage::ReadAfresh }),
+            client::Request::ReadAfreshDone => d.restart_fresh = Some(true),
             client::Request::OutboxDone => emit(out, Request::RestartDone { stage: RestartStage::Settled }),
         }
     }
+    read_afresh_complete(d, out);
 }
 
 fn emit(out: &mut Queue<Request>, request: Request) {
@@ -2956,6 +2959,11 @@ fn restored(d: &mut Domain, env: &Env<Limits>, clock: client::RecoveryClock, out
     for entry in &entries {
         child(d, env, client::Event::Make { entry: entry.clone() }, out);
     }
+    emit(out, Request::RestartDone { stage: RestartStage::Restored });
+}
+
+fn read_afresh(d: &mut Domain, env: &Env<Limits>, out: &mut Queue<Request>) {
+    d.restart_fresh = Some(false);
     let mut ci = List::with_capacity(env.limits.subscriptions);
     for (_, subscriber) in &d.subscriptions {
         match &subscriber.topic {
@@ -2968,5 +2976,12 @@ fn restored(d: &mut Domain, env: &Env<Limits>, clock: client::RecoveryClock, out
     for (repository, head) in &ci {
         ci_refresh(d, env, *repository, *head, out);
     }
-    emit(out, Request::RestartDone { stage: RestartStage::Restored });
+    child(d, env, client::Event::ReadAfresh, out);
+}
+
+fn read_afresh_complete(d: &mut Domain, out: &mut Queue<Request>) {
+    if d.restart_fresh == Some(true) && d.pending_ci.is_empty() {
+        d.restart_fresh = None;
+        emit(out, Request::RestartDone { stage: RestartStage::ReadAfresh });
+    }
 }
