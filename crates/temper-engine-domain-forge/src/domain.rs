@@ -1165,7 +1165,18 @@ fn names(d: &mut Domain, env: &Env<Limits>, task: u64, resources: Box<[Name]>, o
         d.names.insert(task, resources.clone()).expect("preflighted task capacity");
         for name in &resources {
             if let Some((role, hold)) = d.resource_facts(name) {
-                emit(out, Request::Resource { name: name.clone(), role, hold });
+                emit(
+                    out,
+                    Request::Resource {
+                        project: d
+                            .repository(client::api::Repository { forge: name.forge, repository: name.repository })
+                            .expect("named adopted resource")
+                            .project,
+                        name: name.clone(),
+                        role,
+                        hold,
+                    },
+                );
             }
         }
         emit(out, Request::Save { record: Stored::Names { task, resources } });

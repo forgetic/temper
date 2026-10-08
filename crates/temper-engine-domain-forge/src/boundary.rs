@@ -501,7 +501,7 @@ pub enum Event {
 #[derive(PartialEq, Eq, Debug)]
 pub enum Request {
     /// Current role and hold admission for one named resource.
-    Resource { name: Name, role: crate::Access, hold: crate::resources::HoldKind },
+    Resource { project: u32, name: Name, role: crate::Access, hold: crate::resources::HoldKind },
 
     /// Add a goal's topic through the core's durable task subscriptions.
     GoalTopic { goal: u64, topic: Topic },

@@ -781,7 +781,7 @@ pub(super) fn task_holdings(
             what: branch_what(&branch, env.limits.forge.name_bytes)?,
         };
         let holding = write_holding(domain.config.forge_connector, &name, &env.limits.tasks)?;
-        report_resource(domain, env, &name);
+        report_resource(domain, env, project, &name);
         return Some(Box::new([holding]));
     }
     if let Some(home) = domain.forge.home(project) {
@@ -811,7 +811,7 @@ pub(super) fn task_holdings(
         reports.push(name).ok()?;
     }
     for name in &reports {
-        report_resource(domain, env, name);
+        report_resource(domain, env, project, name);
     }
     Some(holdings.into_boxed())
 }
@@ -2056,7 +2056,9 @@ pub(super) fn outputs(
     for _ in 0..out.len() {
         let request = out.pop().expect("connector output count");
         match request {
-            forge::Request::Resource { name, role, hold } => route_resource(domain, env, &name, role, hold),
+            forge::Request::Resource { project, name, role, hold } => {
+                route_resource(domain, env, project, &name, role, hold);
+            }
 
             forge::Request::GoalTopic { goal, topic } => subscribe_goal(domain, env, goal, topic),
             forge::Request::GoalUntopic { goal, topic } => {
@@ -2824,15 +2826,16 @@ pub(super) fn left(domain: &mut Domain, env: &Env<Limits>, task: u64, attempt: u
     domain.work.push(Work::Forge(forge::Event::Lost { task, attempt }));
 }
 
-fn report_resource(domain: &mut Domain, env: &Env<Limits>, name: &forge::Name) {
+fn report_resource(domain: &mut Domain, env: &Env<Limits>, project: u32, name: &forge::Name) {
     if let Some((role, hold)) = domain.forge.resource_facts(name) {
-        route_resource(domain, env, name, role, hold);
+        route_resource(domain, env, project, name, role, hold);
     }
 }
 
 fn route_resource(
     domain: &mut Domain,
     env: &Env<Limits>,
+    project: u32,
     name: &forge::Name,
     role: forge::Access,
     hold: forge::resources::HoldKind,
@@ -2849,6 +2852,7 @@ fn route_resource(
         forge::resources::HoldKind::Exclusive { wait } => jig_core::connector::HoldKind::Exclusive { wait },
     };
     domain.work.push(Work::Core(jig_core::Event::EffectConnector(jig_core::connector::Event::Resource {
+        project,
         name,
         role,
         hold,

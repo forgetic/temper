@@ -454,6 +454,7 @@ fn named_resource_reports_distinguish_private_branches_context_and_shared_landin
     assert_eq!(d.resource_facts(&shared), Some((Access::Participant, resources::HoldKind::Shared)));
     let report = outputs(&mut d, Event::Names { task: 7, resources: Box::new([private.clone()]) });
     assert!(report.contains(&Request::Resource {
+        project: 5,
         name: private.clone(),
         role: Access::Owned,
         hold: resources::HoldKind::Exclusive { wait: true }

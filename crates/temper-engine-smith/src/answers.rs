@@ -328,6 +328,7 @@ fn finding_text(text: &mut Text, finding: jig_core_authority::Finding) -> Result
         Finding::Writer => text.add(b"writer held"),
         Finding::Tool => text.add(b"tool family"),
         Finding::Grant { .. } => text.add(b"resource grant"),
+        Finding::ResourceUnavailable => text.add(b"resource unavailable"),
         Finding::ResourceAccess => text.add(b"resource write unavailable"),
         Finding::Reference => text.add(b"task reference"),
         Finding::Scope { .. } => text.add(b"note scope"),
@@ -377,6 +378,7 @@ fn task_problem(text: &mut Text, problem: &jig_core_tasks::Problem) -> Result<()
         Refusal::Funding => text.add(b"funding"),
         Refusal::HoldKind => text.add(b"resource hold kind"),
         Refusal::HoldTaken => text.add(b"resource held by"),
+        Refusal::ResourceUnavailable => text.add(b"resource unavailable"),
         Refusal::Holds => text.add(b"resource hold limit"),
     }?;
     if let Some(blocked_by) = &problem.blocked_by {
