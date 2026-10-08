@@ -715,6 +715,7 @@ fn a_change_produced_opened_checked_queued_and_landed() {
                 | top::Request::ReleaseFailed { .. }
                 | top::Request::ProjectionEffect { .. }
                 | top::Request::ProjectAfter { .. }
+                | top::Request::ProjectionSettled { .. }
                 | top::Request::ProjectionFailed { .. }
                 | top::Request::News { .. }
                 | top::Request::Drift { .. }

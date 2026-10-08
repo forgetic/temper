@@ -207,6 +207,8 @@ pub struct CallRecord {
 /// (jig's domain/engine.md, 5.3–5.6).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Key {
+    /// One core-owned bounded projection feed row.
+    Projection(jig_core::ProjectionKey),
     /// Immutable outcome of a person-decided proposal, loaded by its root-issued number.
     ProposalDecision(u64),
     /// Root's immutable decided held-chat revision; read only by named race
@@ -329,7 +331,8 @@ impl Range {
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
                 | Key::People(_)
-                | Key::Notes(_) => false,
+                | Key::Notes(_)
+                | Key::Projection(_) => false,
             },
             Range::ProposalDecision { proposal } => match key.clone() {
                 Key::ProposalDecision(number) => proposal != 0 && number == proposal,
@@ -342,7 +345,8 @@ impl Range {
                 | Key::Tasks(_)
                 | Key::People(_)
                 | Key::Notes(_)
-                | Key::Forge(_) => false,
+                | Key::Forge(_)
+                | Key::Projection(_) => false,
             },
             Range::Calls => match key.clone() {
                 Key::Call(call) => call.task != 0 && call.attempt != 0 && call.completion != 0,
@@ -355,7 +359,8 @@ impl Range {
                 | Key::Tasks(_)
                 | Key::People(_)
                 | Key::Notes(_)
-                | Key::Forge(_) => false,
+                | Key::Forge(_)
+                | Key::Projection(_) => false,
             },
             Range::EscalationDecision { task, revision } => match key.clone() {
                 Key::EscalationDecision { task: found, revision: current } => {
@@ -370,7 +375,8 @@ impl Range {
                 | Key::Tasks(_)
                 | Key::People(_)
                 | Key::Notes(_)
-                | Key::Forge(_) => false,
+                | Key::Forge(_)
+                | Key::Projection(_) => false,
             },
             Range::Deployment => match key.clone() {
                 Key::Deployment => true,
@@ -383,9 +389,11 @@ impl Range {
                 | Key::Tasks(_)
                 | Key::People(_)
                 | Key::Notes(_)
-                | Key::Forge(_) => false,
+                | Key::Forge(_)
+                | Key::Projection(_) => false,
             },
             Range::Tasks => match key.clone() {
+                Key::Projection(_) => true,
                 Key::Tasks(child) => match child {
                     jig_core_tasks::Key::Live(_)
                     | jig_core_tasks::Key::Ledger(_)
@@ -393,7 +401,9 @@ impl Range {
                     | jig_core_tasks::Key::Writer(_)
                     | jig_core_tasks::Key::Pool(_)
                     | jig_core_tasks::Key::PersonProposal(_) => true,
-                    jig_core_tasks::Key::Ended(_) | jig_core_tasks::Key::History { .. } => false,
+                    jig_core_tasks::Key::Ended(_)
+                    | jig_core_tasks::Key::History { .. }
+                    | jig_core_tasks::Key::Milestone { .. } => false,
                 },
                 Key::Call(_)
                 | Key::EscalationDecision { .. }
@@ -418,7 +428,8 @@ impl Range {
                 | Key::Tasks(_)
                 | Key::People(_)
                 | Key::Notes(_)
-                | Key::Forge(_) => false,
+                | Key::Forge(_)
+                | Key::Projection(_) => false,
             },
             Range::People => match key.clone() {
                 Key::People(_) => true,
@@ -431,7 +442,8 @@ impl Range {
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
                 | Key::Notes(_)
-                | Key::Forge(_) => false,
+                | Key::Forge(_)
+                | Key::Projection(_) => false,
             },
             Range::RunProofs => match key.clone() {
                 Key::RunProof { task } => task != 0,
@@ -444,7 +456,8 @@ impl Range {
                 | Key::Tasks(_)
                 | Key::People(_)
                 | Key::Notes(_)
-                | Key::Forge(_) => false,
+                | Key::Forge(_)
+                | Key::Projection(_) => false,
             },
             Range::TaskResult { task } => match key.clone() {
                 Key::Tasks(jig_core_tasks::Key::Ended(number)) => task == number,
@@ -458,7 +471,8 @@ impl Range {
                 | Key::Terminal { .. }
                 | Key::People(_)
                 | Key::Notes(_)
-                | Key::Forge(_) => false,
+                | Key::Forge(_)
+                | Key::Projection(_) => false,
             },
             Range::Turns { task, attempt } => match key.clone() {
                 Key::Turn { task: found, attempt: run, turn } => found == task && run == attempt && turn != 0,
@@ -471,7 +485,8 @@ impl Range {
                 | Key::Tasks(_)
                 | Key::People(_)
                 | Key::Notes(_)
-                | Key::Forge(_) => false,
+                | Key::Forge(_)
+                | Key::Projection(_) => false,
             },
             Range::TaskTranscript { task } => match key.clone() {
                 Key::Turn { task: found, attempt, turn } => task != 0 && found == task && attempt != 0 && turn != 0,
@@ -484,7 +499,8 @@ impl Range {
                 | Key::Tasks(_)
                 | Key::People(_)
                 | Key::Notes(_)
-                | Key::Forge(_) => false,
+                | Key::Forge(_)
+                | Key::Projection(_) => false,
             },
             Range::Notes(range) => match key {
                 Key::Notes(child) => match range {
@@ -512,7 +528,8 @@ impl Range {
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
                 | Key::People(_)
-                | Key::Forge(_) => false,
+                | Key::Forge(_)
+                | Key::Projection(_) => false,
             },
         }
     }
@@ -523,6 +540,8 @@ impl Range {
 /// (domain/engine.md, 5.1, 5.3 and 5.6).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Record {
+    /// One core-owned bounded projection feed row.
+    Projection(jig_core::ProjectionRecord),
     /// The first committed final proposal decision, read by later callers.
     ProposalDecision(ProposalDecisionRecord),
     /// Named host-tool decision committed with the action it caused.
@@ -571,6 +590,7 @@ impl Record {
     #[must_use]
     pub fn key(&self) -> Key {
         match self {
+            Record::Projection(row) => Key::Projection(row.key()),
             Record::ProposalDecision(row) => Key::ProposalDecision(row.proposal),
             Record::Call(row) => Key::Call(row.key),
             Record::EscalationDecision(row) => Key::EscalationDecision { task: row.task, revision: row.revision },
@@ -623,6 +643,7 @@ impl Write {
 #[expect(clippy::too_many_lines, reason = "the record byte projection covers each stored variant")]
 pub fn record_bytes(record: &Record) -> Option<u64> {
     match record {
+        Record::Projection(row) => jig_core::projection_record_bytes(row),
         Record::EscalationDecision(row) => decision_bytes(&row.decision),
         Record::Call(row) => {
             let answer = call_answer_bytes(&row.answer);
@@ -777,7 +798,8 @@ pub(crate) fn owned_bytes(write: &Write) -> Option<u64> {
             | Key::Terminal { .. }
             | Key::Tasks(_)
             | Key::People(_)
-            | Key::Forge(_),
+            | Key::Forge(_)
+            | Key::Projection(_),
         ) => Some(0),
     }
 }

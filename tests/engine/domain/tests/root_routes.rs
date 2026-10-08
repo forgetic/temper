@@ -410,6 +410,7 @@ fn a_maintainer_prioritises_project_goals_and_a_member_cannot() {
                 tasks::Stored::Live(_)
                 | tasks::Stored::Ended(_)
                 | tasks::Stored::Stub(_)
+                | tasks::Stored::Milestone(_)
                 | tasks::Stored::History(_)
                 | tasks::Stored::Ledger(_)
                 | tasks::Stored::Writer(_)
@@ -419,6 +420,7 @@ fn a_maintainer_prioritises_project_goals_and_a_member_cannot() {
             | Record::People(_)
             | Record::Call(_)
             | Record::Notes(_)
+            | Record::Projection(_)
             | Record::Deployment(_)
             | Record::Turn(_)
             | Record::RunProof(_)
@@ -897,6 +899,7 @@ fn restart_recovers_named_ended_result_without_replaying_a_raw_notice() {
         .find_map(|row| match row {
             Record::Tasks(tasks::Stored::Ended(task)) => Some(task.number),
             Record::Tasks(_)
+            | Record::Projection(_)
             | Record::Deployment(_)
             | Record::Turn(_)
             | Record::People(_)
@@ -1026,6 +1029,7 @@ fn a_full_inbox_pages_the_rest_from_the_store() {
             | Record::EscalationDecision(_)
             | Record::Forge { .. }
             | Record::ProposalDecision(_)
+            | Record::Projection(_)
             | Record::Deployment(_)
             | Record::Turn(_)
             | Record::RunProof(_)
@@ -1518,6 +1522,7 @@ fn invalid_nonfinal_task_restore_page_stops_before_issuing_its_continuation() {
         .find_map(|row| match row {
             Record::Tasks(tasks::Stored::Ended(record)) => Some(record.as_ref().clone()),
             Record::Tasks(_)
+            | Record::Projection(_)
             | Record::Deployment(_)
             | Record::Turn(_)
             | Record::People(_)
@@ -1608,6 +1613,7 @@ fn authenticated_result_query_refuses_monotonic_expiry_after_backward_wall_jump_
         .find_map(|row| match row {
             Record::Tasks(tasks::Stored::Ended(task)) => Some(task.number),
             Record::Tasks(_)
+            | Record::Projection(_)
             | Record::Deployment(_)
             | Record::Turn(_)
             | Record::People(_)
@@ -4193,6 +4199,7 @@ fn a_policy_change_applies_to_later_decisions_only() {
             | Record::Call(_)
             | Record::Notes(_)
             | Record::EscalationDecision(_)
+            | Record::Projection(_)
             | Record::Deployment(_)
             | Record::Turn(_)
             | Record::RunProof(_)
@@ -4405,7 +4412,8 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
         .values()
         .filter_map(|row| match row {
             Record::Tasks(tasks::Stored::Live(record)) => Some(record.clone()),
-            Record::Deployment(_)
+            Record::Projection(_)
+            | Record::Deployment(_)
             | Record::People(_)
             | Record::Tasks(
                 tasks::Stored::Ended(_)
@@ -4413,6 +4421,7 @@ fn multiple_waiting_recipients_preflight_together_and_full_journal_refuses_witho
                 | tasks::Stored::Ledger(_)
                 | tasks::Stored::Writer(_)
                 | tasks::Stored::Pool(_)
+                | tasks::Stored::Milestone(_)
                 | tasks::Stored::History(_)
                 | tasks::Stored::PersonProposal(_),
             )

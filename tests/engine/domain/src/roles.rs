@@ -226,9 +226,11 @@ impl World {
                     | tasks::Stored::Ledger(_)
                     | tasks::Stored::Writer(_)
                     | tasks::Stored::Pool(_)
+                    | tasks::Stored::Milestone(_)
                     | tasks::Stored::History(_)
                     | tasks::Stored::PersonProposal(_),
                 )
+                | Record::Projection(_)
                 | Record::Call(_)
                 | Record::Deployment(_)
                 | Record::Turn(_)

@@ -112,6 +112,7 @@ pub(super) fn page(
             Record::Tasks(
                 tasks::Stored::PersonProposal(_)
                 | tasks::Stored::History(_)
+                | tasks::Stored::Milestone(_)
                 | tasks::Stored::Live(_)
                 | tasks::Stored::Ledger(_)
                 | tasks::Stored::Stub(_)
@@ -127,6 +128,7 @@ pub(super) fn page(
             | Record::Terminal(_)
             | Record::People(_)
             | Record::Notes(_)
+            | Record::Projection(_)
             | Record::Forge { .. } => unreachable!("ended-result range contains only ended tasks"),
         };
         if task.requester != tasks::Party::Person(read.person) {

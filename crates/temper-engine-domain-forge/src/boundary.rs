@@ -377,6 +377,8 @@ pub enum RestartStage {
 /// A parent or child input to the connector top.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
+    /// Drop a projection only after the core has settled its closing feed.
+    ForgetProjection { goal: u64 },
     /// Keep a connector-owned section source while the core budgets its brief.
     PlanBrief { section: Token, source: BriefSource },
     /// Gather a planned section with the core's allotted budget.
@@ -507,6 +509,8 @@ pub enum Request {
     ProjectionEffect { row: IssueRow, entry: client::Entry, description: crate::ProjectionEffect },
     /// A projection has to wait until its interval or prior effect settles.
     ProjectAfter { goal: u64, when: Option<skein_lib::Wall> },
+    /// The closed projection has no remaining desired write.
+    ProjectionSettled { goal: u64 },
     /// A projection could not continue under current facts or limits.
     ProjectionFailed { goal: u64 },
     /// A change policy step and its checked effect entry, when any.

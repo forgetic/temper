@@ -479,6 +479,14 @@ pub const fn max_out(l: &Limits) -> u32 {
 #[expect(clippy::too_many_lines, reason = "one exhaustive connector input dispatcher")]
 pub fn step(d: &mut Domain, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
+        Event::ForgetProjection { goal } => {
+            if let Some(row) = d.issues.get(&goal)
+                && row.pending.is_none()
+            {
+                d.issues.remove(&goal);
+                emit(out, Request::Erase { key: Key::Issue(goal) });
+            }
+        }
         Event::PlanBrief { section, source } => {
             assert!(d.brief_planned.insert(section, source) == Ok(None), "one bounded planned section");
         }
@@ -2358,7 +2366,7 @@ fn project(
             }
             match projected.decision {
                 issues::Decision::Wait(when) => emit(out, Request::ProjectAfter { goal, when: Some(when) }),
-                issues::Decision::None => {}
+                issues::Decision::None => settled_projection(d, goal, out),
                 issues::Decision::Hold | issues::Decision::Effect(_) => unreachable!("matched above"),
             }
         }
@@ -2422,6 +2430,20 @@ fn projection_key(namespace: &[u8], goal: u64, key: issues::Key, l: &Limits) -> 
         issues::Key::Open => (1, 0),
         issues::Key::Body(revision) => (2, revision),
         issues::Key::Milestone(milestone) => match milestone {
+            issues::MilestoneKey::Lifecycle { task, position } => {
+                return client::effect_key(
+                    namespace,
+                    &client::EffectPurpose::ProjectionHistory { goal, task, position, family: 1 },
+                    l.client.op_bytes,
+                );
+            }
+            issues::MilestoneKey::TaskRevision { task, revision } => {
+                return client::effect_key(
+                    namespace,
+                    &client::EffectPurpose::ProjectionHistory { goal, task, position: revision, family: 2 },
+                    l.client.op_bytes,
+                );
+            }
             issues::MilestoneKey::PlanAccepted => (3, 0),
             issues::MilestoneKey::Revision(number) => (4, number),
             issues::MilestoneKey::ChangeLanded(number) => (5, number),
@@ -2997,5 +3019,21 @@ fn read_afresh_complete(d: &mut Domain, out: &mut Queue<Request>) {
     if d.restart_fresh == Some(true) && d.pending_ci.is_empty() {
         d.restart_fresh = None;
         emit(out, Request::RestartDone { stage: RestartStage::ReadAfresh });
+    }
+}
+
+fn settled_projection(d: &Domain, goal: u64, out: &mut Queue<Request>) {
+    let settled = match d.issues.get(&goal) {
+        Some(row) => {
+            row.state.closed
+                && match &row.desired {
+                    Some(view) => view.finished.is_some(),
+                    None => false,
+                }
+        }
+        None => false,
+    };
+    if settled {
+        emit(out, Request::ProjectionSettled { goal });
     }
 }

@@ -245,6 +245,7 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::ProjectionEffect { .. }
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
+        | Request::ProjectionSettled { .. }
         | Request::ChangeDecision { .. }
         | Request::Read { .. }
         | Request::BriefClient { .. }
@@ -284,6 +285,7 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::ProjectionEffect { .. }
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
+        | Request::ProjectionSettled { .. }
         | Request::ChangeDecision { .. }
         | Request::Read { .. }
         | Request::BriefClient { .. }
@@ -323,6 +325,7 @@ fn adoption_reads_permission_before_committing_its_role() {
         | Request::ProjectionEffect { .. }
         | Request::ProjectAfter { .. }
         | Request::ProjectionFailed { .. }
+        | Request::ProjectionSettled { .. }
         | Request::ChangeDecision { .. }
         | Request::Read { .. }
         | Request::BriefClient { .. }

@@ -18,7 +18,8 @@ fn ended(world: &World) -> &tasks::TaskRecord {
         .values()
         .find_map(|row| match row {
             Record::Tasks(tasks::Stored::Ended(record)) => Some(record.as_ref()),
-            Record::Deployment(_)
+            Record::Projection(_)
+            | Record::Deployment(_)
             | Record::Turn(_)
             | Record::People(_)
             | Record::Notes(_)
@@ -33,6 +34,7 @@ fn ended(world: &World) -> &tasks::TaskRecord {
                 | tasks::Stored::Ledger(_)
                 | tasks::Stored::Writer(_)
                 | tasks::Stored::Pool(_)
+                | tasks::Stored::Milestone(_)
                 | tasks::Stored::History(_)
                 | tasks::Stored::PersonProposal(_),
             )

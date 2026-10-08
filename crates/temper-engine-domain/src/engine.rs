@@ -777,7 +777,7 @@ enum Work {
     Brief(brief::GatherEvent),
     StartBrief { task: u64 },
     Forge(forge::Event),
-    ProjectGoal(Box<tasks::TaskRecord>),
+    ProjectGoal(Box<jig_core::ProjectionFeed>),
     GoalSubscribe(forge::Subscriber),
     Activate(Box<tasks::RunContext>),
     EscalationLoaded { waiter: Token, rows: Box<[Record]> },
@@ -1738,11 +1738,14 @@ fn lose_channel(domain: &mut Domain, env: &Env<Limits>, channel: Token) {
     domain.core.lost_channel(&environment_core(env), channel);
 }
 
-fn close(domain: &mut Domain, env: &Env<Limits>, decision: Decision, out: &mut Queue<Request>) {
+fn close(domain: &mut Domain, env: &Env<Limits>, mut decision: Decision, out: &mut Queue<Request>) {
     if domain.core.restart_failure().is_some() {
         out.push(Request::Stop);
         return;
     }
+    let requests = jig_core::finish_decision(&mut domain.core, &environment_core(env));
+    route_core_requests(domain, env, &mut decision, requests);
+    route_into(domain, env, &mut decision);
     crate::accept_pending(&mut domain.journal, &mut domain.core.counters, &env.limits.journal, decision)
         .expect("root pressure reserved before child mutation");
     if domain.journal.stopped() {
@@ -2162,6 +2165,9 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                 match output.pop().expect("core output count") {
                     jig_core::Request::Write(write) => match write {
                         jig_core::Write::Save(record) => match record {
+                            jig_core::Record::Core(jig_core::CoreRecord::Projection(row)) => {
+                                save(decision, &env.limits, Write::Save(Record::Projection(row)));
+                            }
                             jig_core::Record::Core(jig_core::CoreRecord::Call(row)) => {
                                 let answer = forge_route::effect_answer(domain, row.key, &row.part);
                                 if let jig_core::CallPart::Effect { .. } = row.part {
@@ -2209,6 +2215,9 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                             }
                         },
                         jig_core::Write::Erase(key) => match key {
+                            jig_core::Key::Core(jig_core::CoreKey::Projection(key)) => {
+                                save(decision, &env.limits, Write::Erase(Key::Projection(key)));
+                            }
                             jig_core::Key::People(key) => save(decision, &env.limits, Write::Erase(Key::People(key))),
                             jig_core::Key::Tasks(key) => save(decision, &env.limits, Write::Erase(Key::Tasks(key))),
                             jig_core::Key::Core(jig_core::CoreKey::Call(key)) => {
@@ -2402,11 +2411,22 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                                 }));
                                 None
                             }
-                            jig_core::Ask::ProjectGoal { goal } => {
+                            jig_core::Ask::ProjectGoal { feed } => {
                                 if connector == domain.config.forge_connector
-                                    && domain.forge.home(goal.project).is_some()
+                                    && domain.forge.home(feed.goal.project).is_some()
                                 {
-                                    domain.work.push(Work::ProjectGoal(goal));
+                                    domain.work.push(Work::ProjectGoal(feed));
+                                } else if feed.closing {
+                                    domain.work.push(Work::Core(jig_core::Event::ProjectionSettled {
+                                        goal: feed.goal.number,
+                                        connector,
+                                    }));
+                                }
+                                None
+                            }
+                            jig_core::Ask::ForgetProjection { goal } => {
+                                if connector == domain.config.forge_connector {
+                                    domain.work.push(Work::Forge(forge::Event::ForgetProjection { goal }));
                                 }
                                 None
                             }
@@ -4080,6 +4100,7 @@ fn input_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: O
         | Record::Tasks(_)
         | Record::People(_)
         | Record::Notes(_)
+        | Record::Projection(_)
         | Record::Forge { .. } => {
             input_failed(domain, waiter);
             return;
@@ -4177,6 +4198,7 @@ fn note_loaded(domain: &mut Domain, waiter: Token, rows: Box<[Record]>, next: Op
             | Record::Terminal(_)
             | Record::Tasks(_)
             | Record::People(_)
+            | Record::Projection(_)
             | Record::Forge { .. } => {
                 note_failed(domain, waiter);
                 return;
@@ -4410,6 +4432,7 @@ fn dependency_loaded(
         | Record::Tasks(_)
         | Record::People(_)
         | Record::Notes(_)
+        | Record::Projection(_)
         | Record::Forge { .. } => {
             dependency_failed(domain, waiter);
             return;
@@ -4463,6 +4486,7 @@ fn transcript_loaded(
             | Record::Tasks(_)
             | Record::People(_)
             | Record::Notes(_)
+            | Record::Projection(_)
             | Record::Forge { .. } => {
                 transcript_failed(domain, waiter);
                 return;
@@ -4962,6 +4986,11 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     }
     let mut bytes =
         crate::worst_case(&limits.journal)?.checked_add(jig_core::effect_worst_case(&core_limits(limits))?)?;
+    bytes = bytes.checked_add(Map::<u64, Box<jig_core::Projection>>::worst_case(limits.tasks.tasks)?)?.checked_add(
+        u64::from(limits.tasks.tasks)
+            .checked_mul(u64::from(core_limits(limits).connectors.checked_add(2)?))?
+            .checked_mul(jig_core::projection_bytes(&core_limits(limits))?)?,
+    )?;
     bytes = bytes
         .checked_add(jig_core::conversation_worst_case(&core_limits(limits))?)?
         .checked_add(u64::from(limits.journal.held).checked_mul(u64::from(limits.journal.transcript_bytes))?)?
@@ -5552,6 +5581,13 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                 }
             }
         }
+        Record::Projection(row) => {
+            if domain.core.restore_core(jig_core::CoreRecord::Projection(row), &core_limits(&env.limits))
+                == jig_core::Restored::Rejected
+            {
+                let _refused = domain.core.restart_refuse();
+            }
+        }
         Record::People(people::Stored::Policy { project, value }) => {
             if !domain.core.restore_policy(&core_limits(&domain.limits), project, value) {
                 let _refused = domain.core.restart_refuse();
@@ -5591,7 +5627,9 @@ fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
                 }
                 domain.work.push(Work::Tasks(tasks::Event::Restore { record }));
             }
-            tasks::Stored::History(_) => unreachable!("history rows excluded from startup"),
+            tasks::Stored::Milestone(_) | tasks::Stored::History(_) => {
+                unreachable!("history rows excluded from startup")
+            }
             tasks::Stored::Live(ref task) => {
                 if !escalation::supported(domain, task) || !domain.core.restore_task_row(&record) {
                     let _refused = domain.core.restart_refuse();

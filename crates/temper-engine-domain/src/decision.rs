@@ -364,7 +364,8 @@ impl Decision {
                 | Key::Terminal { .. }
                 | Key::Tasks(_)
                 | Key::People(_)
-                | Key::Forge(_),
+                | Key::Forge(_)
+                | Key::Projection(_),
             ) => true,
             Write::Save(Record::EscalationDecision(row)) => {
                 row.task != 0
@@ -386,6 +387,7 @@ impl Decision {
             Write::Erase(Key::Notes(_))
             | Write::Save(
                 Record::Tasks(_)
+                | Record::Projection(_)
                 | Record::People(_)
                 | Record::Notes(_)
                 | Record::Forge { .. }

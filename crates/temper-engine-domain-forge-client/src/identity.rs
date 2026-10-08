@@ -11,6 +11,8 @@ use skein_lib::List;
 /// (jig's domain/connectors.md, section 4.4).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum EffectPurpose {
+    /// One task history milestone within a goal projection.
+    ProjectionHistory { goal: u64, task: u64, position: u64, family: u8 },
     /// One agent call in one task attempt.
     Call { task: u64, attempt: u64, completion: u32, position: u32 },
     /// One purpose within a task's procedure.
@@ -26,6 +28,7 @@ pub enum EffectPurpose {
 #[must_use]
 pub fn effect_key(deployment: &[u8], purpose: &EffectPurpose, max_bytes: u32) -> Option<Box<[u8]>> {
     let purpose_bytes = match purpose {
+        EffectPurpose::ProjectionHistory { .. } => 26,
         EffectPurpose::Call { .. } => 25,
         EffectPurpose::Step { .. } => 11,
         EffectPurpose::Projection { .. } => 18,
@@ -44,6 +47,13 @@ pub fn effect_key(deployment: &[u8], purpose: &EffectPurpose, max_bytes: u32) ->
         bytes.push(*byte).ok()?;
     }
     match purpose {
+        EffectPurpose::ProjectionHistory { goal, task, position, family } => {
+            bytes.push(5).ok()?;
+            bytes.push(*family).ok()?;
+            for byte in goal.to_be_bytes().into_iter().chain(task.to_be_bytes()).chain(position.to_be_bytes()) {
+                bytes.push(byte).ok()?;
+            }
+        }
         EffectPurpose::Call { task, attempt, completion, position } => {
             bytes.push(1).ok()?;
             for byte in task

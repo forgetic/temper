@@ -100,6 +100,7 @@ impl Referee {
                         | people::Stored::Answer { .. },
                     )
                     | Record::Tasks(_)
+                    | Record::Projection(_)
                     | Record::Call(_)
                     | Record::Deployment(_)
                     | Record::Turn(_)
@@ -132,6 +133,7 @@ impl Referee {
                         | people::Stored::Policy { .. },
                     )
                     | Record::Tasks(_)
+                    | Record::Projection(_)
                     | Record::Call(_)
                     | Record::Deployment(_)
                     | Record::Turn(_)
@@ -178,12 +180,14 @@ impl Referee {
                             | tasks::Stored::Ended(_)
                             | tasks::Stored::Stub(_)
                             | tasks::Stored::Ledger(_)
+                            | tasks::Stored::Milestone(_)
                             | tasks::Stored::History(_)
                             | tasks::Stored::PersonProposal(_)
                             | tasks::Stored::Writer(_)
                             | tasks::Stored::Pool(_),
                         )
                         | Record::People(_)
+                        | Record::Projection(_)
                         | Record::Call(_)
                         | Record::Deployment(_)
                         | Record::Turn(_)
@@ -238,6 +242,7 @@ impl Referee {
                 }
                 Write::Save(
                     Record::Tasks(_)
+                    | Record::Projection(_)
                     | Record::Call(_)
                     | Record::RunProof(_)
                     | Record::Terminal(_)
@@ -247,7 +252,8 @@ impl Referee {
                     | Record::Notes(_),
                 )
                 | Write::Erase(
-                    Key::Call(_)
+                    Key::Projection(_)
+                    | Key::Call(_)
                     | Key::Tasks(_)
                     | Key::RunProof { .. }
                     | Key::Terminal { .. }

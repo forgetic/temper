@@ -16,6 +16,10 @@ pub struct PlanItem {
 /// Stable identity of a milestone in the goal's history.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum MilestoneKey {
+    /// A task lifecycle position in the whole goal tree.
+    Lifecycle { task: u64, position: u64 },
+    /// A task semantic revision in the whole goal tree.
+    TaskRevision { task: u64, revision: u64 },
     /// The plan was accepted.
     PlanAccepted,
     /// A plan revision, identified by its history number.

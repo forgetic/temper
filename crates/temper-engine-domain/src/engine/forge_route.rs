@@ -836,24 +836,21 @@ pub(super) struct RunWorkspace {
     clippy::wildcard_enum_match_arm,
     reason = "projection converts already validated task text and selects current milestone kinds"
 )]
-pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks::TaskRecord) {
-    if goal.tracked.is_none() {
-        return;
-    }
+pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, feed: &jig_core::ProjectionFeed) {
+    let goal = &feed.goal;
     let Some(repository) = domain.forge.home(goal.project) else { return };
     let provider = repository.provider;
-    let Some(text) = core::str::from_utf8(&goal.spec.words).ok() else {
+    let Some(text) = core::str::from_utf8(&goal.words).ok() else {
         domain.work.push(Work::Tasks(tasks::Event::Hold { task: goal.number, why: tasks::Hold::Effects }));
         return;
     };
     let title = text.lines().next().unwrap_or(text);
     let mut plan = List::with_capacity(env.limits.forge.issue_policy.plan_items);
-    for view in domain.core.tasks.view_tasks() {
-        if view.requester != tasks::Party::Task(goal.number) {
+    for child in &feed.plan {
+        if child.number == goal.number {
             continue;
         }
-        let Some(child) = domain.core.tasks.task(view.number) else { continue };
-        let Some(words) = core::str::from_utf8(&child.spec.words).ok() else { continue };
+        let Some(words) = core::str::from_utf8(&child.words).ok() else { continue };
         if plan
             .push(forge_issues::PlanItem {
                 text: Box::from(words),
@@ -872,25 +869,27 @@ pub(super) fn project_goal(domain: &mut Domain, env: &Env<Limits>, goal: &tasks:
         }
     }
     let mut milestones = List::with_capacity(env.limits.forge.issue_policy.milestones);
-    for word in &goal.inbox {
-        let key = match word.kind {
-            tasks::MessageKind::Result(tasks::ResultKind::Change { .. }) => {
-                Some(forge_issues::MilestoneKey::ChangeLanded(word.number))
-            }
-            tasks::MessageKind::Result(tasks::ResultKind::Failed) => {
-                Some(forge_issues::MilestoneKey::ChangeHeld(word.number))
-            }
-            tasks::MessageKind::Result(tasks::ResultKind::Report) => {
-                Some(forge_issues::MilestoneKey::Report(word.number))
-            }
-            _ => None,
+    for milestone in &feed.milestones {
+        let kept = match &milestone.phase {
+            Some(tasks::Phase::Ended(_) | tasks::Phase::Held { .. }) => true,
+            Some(tasks::Phase::Waiting | tasks::Phase::Active(_) | tasks::Phase::Closing(_)) | None => false,
         };
-        if let Some(key) = key {
-            let words = core::str::from_utf8(&word.words).unwrap_or("Task milestone");
-            if milestones.push(forge_issues::Milestone { key, text: Box::from(words) }).is_err() {
-                domain.work.push(Work::Tasks(tasks::Event::Hold { task: goal.number, why: tasks::Hold::Effects }));
-                return;
+        if !kept && milestone.change.is_none() {
+            continue;
+        }
+        let key = match milestone.identity {
+            jig_core::MilestoneId::Lifecycle { task, position } => {
+                forge_issues::MilestoneKey::Lifecycle { task, position }
             }
+            jig_core::MilestoneId::Revision { task, revision } => {
+                forge_issues::MilestoneKey::TaskRevision { task, revision }
+            }
+        };
+        let words = core::str::from_utf8(&milestone.words).unwrap_or("Task milestone");
+        let words = if words.is_empty() { "Task milestone" } else { words };
+        if milestones.push(forge_issues::Milestone { key, text: Box::from(words) }).is_err() {
+            domain.work.push(Work::Tasks(tasks::Event::Hold { task: goal.number, why: tasks::Hold::Effects }));
+            return;
         }
     }
     let Some(entry) = crate::fresh(&mut domain.core.counters, Family::ConnectorRow) else { return };
@@ -2280,6 +2279,15 @@ pub(super) fn outputs(
                 | forge_change::Decision::Cancel
                 | forge_change::Decision::Hold(_) => change_decision(domain, env, task, choice),
             },
+            forge::Request::ProjectionSettled { goal } => {
+                if domain.core.tasks.task(goal).is_none() {
+                    domain.forge_projection_due.remove(&goal);
+                    domain.work.push(Work::Core(jig_core::Event::ProjectionSettled {
+                        goal,
+                        connector: domain.config.forge_connector,
+                    }));
+                }
+            }
             forge::Request::ProjectAfter { goal, when } => {
                 if let Some(issue) = domain.forge.issue(goal)
                     && let Some(number) = issue.number

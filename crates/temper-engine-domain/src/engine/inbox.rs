@@ -245,9 +245,10 @@ pub(super) fn page(
                     | tasks::Stored::Pool(_)
                     | tasks::Stored::Stub(_),
                 ) => {}
-                Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::History(_))
+                Record::Tasks(tasks::Stored::Ended(_) | tasks::Stored::History(_) | tasks::Stored::Milestone(_))
                 | Record::People(_)
                 | Record::Notes(_)
+                | Record::Projection(_)
                 | Record::Forge { .. }
                 | Record::Deployment(_)
                 | Record::Call(_)
@@ -296,12 +297,14 @@ pub(super) fn page(
                     tasks::Stored::Live(_)
                     | tasks::Stored::Ledger(_)
                     | tasks::Stored::History(_)
+                    | tasks::Stored::Milestone(_)
                     | tasks::Stored::Stub(_)
                     | tasks::Stored::Writer(_)
                     | tasks::Stored::Pool(_),
                 )
                 | Record::People(_)
                 | Record::Notes(_)
+                | Record::Projection(_)
                 | Record::Forge { .. }
                 | Record::Deployment(_)
                 | Record::Call(_)

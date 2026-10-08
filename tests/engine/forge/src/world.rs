@@ -436,6 +436,7 @@ impl World {
                 | top::Request::Retained { .. }
                 | top::Request::ReleaseFailed { .. }
                 | top::Request::ProjectAfter { .. }
+                | top::Request::ProjectionSettled { .. }
                 | top::Request::ProjectionFailed { .. }
                 | top::Request::ChangeDecision { .. }
                 | top::Request::News { .. }

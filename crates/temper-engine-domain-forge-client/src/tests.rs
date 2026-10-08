@@ -648,3 +648,21 @@ fn deployment_config_and_decoded_key_frames_are_checked() {
         Error::TooLarge
     );
 }
+
+#[test]
+fn projection_history_keys_keep_task_position_and_history_family() {
+    let purpose = crate::EffectPurpose::ProjectionHistory { goal: 1, task: 2, position: 3, family: 1 };
+    let first = crate::effect_key(&[1; 16], &purpose, 64).expect("bounded history key");
+    assert_eq!(first, crate::effect_key(&[1; 16], &purpose, 64).expect("stable history key"));
+    for other in [
+        crate::EffectPurpose::ProjectionHistory { goal: 2, task: 2, position: 3, family: 1 },
+        crate::EffectPurpose::ProjectionHistory { goal: 1, task: 3, position: 3, family: 1 },
+        crate::EffectPurpose::ProjectionHistory { goal: 1, task: 2, position: 4, family: 1 },
+        crate::EffectPurpose::ProjectionHistory { goal: 1, task: 2, position: 3, family: 2 },
+        crate::EffectPurpose::Projection { goal: 1, part: 1, number: 3 },
+    ] {
+        assert_ne!(first, crate::effect_key(&[1; 16], &other, 64).expect("separate history key"));
+    }
+    assert_eq!(first.len(), 45);
+    assert!(crate::effect_key(&[1; 16], &purpose, 44).is_none());
+}
