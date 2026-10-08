@@ -728,7 +728,7 @@ fn write_holding(connector: u16, name: &forge::Name, limits: &tasks::Limits) -> 
 /// Name the forge branches a new task will own before the hub admits its batch.
 #[expect(clippy::too_many_arguments, reason = "task identity and specification arrive from separate admitted carriers")]
 pub(super) fn task_holdings(
-    domain: &Domain,
+    domain: &mut Domain,
     env: &Env<Limits>,
     project: u32,
     root: u64,
@@ -780,7 +780,9 @@ pub(super) fn task_holdings(
             repository: repository.provider.repository,
             what: branch_what(&branch, env.limits.forge.name_bytes)?,
         };
-        return Some(Box::new([write_holding(domain.config.forge_connector, &name, &env.limits.tasks)?]));
+        let holding = write_holding(domain.config.forge_connector, &name, &env.limits.tasks)?;
+        report_resource(domain, env, &name);
+        return Some(Box::new([holding]));
     }
     if let Some(home) = domain.forge.home(project) {
         include_repository(&mut selected, home)?;
@@ -794,6 +796,7 @@ pub(super) fn task_holdings(
         }
     }
     let mut holdings = List::with_capacity(env.limits.tasks.holdings);
+    let mut reports = List::with_capacity(env.limits.tasks.holdings);
     for repository in &selected {
         if repository.role == forge::Role::Context || !repository.kinds.push {
             continue;
@@ -805,6 +808,10 @@ pub(super) fn task_holdings(
             what: branch_what(&branch, env.limits.forge.name_bytes)?,
         };
         holdings.push(write_holding(domain.config.forge_connector, &name, &env.limits.tasks)?).ok()?;
+        reports.push(name).ok()?;
+    }
+    for name in &reports {
+        report_resource(domain, env, name);
     }
     Some(holdings.into_boxed())
 }
@@ -2049,24 +2056,7 @@ pub(super) fn outputs(
     for _ in 0..out.len() {
         let request = out.pop().expect("connector output count");
         match request {
-            forge::Request::Resource { name, role, hold } => {
-                let Some(name) = hub_name(domain.config.forge_connector, &name, &env.limits.tasks) else { continue };
-                let role = match role {
-                    forge::Access::Owned => jig_core::connector::ResourceRole::Owned,
-                    forge::Access::Participant => jig_core::connector::ResourceRole::Participant,
-                    forge::Access::Context => jig_core::connector::ResourceRole::Context,
-                    forge::Access::Unavailable => jig_core::connector::ResourceRole::Unavailable,
-                };
-                let hold = match hold {
-                    forge::resources::HoldKind::Shared => jig_core::connector::HoldKind::Shared,
-                    forge::resources::HoldKind::Exclusive { wait } => jig_core::connector::HoldKind::Exclusive { wait },
-                };
-                domain.work.push(Work::Core(jig_core::Event::EffectConnector(jig_core::connector::Event::Resource {
-                    name,
-                    role,
-                    hold,
-                })));
-            }
+            forge::Request::Resource { name, role, hold } => route_resource(domain, env, &name, role, hold),
 
             forge::Request::GoalTopic { goal, topic } => subscribe_goal(domain, env, goal, topic),
             forge::Request::GoalUntopic { goal, topic } => {
@@ -2832,4 +2822,35 @@ pub(super) fn left(domain: &mut Domain, env: &Env<Limits>, task: u64, attempt: u
     }
     domain.work.push(Work::Forge(forge::Event::Answered { task, attempt, pushed: names.into_boxed() }));
     domain.work.push(Work::Forge(forge::Event::Lost { task, attempt }));
+}
+
+fn report_resource(domain: &mut Domain, env: &Env<Limits>, name: &forge::Name) {
+    if let Some((role, hold)) = domain.forge.resource_facts(name) {
+        route_resource(domain, env, name, role, hold);
+    }
+}
+
+fn route_resource(
+    domain: &mut Domain,
+    env: &Env<Limits>,
+    name: &forge::Name,
+    role: forge::Access,
+    hold: forge::resources::HoldKind,
+) {
+    let Some(name) = hub_name(domain.config.forge_connector, name, &env.limits.tasks) else { return };
+    let role = match role {
+        forge::Access::Owned => jig_core::connector::ResourceRole::Owned,
+        forge::Access::Participant => jig_core::connector::ResourceRole::Participant,
+        forge::Access::Context => jig_core::connector::ResourceRole::Context,
+        forge::Access::Unavailable => jig_core::connector::ResourceRole::Unavailable,
+    };
+    let hold = match hold {
+        forge::resources::HoldKind::Shared => jig_core::connector::HoldKind::Shared,
+        forge::resources::HoldKind::Exclusive { wait } => jig_core::connector::HoldKind::Exclusive { wait },
+    };
+    domain.work.push(Work::Core(jig_core::Event::EffectConnector(jig_core::connector::Event::Resource {
+        name,
+        role,
+        hold,
+    })));
 }
