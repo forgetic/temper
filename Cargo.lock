@@ -188,7 +188,9 @@ dependencies = [
  "jig-core-people",
  "jig-core-tasks",
  "jig-core-views",
+ "jig-fake-parties",
  "jig-fake-store",
+ "jig-fake-workers",
  "jig-test-connector",
  "jig-test-connector-world",
  "jig-test-domain",
@@ -198,8 +200,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-fake-parties"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
+
+[[package]]
 name = "jig-fake-store"
 version = "0.0.0"
+
+[[package]]
+name = "jig-fake-workers"
+version = "0.0.0"
+dependencies = [
+ "skein-lib",
+]
 
 [[package]]
 name = "jig-fleet-world"

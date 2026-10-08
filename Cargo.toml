@@ -10,6 +10,8 @@ members = [
     "jig/testing/jig-test-connector",
     "jig/testing/jig-test-domain",
     "jig/testing/jig-fake-store",
+    "jig/testing/jig-fake-workers",
+    "jig/testing/jig-fake-parties",
     "jig/testing/jig-test-system",
     "jig/testing/jig-ops-fake-production",
     "jig/examples/ops/domain-observability",
@@ -89,6 +91,8 @@ jig-core-accounts = { path = "jig/crates/jig-core-accounts" }
 jig-test-connector = { path = "jig/testing/jig-test-connector" }
 jig-test-domain = { path = "jig/testing/jig-test-domain" }
 jig-fake-store = { path = "jig/testing/jig-fake-store" }
+jig-fake-workers = { path = "jig/testing/jig-fake-workers" }
+jig-fake-parties = { path = "jig/testing/jig-fake-parties" }
 jig-test-system = { path = "jig/testing/jig-test-system" }
 jig-ops-fake-production = { path = "jig/testing/jig-ops-fake-production" }
 jig-ops-domain-observability = { path = "jig/examples/ops/domain-observability" }
