@@ -363,10 +363,33 @@ version = "0.0.0"
 name = "jig-ops-world"
 version = "0.0.0"
 dependencies = [
+ "jig-charter",
+ "jig-conformance",
+ "jig-core",
+ "jig-core-accounts",
+ "jig-core-authority",
+ "jig-core-fleet",
+ "jig-core-notes",
+ "jig-core-people",
+ "jig-core-tasks",
+ "jig-core-world",
+ "jig-fake-store",
+ "jig-host",
+ "jig-inline-agent",
+ "jig-ops-domain",
  "jig-ops-domain-infrastructure",
  "jig-ops-domain-observability",
  "jig-ops-fake-production",
+ "jig-test-system",
+ "skein-fake-llm-domain",
  "skein-lib",
+ "skein-world",
+ "smith-agent-world",
+ "smith-charter",
+ "smith-domain",
+ "smith-domain-run",
+ "smith-protocol-channel",
+ "smith-transcript",
 ]
 
 [[package]]
