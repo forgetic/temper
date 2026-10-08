@@ -75,6 +75,190 @@ fn keyed_creations_and_comments_survive_faults_late_landings_and_restart() {
         assert_eq!(stats.calls, stats.terminals);
     }
 }
+
+#[test]
+fn a_keyed_branch_retry_keeps_its_deadline_across_restart_and_rejects_a_late_copy() {
+    let mut world = World::new(Settings::calm(41));
+    let head = world.branch(b"main").expect("fixture main branch");
+    world.land_writes_late(skein_lib::Duration::from_secs(20));
+    world.make(Entry {
+        number: 1,
+        task: 7,
+        repository: REPO,
+        effect: Effect {
+            write: api::Write::CreateBranch {
+                branch: Box::from(&b"temper/7"[..]),
+                commit: temper_engine_forge_client_world::translate::commit(head),
+            },
+            condition: Condition::None,
+        },
+        start: None,
+        attempt: None,
+        failures: 0,
+    });
+    world.run_for(1);
+    let first = world.entry(1).expect("attempt retained").attempt.expect("write was sent");
+    assert_eq!(world.stats().writes, 1);
+    assert_eq!(world.branch(b"temper/7"), None);
+    world.calm();
+    world.restart();
+    world.run_for(8);
+    assert_eq!(world.entry(1).expect("deadline retained").attempt, Some(first));
+    assert_eq!(world.stats().writes, 1, "restart cannot renew the first deadline or send early");
+    world.run_for(5);
+    assert_eq!(
+        world.stats().writes,
+        2,
+        "retry is sent after the original deadline: {:?} {:?}",
+        world.entry(1),
+        world.outcomes()
+    );
+    assert_eq!(world.branch(b"temper/7"), Some(head));
+    world.run_for(10);
+    assert_eq!(world.stats().late_landings, 1);
+    assert_eq!(world.branch(b"temper/7"), Some(head));
+    assert!(
+        world
+            .outcomes()
+            .iter()
+            .any(|(entry, outcome)| { *entry == 1 && matches!(outcome, Outcome::Made { made: Made::Branch(_), .. }) })
+    );
+    world.finish();
+}
+
+#[test]
+fn an_unrecoverable_creation_is_held_when_its_late_copy_is_still_missing() {
+    let mut world = World::new(Settings::calm(42));
+    world.land_writes_late(skein_lib::Duration::from_secs(20));
+    world.make(issue(1));
+    world.run_for(1);
+    assert_eq!(world.stats().writes, 1);
+    world.calm();
+    world.restart();
+    world.run_for(12);
+    assert!(world.outcomes().contains(&(1, Outcome::Held)));
+    assert_eq!(world.stats().writes, 1, "an unrecoverable creation is never retried");
+    world.run_for(10);
+    assert_eq!(world.stats().late_landings, 1);
+    assert_eq!(world.stats().creations, 1, "the late copy may still make its effect");
+    world.finish();
+}
+
+#[test]
+fn a_conditional_merge_lands_once_when_the_old_copy_arrives_after_its_retry() {
+    let mut world = World::new(Settings::calm(43));
+    let pull = world.historical_pull();
+    let head = world.branch(b"topic").expect("fixture pull head");
+    let landing = world.branch(b"main").expect("fixture landing branch");
+    world.land_writes_late(skein_lib::Duration::from_secs(20));
+    world.make(Entry {
+        number: 1,
+        task: 7,
+        repository: REPO,
+        effect: Effect {
+            write: api::Write::Merge { number: pull, head: temper_engine_forge_client_world::translate::commit(head) },
+            condition: Condition::Merge { base: Box::from(&b"main"[..]) },
+        },
+        start: None,
+        attempt: None,
+        failures: 0,
+    });
+    world.run_for(1);
+    assert_eq!(world.stats().writes, 1);
+    world.calm();
+    world.restart();
+    world.run_for(8);
+    assert_eq!(world.stats().writes, 1);
+    world.run_for(5);
+    assert_eq!(world.stats().writes, 2);
+    let merged = world.branch(b"main").expect("merged landing branch");
+    assert_ne!(merged, landing);
+    world.run_for(10);
+    assert_eq!(world.stats().late_landings, 1);
+    assert_eq!(world.branch(b"main"), Some(merged), "the stale copy cannot merge a second time");
+    assert!(
+        world
+            .outcomes()
+            .iter()
+            .any(|(entry, outcome)| { *entry == 1 && matches!(outcome, Outcome::Made { made: Made::Merged(_), .. }) })
+    );
+    world.finish();
+}
+
+#[test]
+fn a_set_may_be_replayed_without_changing_its_final_state() {
+    let mut world = World::new(Settings::calm(44));
+    let head = temper_engine_forge_client_world::translate::commit(world.branch(b"main").expect("fixture main"));
+    world.land_writes_late(skein_lib::Duration::from_secs(20));
+    world.make(Entry {
+        number: 1,
+        task: 7,
+        repository: REPO,
+        effect: Effect {
+            write: api::Write::Status { commit: head, context: Box::from(&b"build"[..]), check: api::Check::Passed },
+            condition: Condition::None,
+        },
+        start: None,
+        attempt: None,
+        failures: 0,
+    });
+    world.run_for(1);
+    world.calm();
+    world.restart();
+    world.run_for(8);
+    assert_eq!(world.stats().writes, 1);
+    world.run_for(15);
+    assert_eq!(world.stats().writes, 2);
+    assert_eq!(world.stats().late_landings, 1);
+    world.read(9, api::Read::Statuses { commit: head, page: 1 });
+    world.run_for(1);
+    match world.read_result(9) {
+        Some(Ok(api::Answer::Statuses { statuses, .. })) => {
+            assert_eq!(statuses.len(), 1);
+            assert_eq!(statuses[0].context.as_ref(), b"build");
+            assert_eq!(statuses[0].check, api::Check::Passed);
+        }
+        other => panic!("set status visible after both copies: {other:?}"),
+    }
+    world.finish();
+}
+
+#[test]
+fn another_writer_taking_a_keyed_branch_name_is_reported_without_overwriting_it() {
+    let mut world = World::new(Settings::calm(45));
+    world.historical_pull();
+    let intended = world.branch(b"main").expect("fixture main");
+    let other = world.branch(b"topic").expect("fixture topic");
+    assert_ne!(intended, other);
+    world.land_writes_late(skein_lib::Duration::from_secs(20));
+    world.make(Entry {
+        number: 1,
+        task: 7,
+        repository: REPO,
+        effect: Effect {
+            write: api::Write::CreateBranch {
+                branch: Box::from(&b"temper/7"[..]),
+                commit: temper_engine_forge_client_world::translate::commit(intended),
+            },
+            condition: Condition::None,
+        },
+        start: None,
+        attempt: None,
+        failures: 0,
+    });
+    world.run_for(1);
+    world.calm();
+    world.outside_branch(b"temper/7", other);
+    world.restart();
+    world.run_for(2);
+    assert_eq!(world.stats().writes, 1);
+    assert_eq!(world.branch(b"temper/7"), Some(other));
+    assert!(world.outcomes().contains(&(1, Outcome::Failed(api::Error::Exists))));
+    world.run_for(20);
+    assert_eq!(world.stats().late_landings, 1);
+    assert_eq!(world.branch(b"temper/7"), Some(other));
+    world.finish();
+}
 #[test]
 fn a_seed_replays_and_facts_change_no_decision() {
     let first = run(Settings::random(7));

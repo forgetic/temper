@@ -236,6 +236,20 @@ impl World {
     pub fn calm(&mut self) {
         self.forge_env.limits = config(false);
     }
+    /// Answer writes as timed out, then apply their delayed copies at `after`.
+    pub fn land_writes_late(&mut self, after: Duration) {
+        self.forge_env.limits.landing = 1000;
+        self.forge_env.limits.land_min = after;
+        self.forge_env.limits.land_max = after;
+    }
+    #[must_use]
+    pub fn branch(&self, branch: &[u8]) -> Option<u64> {
+        self.forge.branch(b"org/repo", branch)
+    }
+    #[must_use]
+    pub fn entry(&self, number: u64) -> Option<&Entry> {
+        self.entries.get(&number)
+    }
     #[must_use]
     pub fn stats(&self) -> Stats {
         let tally = self.forge.tally();
@@ -490,6 +504,19 @@ impl World {
             panic!("fixture pull creation");
         };
         number
+    }
+    /// Another writer takes a branch name before a delayed client creation lands.
+    pub fn outside_branch(&mut self, branch: &[u8], commit: u64) {
+        let now = self.env.now;
+        assert_eq!(
+            self.external_at(
+                raw::Op::Write(raw::Write::CreateBranch { branch: Box::from(branch), commit }),
+                21_008,
+                2,
+                now,
+            ),
+            raw::Answer::Branch(raw::Created::Created)
+        );
     }
     pub fn historical_review(&mut self, number: u64, pending: bool) -> u64 {
         let verdict = if pending { None } else { Some(raw::Verdict::Comment) };

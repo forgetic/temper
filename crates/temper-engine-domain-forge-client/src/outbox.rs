@@ -1025,6 +1025,28 @@ fn retain_uncertain(
         | Error::Busy => false,
     };
     if !transient {
+        // A missing keyed creation is the answer to its recovery lookup,
+        // rather than a failed lookup to back off. Let `failed` apply the
+        // saved deadline and either wait or retry under the same key.
+        if error == Error::Missing
+            && let Phase::Find { .. } = phase
+        {
+            let w = d.outbox.entries.get(&number).expect("find owns entry");
+            match w.entry.effect.write {
+                Write::CreateBranch { .. } | Write::OpenPull { .. } => return false,
+                Write::CreateIssue { .. }
+                | Write::Post { .. }
+                | Write::Review { .. }
+                | Write::Edit { .. }
+                | Write::SetReviewers { .. }
+                | Write::Close { .. }
+                | Write::Reopen { .. }
+                | Write::Merge { .. }
+                | Write::Update { .. }
+                | Write::Status { .. }
+                | Write::DeleteBranch { .. } => {}
+            }
+        }
         match phase {
             Phase::AfterMerge { merged } => {
                 finish(d, number, Outcome::Raced { made: Made::Merged(merged), why: error }, out);

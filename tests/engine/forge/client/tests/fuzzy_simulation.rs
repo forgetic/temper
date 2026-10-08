@@ -39,3 +39,36 @@ fn seeded_faults_restarts_and_keyed_effects() {
     }
     assert!(unavailable > 0 && timeouts > 0 && landings > 0 && limited > 0, "every configured fault actually fell");
 }
+
+#[test]
+fn keyed_branch_creation_survives_cuts_before_and_after_its_retry_and_late_copy() {
+    for seed in 0..64 {
+        let mut world = World::new(Settings::calm(seed));
+        let head = world.branch(b"main").expect("fixture main");
+        world.land_writes_late(skein_lib::Duration::from_secs(20));
+        world.make(Entry {
+            number: 1,
+            task: 7,
+            repository: REPO,
+            effect: Effect {
+                write: api::Write::CreateBranch {
+                    branch: Box::from(&b"temper/7"[..]),
+                    commit: temper_engine_forge_client_world::translate::commit(head),
+                },
+                condition: Condition::None,
+            },
+            start: None,
+            attempt: None,
+            failures: 0,
+        });
+        world.run_for(1);
+        world.calm();
+        world.run_for(seed % 23);
+        world.restart();
+        world.run_for(30);
+        assert_eq!(world.branch(b"temper/7"), Some(head), "seed {seed}");
+        assert_eq!(world.stats().late_landings, 1, "seed {seed}");
+        assert!(world.stats().writes <= 2, "seed {seed}");
+        world.finish();
+    }
+}
