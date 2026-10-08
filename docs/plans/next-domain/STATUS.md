@@ -544,6 +544,8 @@ and workspace suites remain within their existing budgets.
 | jig 17.1 reference ops root | merged and pushed | 0507c918 | Composed the core, both connectors, permanent engine hub and inline Smith agent with one journal, admission bounds and core-selected restart order. Seven root checks cover admission, failure, reads during a held commit, restored header, bounds, startup and atomic tool replies. Gate: fmt/clippy; 1,237 focused / 3.688 s; 37 fuzzy / 8.704 s. |
 | jig 17.2a inline readiness and accepted-batch referee | merged and pushed | b07a2250 | Pure inline readiness prevents parking deferred Smith work. Durable accepted-batch member ranges let the referee follow the accepter's authority while retaining result delivery to the proposer; positive and negative cases check the evidence. Gate on main 0868ff4e: fmt/clippy; 1,250 focused / 3.542 s; 37 fuzzy / 8.810 s. |
 | jig 17.2b procedure news batching | merged and pushed | 4b02f82e | Procedure news follows its count/age policy; other message kinds remain immediate. Three new inbox stories cover count, age and words during a pending batch, with restart coverage. Gate on main 750f62a0: fmt/clippy; 1,253 focused / 4.234 s; 37 fuzzy / 8.969 s. Serial inbox measure: 12 focused / 0.065 s. |
+| jig 21.1 kinds of hold and pool slots | merged and pushed | 0868ff4e | Branch `jig/21-1-holds`: named connector reports govern shared/exclusive/pooled admission and waiting/refusing behavior. Unknown reports retain the whole batch before task creation or funding reservation; shrinking pools retain holders and admit no waiter until they drain. Both roots route reports. Gate: fmt/clippy; 1,247 focused / 3.409 s; 37 fuzzy / 8.956 s. |
+| jig 21.2 roles of resources | merged and pushed | ad3d6e2c | Branch `jig/21-2-roles`: current roles scoped to projects govern effects, projections, accepted effects and workspace writes. Unavailable resources refuse holds and hold waiters with a reason; narrowing stops a run writer while committed effects remain made. Restored adoption reports preserve context refusal. Stories cover participating writes, project isolation, narrowing, unavailable holds and cold restart. Gate: fmt/clippy; 1,257 focused / 1.867 s; 37 fuzzy / 4.971 s. |
 
 ### temper 03 boundary and handoff
 
@@ -562,17 +564,57 @@ and workspace suites remain within their existing budgets.
   adapter preserves authenticated push actor/head metadata; when that metadata is
   unavailable, retain the move as unconfirmed until terminal reads. Such reads
   cannot establish the identity behind an unreported outside forward push.
-- **Integration handoff:** the connector reports per-resource role/hold facts;
-  jig-core currently ignores its generic `Resource` event. This does not block
-  session 03's connector reporting. Consuming those reports is required before
-  later session 05 signs off generic dynamic resource admission. Proposal: jig's
-  authorized owner adds retained resource facts and applies updates to admission
-  and effective access; temper 05 routes them and checks changing-resource stories
-  on the conformance world. Current private-branch admission uses the same
-  connector hold constant, and current permission checks consult forge facts.
+- **Integration handoff completed by jig 21:** named hold kinds and pool slots
+  reach the hub, and current project roles reach effect and workspace authority
+  checks. Temper's root supplies the adopting project on resource reports.
+  Temper 05 still checks these routes and changing-resource stories through
+  its application conformance composition; the checks are listed below.
 - No design documents, jig sources, dependency pins or other repositories changed
   in this session. Session 05 still supplies Temper's reference root shape and
   application conformance composition.
+
+### jig 21 boundary and conformance handoff
+
+- **Existing decisions followed:** session 21.1 says an unreported resource
+  waits before its task is admitted; the core retains the bounded batch without
+  creating tasks or reserving funding. Resource roles belong to each adopting
+  project, as jig's `domain/connectors.md`, section 3.2 and
+  `domain/authority.md`, section 6 specify. Role changes narrow later decisions
+  without changing a task's grants or withdrawing committed effects.
+- **Boundary for every root, including ops:**
+  `core::connector::Event::Resource { project, name, role, hold }` carries the
+  adopting project's identity. `PoolSlots { name, slots }` remains global to
+  the named physical pool. The test connector's `Request::Named` now carries
+  `project`; its `Request::Resource { project, resource: Named }` reports
+  adoption, access loss and restored adoption independently of activation.
+  Its `SystemEvent::Unavailable { project, resource }` saves the lost access
+  and reports it. Roots translate these reports before later admission.
+- **Restore handoff:**
+  `Core::restore_resource_role(&Env<Limits>, project, tasks::Name, ResourceRole)`
+  restores a durable connector adoption's role during that connector's
+  `RestoreConnector` stage, before task adoption opens. Translate the record's
+  project, connector number and opaque path; a false result rejects startup.
+  The testing root replays the connector's restored adoption reports this way.
+  Ops and Temper's conformance adapters must preserve current roles across
+  their own record restoration and fresh reads.
+- **Temper 05 conformance checks:** verify that the forge's named shared and
+  exclusive reports, including waiting/refusing behavior, reach the hub;
+  an unknown report delays the whole batch without creating tasks or reserving
+  funding. Keep the generic pool-shrink stories; the forge reports no counted
+  pools. Verify owned/participating/context/unavailable roles for the correct
+  project and every described resource, through agent, procedure, projection
+  and accepted-effect paths. Check a waiting task held with
+  `ResourceUnavailable`, a current workspace writer stopped after narrowing,
+  later decisions refused, committed outbox entries still made, and the same
+  outcomes across commit cuts, cold restore and fresh permission reads. Use
+  the shared outside referee and retain the fixture's explicit adoptions.
+- **Gaps and prerequisites:** no new design gap, dependency repin or other
+  repository prerequisite blocks session 21. The inherited provider actor
+  limitation above is nonblocking for this session; losing authenticated push
+  metadata still prevents attributing an outside forward move. Temper 05
+  retains that limitation in its application conformance report. Generic
+  resource admission is complete; application conformance sign-off remains
+  Temper 05's work.
 
 ### jig 17 stopped proof and reference-root handoff
 
