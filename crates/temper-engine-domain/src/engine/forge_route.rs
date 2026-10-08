@@ -2180,7 +2180,10 @@ pub(super) fn outputs(
                 }
             }
             forge::Request::EffectsSettled { task } => {
-                domain.work.push(Work::Tasks(tasks::Event::EffectsSettled { task }));
+                domain.work.push(Work::Core(jig_core::Event::EffectConnector(jig_core::connector::Event::Closed {
+                    task,
+                    connector: domain.config.forge_connector,
+                })));
             }
             forge::Request::ReleaseFailed { task } => {
                 domain.work.push(Work::Tasks(tasks::Event::Hold { task, why: tasks::Hold::EffectFailed }));
