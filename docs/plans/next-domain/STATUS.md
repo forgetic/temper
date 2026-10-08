@@ -395,18 +395,43 @@ simulation; no legacy fuzzy seed trim is needed for the suite caps.
 | 07.5 spawned final boundary | merged locally | smith 06cad7c | fmt/clippy pass; 1,359 focused / 5.499 s; 17 fuzzy / 6.100 s. |
 | 07.5 local service | merged locally | smith 10aa298 | fmt/clippy pass; 1,360 focused / 5.498 s; 17 fuzzy / 5.875 s. |
 | 07.5 process adapter | merged locally | smith e43ab01 | fmt/clippy pass; 1,360 focused / 5.457 s; 17 fuzzy / 6.009 s. |
+| 07.4 host-owned delivery IO | merged locally | smith c8a9b46 | Rebased preserved checkpoint; bounded git children, roots, deadlines and pipe settlement. Checkpoint fmt/Clippy 15.78 s; 1,371 focused / 4.256 s; 17 fuzzy / 5.406 s. Merged with the following uncertainty correction and its final gate. |
+| 07.4 uncertain-effect reconciliation | merged locally | smith b50cb7e | Typed done/no-effect/uncertain; reconcile trailers before answering, never recommit on doubt, retain unknown intents. Final merge evidence: fmt/Clippy 19.60 s; 1,380 focused / 7.490 s; 17 fuzzy / 7.562 s; local world serial 57 / 0.279 s and 1 / 0.038 s. |
+| 07.4 original marker files | merged locally | smith 1e0dfbb | Bounded FileIo reads, deleted-path resolution and oversize/error refusal, separate service operation tokens. fmt/Clippy 26.47 s; 1,384 focused / 8.664 s; 17 fuzzy / 4.818 s. |
+| 07.4 plain-directory snapshots | merged locally | smith 80e0b1c | Complete sorted bounded activation snapshots and delivery comparisons; refuses omitted or unsupported trees. fmt/Clippy 15.64 s; 1,388 focused / 4.313 s; 17 fuzzy / 4.473 s; 37 component/service tests serial / 0.028 s. |
+| 07.5 shared agent effects | merged locally | smith 6777073 | Typed lower adapter reuses agent LLM, machine and IO components without a domain/channel. fmt/Clippy 15.74 s; 1,389 focused / 3.938 s; 17 fuzzy / 4.291 s. |
+| 07.5 in-process placement | merged locally | smith 5d33172 | Compose the local agent domain with typed effects; snapshot before activation and settle lower IO before exit. fmt/Clippy 19.91 s; 1,390 focused / 4.175 s; 17 fuzzy / 5.488 s. |
+| 07.5 shared local shell | merged locally | smith 608188e | Simulator-free Local Host with the binary's Store, Tokens and output; explicit resources, placement and per-directory push settings. fmt/Clippy 15.58 s; 1,392 focused / 4.104 s; 17 fuzzy / 5.131 s. |
+| 07.3 OAuth network and loopback | merged locally | smith 997c981 | HTTP/TLS exchange, injected PKCE/state entropy, listener-before-URL, save-before-grant and proactive refresh; fake issuer/browser Hosts. fmt/Clippy 2.83 s; 1,396 focused / 3.909 s; 17 fuzzy / 4.556 s; four OAuth stories serial / 0.027 s. |
+| 07.2 shared file crash cuts | merged locally | smith c89db88 | Cuts every replacement write/sync boundary; acknowledged records survive, durable fresh-reset journal recovers, bounded startup reads. fmt/Clippy 21.17 s; 1,399 focused / 4.420 s; 17 fuzzy / 4.449 s; six Store stories serial / 0.023 s; test build 5.80 s. |
+| 07.5 composed local process world | merged locally | smith 1f3a9ad | Shared shell, four named stories, observation-only referee, negative controls, memory, facts, replay and seeded short IO/delays/cancellation in both placements. fmt/Clippy 26.63 s; 1,409 focused / 4.221 s; 18 fuzzy / 6.132 s; build 20.81 s; world serial 10 / 0.833 s and 1 / 2.723 s. |
+| 07.5 composed OAuth observations | merged locally | smith d716b2b | Sign-in, refresh, refusal in both placements and timed proactive renewal use private token files; opaque checkout heads, bounded trust reads and FIFO refusal. fmt/Clippy 17.04 s; 1,414 focused / 4.396 s; 18 fuzzy / 6.249 s; builds 8.59/0.07 s; final world serial 14 / 0.911 s and 1 / 2.715 s. |
+| 07.1 settings and command documentation | merged locally | smith e847763 | Complete positional CLI, recursive overrides, settings, accounts, push destinations and durable-file layout; correct the inherited memory example. Markdown-only gate exception; diff check passed. |
+| 07.5 planned story layout | merged locally | smith 969e867 | Rename the four named stories to tests/simulation.rs as the plan specifies. fmt 1.115 s; Clippy 23.015 s; 1,414 focused / 4.564 s; 18 fuzzy / 5.134 s; no skips; builds 8.66/0.07 s; final world serial 14 / 0.932 s and 1 / 2.774 s. |
 
-Session 07 stopped incomplete on 2026-10-08 at Smith main `4929e81`.
-The clean unmerged branch `protocol/07-4-delivery-io` retains checkpoint
-`fb86822`: fmt/clippy passed, 1,371 focused / 4.256 s and 17 fuzzy / 5.406 s.
-It is blocked by an uncertain-effect contract: a commit can land before its
-head receipt fails or a deadline fires, but the existing adapter reports
-failure and the domain overwrites its intent without the landed receipt.
-The proposal is to distinguish uncertainty, keep the intent, and reconcile
-its delivery trailer before saving an answer; this needs a design decision.
-OAuth transport and loopback sign-in, integration of the private token store,
-plain-directory and marker IO, in-process mode, complete settings docs, and
-the simulated local-process world and its serial measurements remain.
+Session 07 is complete on 2026-10-08 at Smith main
+`969e867e544b0d9374d751f14959d7b210145bda`: all 7.1–7.5 requirements,
+31 implementation/documentation commits, no push and no remaining session
+worktree. The earlier stop at `4929e81` and delivery checkpoint `fb86822`
+were resolved by user design commit `a02d27b` (protocol/hosts.md 5.5), then
+the rebased delivery IO and uncertain-effect correction above. All recorded
+resumed code gates had no skips. Skein remains pinned to
+`9840f49590fdd627e169a7f6c56c6c90977a9eeb`; Temper's dependency repin remains
+in its own plan. Smith's settings documentation is
+`docs/development/local-host.md`.
+
+The 7.5 steer is implemented: the binary and world call one Local shell
+library; both placements, terminal and supported peers implement Host with
+no simulator state; binding, faults and fake machine stay in the world loop;
+the referee observes terminal/peer/service facts and a narrow opaque
+head/message/files checkout interface. Skein's synchronous fake checkout is
+still world-fed and needs a process face before a future real-loop world.
+No real-loop test, Skein edit or implementation-agent design edit was made.
+Nonblocking follow-ups are contained process trees, tightening the inherited
+roughly 354 GB standard-profile bound, a checkout process face, and richer
+fake Responses token-limit observations if needed. Application observations
+are replayed because TLS signatures use kernel randomness; both world shares
+and workspace suites remain within their existing budgets.
 
 ## jig extraction
 
