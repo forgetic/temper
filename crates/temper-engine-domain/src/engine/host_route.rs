@@ -150,3 +150,32 @@ pub(super) fn settled(domain: &mut Domain, limits: &Limits, decision: &mut Decis
     let id = domain.payloads.insert(Some(Payload::SettledCall(call))).expect("fleet call reserved answer room");
     emit(decision, limits, Delivery::Fleet(fleet::Event::Relayed { to, answer: id.token() }));
 }
+
+/// Assemble the answer its owner kept; the core chooses its durability route.
+pub(super) fn relayed(
+    domain: &mut Domain,
+    channel: Token,
+    run: Token,
+    attempt: Token,
+    name: Box<[u8]>,
+    answer: Token,
+) -> Delivery {
+    match super::take_payload(domain, answer).expect("fleet relays an owned answer") {
+        Payload::SettledCall(call) => Delivery::Host(Box::new(HostDelivery::Answer {
+            channel,
+            task: run.raw(),
+            attempt: attempt.raw(),
+            name,
+            call,
+        })),
+        Payload::CallAnswer(answer) => {
+            let call = Token::new(skein_lib::Reader::new(&name).u64().expect("decoded call name"));
+            Delivery::CallAnswer { channel, task: run.raw(), attempt: attempt.raw(), call, answer }
+        }
+        Payload::Call { .. }
+        | Payload::Message(_)
+        | Payload::InboxWord(_)
+        | Payload::Turn { .. }
+        | Payload::Answer { .. } => unreachable!("fleet answer payload"),
+    }
+}

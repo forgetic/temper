@@ -1228,6 +1228,7 @@ fn view_requests(routed: jig_core::Requests, room: u32) -> Queue<views::Request>
                 | jig_core::Now::NotesRecalled { .. }
                 | jig_core::Now::NotesRefused { .. }
                 | jig_core::Now::NoteBusy { .. }
+                | jig_core::Now::Relayed { .. }
                 | jig_core::Now::EffectAnswer { .. }
                 | jig_core::Now::DropPayload { .. }
                 | jig_core::Now::DropAssignment { .. }
@@ -1311,6 +1312,7 @@ fn open_watch(
                 | jig_core::Now::NotesRecalled { .. }
                 | jig_core::Now::NotesRefused { .. }
                 | jig_core::Now::NoteBusy { .. }
+                | jig_core::Now::Relayed { .. }
                 | jig_core::Now::EffectAnswer { .. }
                 | jig_core::Now::DropPayload { .. }
                 | jig_core::Now::DropAssignment { .. }
@@ -2566,39 +2568,8 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                             host_route::settled(domain, &env.limits, decision, to, call);
                         }
                         jig_core::Held::Relayed { channel, run, attempt, call: name, answer } => {
-                            match take_payload(domain, answer).expect("fleet relays an owned answer") {
-                                Payload::SettledCall(call) => emit(
-                                    decision,
-                                    &env.limits,
-                                    Delivery::Host(Box::new(HostDelivery::Answer {
-                                        channel,
-                                        task: run.raw(),
-                                        attempt: attempt.raw(),
-                                        name,
-                                        call,
-                                    })),
-                                ),
-                                Payload::CallAnswer(answer) => {
-                                    let call =
-                                        Token::new(skein_lib::Reader::new(&name).u64().expect("decoded call name"));
-                                    emit(
-                                        decision,
-                                        &env.limits,
-                                        Delivery::CallAnswer {
-                                            channel,
-                                            task: run.raw(),
-                                            attempt: attempt.raw(),
-                                            call,
-                                            answer,
-                                        },
-                                    );
-                                }
-                                Payload::Call { .. }
-                                | Payload::Message(_)
-                                | Payload::InboxWord(_)
-                                | Payload::Turn { .. }
-                                | Payload::Answer { .. } => unreachable!("fleet answer payload"),
-                            }
+                            let delivery = host_route::relayed(domain, channel, run, attempt, name, answer);
+                            emit(decision, &env.limits, delivery);
                         }
                         jig_core::Held::Inbound { channel, run, attempt, message } => {
                             match take_payload(domain, message.words).expect("fleet message payload") {
@@ -2755,6 +2726,10 @@ fn route_core_requests(domain: &mut Domain, env: &Env<Limits>, decision: &mut De
                         }
                     },
                     jig_core::Request::Now(now) => match *now {
+                        jig_core::Now::Relayed { channel, run, attempt, call: name, answer } => {
+                            let delivery = host_route::relayed(domain, channel, run, attempt, name, answer);
+                            assert!(self::now(domain, Request::Deliver(delivery)), "read answer door reserved");
+                        }
                         jig_core::Now::Call { to, run, attempt, call } => {
                             if call.tool.is_empty() {
                                 let body = Token::new(
@@ -4795,6 +4770,7 @@ fn account_outputs(routed: jig_core::Requests, out: &mut Queue<Request>) {
                 | jig_core::Now::NotesRecalled { .. }
                 | jig_core::Now::NotesRefused { .. }
                 | jig_core::Now::NoteBusy { .. }
+                | jig_core::Now::Relayed { .. }
                 | jig_core::Now::EffectAnswer { .. }
                 | jig_core::Now::DropPayload { .. }
                 | jig_core::Now::DropAssignment { .. }
