@@ -108,6 +108,30 @@ dependencies = [
 name = "jig-conformance"
 version = "0.0.0"
 dependencies = [
+ "jig-fake-store",
+ "jig-test-system",
+ "skein-lib",
+ "skein-world",
+]
+
+[[package]]
+name = "jig-conformance-world"
+version = "0.0.0"
+dependencies = [
+ "jig-conformance",
+ "jig-core",
+ "jig-core-accounts",
+ "jig-core-fleet",
+ "jig-core-notes",
+ "jig-core-people",
+ "jig-core-tasks",
+ "jig-core-world",
+ "jig-fake-parties",
+ "jig-fake-store",
+ "jig-fake-workers",
+ "jig-test-connector",
+ "jig-test-connector-world",
+ "jig-test-domain",
  "jig-test-system",
  "skein-lib",
  "skein-world",

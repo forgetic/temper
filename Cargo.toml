@@ -10,6 +10,7 @@ members = [
     "jig/testing/jig-test-connector",
     "jig/testing/jig-test-domain",
     "jig/testing/jig-conformance",
+    "jig/tests/conformance",
     "jig/testing/jig-fake-store",
     "jig/testing/jig-fake-workers",
     "jig/testing/jig-fake-parties",
