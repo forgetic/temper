@@ -539,6 +539,10 @@ and workspace suites remain within their existing budgets.
 | jig 15.4 negative worlds and integration guide | merged and pushed | ce77e10b | Caught six broken roots and four broken connectors through independent observations, with a faithful cold-restart control; checked restart ordering, stable attempt deadlines and full live task/host memory. Documented application and scenario adapters for later roots. Gate: fmt/clippy; 1,210 focused / 2.356 s; 37 fuzzy / 8.529 s. Serial conformance: 15 focused / 0.617 s; 2 fuzzy / 2.862 s, within 1.5 s / 8 s. |
 | jig 20.1 projection authority | merged and pushed | aa488c74 | Added project policy grants for projections and authenticated policy changes; checked each connector-described creation, edit, milestone and closure independently of task grants and spend. Refusals produce durable goal news; restart and narrowed-policy stories preserve admission and recovery fences. Gate: fmt/clippy; 1,214 focused / 1.753 s; 37 fuzzy / 7.384 s. Serial core: 105 focused / 0.839 s; 6 fuzzy / 0.833 s. |
 | jig 20.2 complete projection feed | merged and pushed | 1ce08e40 | Added whole bounded subtree feeds once per connector per decision, stable lifecycle/history milestone identities, and split durable projection rows retained after goal ending through final connector settlement. Temper translates the feed and releases issue state after desired writes settle. Grandchild ending, cold restart, delayed closing write and last-connector cleanup stories pass; route and memory bounds include retained plans and handoffs. Gate: fmt/clippy; 1,223 focused / 1.878 s; 37 fuzzy / 6.033 s. Serial core/task measures: 197 focused / 1.505 s; 7 fuzzy / 4.346 s. |
+| jig 17.0 connector prerequisites | merged and pushed | d6e9ea9b | Retained proposal payloads and conditional scale procedure with fresh reads and sustained low-load checks. Gate: fmt/clippy; 1,220 focused / 3.392 s; 37 fuzzy / 7.990 s. Serial ops connector worlds: 29 focused / 0.116 s; 2 fuzzy / 0.021 s. |
+| jig 17.1a relayed read answers | merged and pushed | afb92897 | Retained read/write classification through the fleet; both application roots answer reads through the journal door while mutations remain held. Gate: fmt/clippy; 1,225 focused / 3.448 s; 37 fuzzy / 8.893 s. Focused fleet/core development check: 167 / 0.273 s. |
+| jig 17.1 reference ops root | merged and pushed | 0507c918 | Composed the core, both connectors, permanent engine hub and inline Smith agent with one journal, admission bounds and core-selected restart order. Seven root checks cover admission, failure, reads during a held commit, restored header, bounds, startup and atomic tool replies. Gate: fmt/clippy; 1,237 focused / 3.688 s; 37 fuzzy / 8.704 s. |
+| jig 17.2a inline readiness and accepted-batch referee | merged and pushed | b07a2250 | Pure inline readiness prevents parking deferred Smith work. Durable accepted-batch member ranges let the referee follow the accepter's authority while retaining result delivery to the proposer; positive and negative cases check the evidence. Gate on main 0868ff4e: fmt/clippy; 1,250 focused / 3.542 s; 37 fuzzy / 8.810 s. |
 
 ### temper 03 boundary and handoff
 
@@ -568,3 +572,51 @@ and workspace suites remain within their existing budgets.
 - No design documents, jig sources, dependency pins or other repositories changed
   in this session. Session 05 still supplies Temper's reference root shape and
   application conformance composition.
+
+### jig 17 stopped proof and reference-root handoff
+
+- **17.2 is blocked by procedure watch batching.** `examples.md`, section
+  7.1 requires alerts 7–9 to wake the observability watch once, using the
+  news batching described by `domain/tasks.md`, section 8.3. The current
+  `jig/crates/jig-core-tasks/src/wake.rs` forces every procedure message to
+  `WakeRule::Immediate`, bypassing batching. This is a core task behavior
+  prerequisite outside this session's authorized scope. No batching code
+  was changed. Proposal for its owner: honor the owner's configured batch
+  rule for procedure news, retain immediate non-news procedure triggers,
+  and add count/age cases beside the burst-of-news case in
+  `jig/tests/tasks/tests/inbox.rs`; then check the ops alert. No design
+  change is proposed.
+- **Unfinished work is preserved, not ready:** branch `jig/17-2-stories`,
+  worktree `/srv/data/git/runner/worktrees/jig-extraction/temper/jig-17-2-stories`,
+  remains uncommitted on `0507c918`. It retains the conformance adapter,
+  scripted Smith stories and root integration fixes. The full alert
+  scenario is restored; temporary accepted-batch integration overlays were
+  removed after their prerequisite merged. Rebase onto current main before
+  resuming. Recovery copies are `/tmp/jig17-2-before-cleanup.tar.gz` and
+  `/tmp/jig17-2-before-cleanup.patch`.
+- **Proof remains incomplete:** the night scenario passed during development
+  (0.028 s); the full alert, focused crash cuts, one fuzzy commit sweep,
+  serial half-allocation measurement (0.75 s focused / 4 s fuzzy), and
+  17.2's gate have not passed. The accepted-batch diagnostic confirmed the
+  referee gap fixed by 17.2a; it does not establish the full alert story.
+- **Copy for temper session 05:** replace connector numbers and routing arms;
+  application record wrappers and load ranges; connector restart adapters;
+  tool schemas, decoders and result translations; configured charters,
+  policy, endpoint names and account limits; connector brief sections; and
+  each application's worst-case route and journal bounds. Keep the journal's
+  admission and ordered release, its held/read answer distinction, the
+  core-selected restart script, the permanent engine hub, inline agent,
+  shared charter codec, and readiness/quiescence queries. Application roots
+  route and translate; the core retains decisions.
+- **Vocabulary and design:** 17.1a supplied the missing read/write answer
+  classification; 17.2a supplied pure inline readiness and durable accepted
+  batch membership for observation. No additional vocabulary or design
+  change was taken. Further alert integration failures must be diagnosed
+  after the batching prerequisite; the uncommitted proof is not evidence
+  that those stories work.
+- **Dependencies and repository boundaries:** this resumed session changed
+  no prerequisite repository or pins. Forge URLs remain in the manifests;
+  `Cargo.lock` keeps Smith `a54fe558421ed07ce376ac1ebf2ce09345c8d496`, Skein
+  `17b221b8423352d5c1d30128837ccbf5cd8025c2`, and the separately retained
+  Skein JSON dependency at `e1152507c94c0fb6d4fd9ed190d392ec5d21da9b`.
+  `later.md` work was not started.
