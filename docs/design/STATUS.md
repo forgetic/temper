@@ -1,9 +1,8 @@
 # Status
 
-Updated 2026-10-09. How far temper's code is from its design, and
-which plans take it there. The designer keeps this file; a run's
-coordinator changes only a plan's state (skein's development.md, section
-3.3).
+Updated 2026-10-09. How far temper's code is from its design, and which
+plans take it there. The designer keeps this file (skein's
+development.md, section 3.3).
 
 ## 1. Plans
 
