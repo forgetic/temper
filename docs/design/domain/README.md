@@ -4,7 +4,7 @@ Provisional, 2026-10-04. The next design of temper's domain layer: temper
 as a generic engine on five primitives, which owns its state in its own
 store and drives the forge as a connector. It replaces the domain
 documents in `docs/design/` (`engine-domain.md`, `worker-domain.md`,
-`agent-domain.md`) and the draft it grew from (`docs/design/drafts/core.md`,
+`agent-domain.md`) and the draft it grew from (`docs/design/draft/core.md`,
 removed with this set), and changes what the protocol layer's documents
 say in the places section 5 lists. The legacy engine is described by
 `docs/design/engine-domain.md` until the cutover
@@ -291,7 +291,7 @@ What this design changes in each, for the migration plan:
 | 9. Open questions | smith's `run.md`, 15, `session.md`, 11, `tools.md`, 8; agent.md, 10 |
 | 10. Not built yet | smith's `session.md`, 8 (context management), `tools.md`, 8 (the commands' environment), `run.md`, 5.1 (MCP); agent.md, 11 |
 
-### 6.4 `drafts/core.md`
+### 6.4 `draft/core.md`
 
 | Section | Now |
 |---|---|
