@@ -3,7 +3,7 @@ pub mod support;
 use skein_io::kernel::{Exit, Signal};
 use skein_lib::Duration;
 use support::forge_land::{
-    assert_forgejo_setup, assert_plan_box, cache_forgejo_binaries, cached_binary_fingerprint, deployment_flags,
+    assert_cached_binary_unchanged, assert_forgejo_setup, assert_plan_box, cache_forgejo_binaries, deployment_flags,
     forgejo_setup_steps, plan_change_steps,
 };
 
@@ -578,7 +578,7 @@ fn a_change_lands_by_deliveries_with_every_poll_raised() {
 fn landing(case: &str, raised: bool) {
     let scratch = support::Scratch::new(case);
     let forgejo = if raised {
-        support::forgejo::Throwaway::start_with_job_sleep(&scratch, 8)
+        support::forgejo::Throwaway::start_with_job_sleep(&scratch, 5)
     } else {
         support::forgejo::Throwaway::start(&scratch)
     };
@@ -917,7 +917,7 @@ fn a_forgejo_set_up_from_the_client_starts_again_by_its_record() {
         fs::set_permissions(path, fs::Permissions::from_mode(0o700)).expect("private first-run directory");
     }
     let flags = deployment_flags(&paths);
-    let (cached, before) = cache_forgejo_binaries(&paths[2]);
+    let (cached, sources) = cache_forgejo_binaries(&paths[2]);
     let mut bot = None;
     for run in ["first", "second"] {
         let client_root = scratch.path().join(run);
@@ -967,8 +967,8 @@ fn a_forgejo_set_up_from_the_client_starts_again_by_its_record() {
         let link = support::printed_link(&ended.stdout).expect("box sign-in link");
         assert_eq!(ended.stdout, [link, b"\n"].concat(), "one printed link");
         assert_eq!(support::boxed::status(address, "/api/v1/version"), None, "Forgejo stopped with its box");
-        for (path, fingerprint) in cached.iter().zip(&before) {
-            assert_eq!(&cached_binary_fingerprint(path), fingerprint, "cached binary unchanged");
+        for (path, source) in cached.iter().zip(&sources) {
+            assert_cached_binary_unchanged(path, source);
             assert!(
                 !path
                     .with_file_name(format!("{}.part", path.file_name().expect("binary name").to_str().expect("UTF-8")))
@@ -1037,7 +1037,7 @@ fn a_first_run_plays_the_demo_then_sets_up_a_forgejo_here_with_no_restart() {
     const ALL_CALLS: usize = END_READS_END + 7;
     let scratch = support::Scratch::new("demo-then-forgejo");
     let (paths, flags) = first_run_directories(&scratch);
-    let (cached, before) = cache_forgejo_binaries(&paths[2]);
+    let (cached, sources) = cache_forgejo_binaries(&paths[2]);
     let steps = demo_then_forgejo_steps(scratch.path(), HELLO);
     let mut llm = first_repository::llm(&paths[0]);
     llm.expected_exits = vec![(END_READS_END - 2, 2), (END_READS_END - 1, 2)];
@@ -1116,8 +1116,8 @@ fn a_first_run_plays_the_demo_then_sets_up_a_forgejo_here_with_no_restart() {
         Some(skein_forge::forgejo::pin::VERSION)
     );
     assert_eq!(support::boxed::status(evidence.address, "/api/v1/version"), None, "Forgejo stopped with its box");
-    for (path, fingerprint) in cached.iter().zip(&before) {
-        assert_eq!(&cached_binary_fingerprint(path), fingerprint, "cached binary unchanged");
+    for (path, source) in cached.iter().zip(&sources) {
+        assert_cached_binary_unchanged(path, source);
         assert!(
             !path
                 .with_file_name(format!("{}.part", path.file_name().expect("binary name").to_str().expect("UTF-8")))
@@ -1163,7 +1163,7 @@ fn a_persons_plan_change_lands_on_the_owned_forge_and_is_found_after_a_restart()
     let paths = ["config", "data", "cache"].map(|name| scratch.path().join(name));
     let mut issuer = Some(forge_land::fake_deployment(&paths));
     let flags = deployment_flags(&paths);
-    let (cached, before) = cache_forgejo_binaries(&paths[2]);
+    let (cached, sources) = cache_forgejo_binaries(&paths[2]);
     let clock = skein_shell::Clock::new();
     let addition = format!("Plan change at {}-{}", std::process::id(), clock.now().now.as_nanos());
     let words = format!("Please append this line to work/hello README.md: {addition}");
@@ -1254,8 +1254,8 @@ fn a_persons_plan_change_lands_on_the_owned_forge_and_is_found_after_a_restart()
             !stderr.contains(&format!("box: wrote the configuration, {}\n", paths[0].join("temper.json").display())),
             "init wrote configuration before either box"
         );
-        for (path, fingerprint) in cached.iter().zip(&before) {
-            assert_eq!(&cached_binary_fingerprint(path), fingerprint);
+        for (path, source) in cached.iter().zip(&sources) {
+            assert_cached_binary_unchanged(path, source);
             assert!(
                 !path
                     .with_file_name(format!("{}.part", path.file_name().expect("binary name").to_str().expect("UTF-8")))

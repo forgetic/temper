@@ -67,7 +67,7 @@ pub fn restart() {
     let clock = Clock::new();
     let began = clock.now().now;
     let elsewhere = Scratch::new("forgejo_elsewhere_host");
-    let forge = Throwaway::start(&elsewhere);
+    let forge = Throwaway::start_bare(&elsewhere);
     let scratch = Scratch::new("forgejo_elsewhere");
     for name in ["config", "data", "cache"] {
         fs::create_dir(scratch.path().join(name)).expect("fresh root");

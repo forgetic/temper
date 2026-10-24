@@ -496,21 +496,19 @@ pub fn deployment_flags(paths: &[std::path::PathBuf; 3]) -> Vec<String> {
         .collect()
 }
 
-type BinaryFingerprint = (u64, [u8; 32]);
-
 #[must_use]
-pub fn cache_forgejo_binaries(cache: &std::path::Path) -> ([std::path::PathBuf; 2], [BinaryFingerprint; 2]) {
+pub fn cache_forgejo_binaries(cache: &std::path::Path) -> ([std::path::PathBuf; 2], [std::path::PathBuf; 2]) {
     use skein_forge::forgejo::pin::{RUNNER_VERSION, VERSION};
     let (forgejo, runner) = super::owned::binaries();
     let cached = [
         cache.join(format!("forgejo/{VERSION}/forgejo")),
         cache.join(format!("forgejo-runner/{RUNNER_VERSION}/forgejo-runner")),
     ];
-    for (source, target) in [forgejo, runner].iter().zip(&cached) {
+    let sources = [forgejo, runner];
+    for (source, target) in sources.iter().zip(&cached) {
         cache_binary(source, target);
     }
-    let before = cached.each_ref().map(|path| cached_binary_fingerprint(path));
-    (cached, before)
+    (cached, sources)
 }
 
 #[must_use]
@@ -643,21 +641,27 @@ pub fn assert_forgejo_setup_after_sign_in(
     user
 }
 
-#[must_use]
-pub fn cached_binary_fingerprint(path: &std::path::Path) -> BinaryFingerprint {
+/// The SUT's cached copy still contains every byte of its pinned source.
+pub fn assert_cached_binary_unchanged(cached: &std::path::Path, source: &std::path::Path) {
     use std::io::Read;
-    let mut file = std::fs::File::open(path).expect("cached binary");
-    let length = file.metadata().expect("cached metadata").len();
-    let mut hash = skein_lib::sha256::Sha256::new();
-    let mut bytes = vec![0; 65_536].into_boxed_slice();
+    let mut cached = std::fs::File::open(cached).expect("cached binary");
+    let mut source = std::fs::File::open(source).expect("pinned source binary");
+    assert_eq!(
+        cached.metadata().expect("cached metadata").len(),
+        source.metadata().expect("source metadata").len(),
+        "cached binary unchanged"
+    );
+    let mut cached_bytes = vec![0; 262_144].into_boxed_slice();
+    let mut source_bytes = vec![0; 262_144].into_boxed_slice();
     loop {
-        let count = file.read(&mut bytes).expect("binary chunk");
+        let count = cached.read(&mut cached_bytes).expect("cached binary chunk");
+        source.read_exact(&mut source_bytes[..count]).expect("pinned source chunk");
+        assert!(cached_bytes[..count] == source_bytes[..count], "cached binary unchanged");
         if count == 0 {
+            assert_eq!(source.read(&mut source_bytes).expect("pinned source EOF"), 0, "cached binary unchanged");
             break;
         }
-        hash.update(&bytes[..count]);
     }
-    (length, hash.finish())
 }
 
 /// Init's shipped issuer, Responses endpoints and charter text, on the same

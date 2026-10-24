@@ -122,7 +122,7 @@ fn qa_dormant_owned_forge_holds_its_port_before_any_setup() {
 fn qa_running_playground_ends_whole_when_owned_forge_connects_without_restart() {
     let scratch = Scratch::new("qa-first-run-going-real");
     let dirs = paths(scratch.path());
-    let (cached, fingerprints) = forge_land::cache_forgejo_binaries(&dirs[2]);
+    let (cached, sources) = forge_land::cache_forgejo_binaries(&dirs[2]);
     let steps = vec![
         Step::Run(Call::sign_in()),
         Step::Run(Call::new(&["demo-start"])),
@@ -194,8 +194,8 @@ fn qa_running_playground_ends_whole_when_owned_forge_connects_without_restart() 
     for name in ["admin_token", "api_token", "git_token", "user", "webhook_secret"] {
         assert!(!dirs[1].join("forge-3").join(name).exists(), "no legacy/handover {name}");
     }
-    for (path, before) in cached.iter().zip(fingerprints) {
-        assert_eq!(forge_land::cached_binary_fingerprint(path), before, "cached release untouched");
+    for (path, source) in cached.iter().zip(&sources) {
+        forge_land::assert_cached_binary_unchanged(path, source);
     }
     // setup.md 7.2's `Playground: stopped` is the labelled terminal's, not built:
     // qa_an_asked_groups_failure_is_named_by_its_label keeps that gap.

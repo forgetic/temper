@@ -20,8 +20,8 @@ pub struct Throwaway {
     pid: u32,
     forgejo: PathBuf,
     runner: owned::Running,
-    person: Token,
-    repository: u64,
+    person: Option<Token>,
+    repository: Option<u64>,
     directory: PathBuf,
     webhooks: Option<SocketAddr>,
 }
@@ -33,6 +33,26 @@ impl Throwaway {
 
     #[must_use]
     pub fn start_with_job_sleep(scratch: &Scratch, sleep_seconds: u64) -> Self {
+        let mut fixture = Self::start_bare(scratch);
+        let began = skein_shell::Clock::new().now().now;
+        let reconciled = owned::reconcile(scratch.path(), 1);
+        assert_eq!(reconciled.status.code(), Some(0), "{}", String::from_utf8_lossy(&reconciled.stderr));
+        assert!(
+            skein_shell::Clock::new().now().now.saturating_since(began) < super::WITHIN,
+            "reconcile within its bound"
+        );
+        stage("reconcile", began);
+        let person = person_token(&fixture.instance);
+        let repository = repository(&fixture.instance, &person, sleep_seconds);
+        owned::adopt(scratch.path(), &fixture.instance, &person, fixture.webhooks);
+        fixture.person = Some(person);
+        fixture.repository = Some(repository);
+        fixture
+    }
+
+    /// The pinned server and runner with their original administrator, before Reconcile or adoption.
+    #[must_use]
+    pub fn start_bare(scratch: &Scratch) -> Self {
         let address = owned::tier_configuration(scratch.path());
         let running = owned::start(scratch.path());
         let pid = running.id();
@@ -43,30 +63,19 @@ impl Throwaway {
         let mut runner = owned::run(scratch.path(), "runner");
         runner.declared();
         stage("runner", began);
-        let began = skein_shell::Clock::new().now().now;
-        let reconciled = owned::reconcile(scratch.path(), 1);
-        assert_eq!(reconciled.status.code(), Some(0), "{}", String::from_utf8_lossy(&reconciled.stderr));
-        assert!(
-            skein_shell::Clock::new().now().now.saturating_since(began) < super::WITHIN,
-            "reconcile within its bound"
-        );
-        stage("reconcile", began);
-        let person = person_token(&instance);
-        let repository = repository(&instance, &person, sleep_seconds);
         let config: Value =
             serde_json::from_slice(&fs::read(scratch.path().join("temper.json")).expect("configuration"))
                 .expect("JSON");
         let webhooks = config["application"]["webhooks"]["listener"]["socket"]
             .as_str()
             .map(|address| address.parse().expect("webhooks address"));
-        owned::adopt(scratch.path(), &instance, &person, webhooks);
         Self {
             instance,
             pid,
             forgejo: owned::binaries().0,
             runner,
-            person,
-            repository,
+            person: None,
+            repository: None,
             directory: scratch.path().into(),
             webhooks,
         }
@@ -88,7 +97,10 @@ impl Throwaway {
     }
     fn get(&self, suffix: &str) -> skein_throwaway_forgejo::Exchange {
         self.instance
-            .exchange(&Outgoing::get(&format!("/api/v1/repos/acme/widget/{suffix}"), Some(&self.person)))
+            .exchange(&Outgoing::get(
+                &format!("/api/v1/repos/acme/widget/{suffix}"),
+                Some(self.person.as_ref().expect("fixture person")),
+            ))
             .expect("throwaway forge answer")
     }
     #[must_use]
@@ -172,7 +184,7 @@ impl Throwaway {
     }
     #[must_use]
     pub fn repository(&self) -> u64 {
-        self.repository
+        self.repository.expect("fixture repository")
     }
     /// The configured address, held only by the test or the running service.
     #[must_use]
@@ -190,8 +202,10 @@ impl Throwaway {
         let path = format!("/api/v1/repos/acme/widget/contents/{file}");
         let body = serde_json::to_vec(&json!({"branch":"main","message":format!("Add {file}"),"content":"aG9vawo="}))
             .expect("contents JSON");
-        let response =
-            self.instance.exchange(&Outgoing::json("POST", &path, Some(&self.person), &body)).expect("contents answer");
+        let response = self
+            .instance
+            .exchange(&Outgoing::json("POST", &path, Some(self.person.as_ref().expect("fixture person")), &body))
+            .expect("contents answer");
         assert_eq!(response.status, 201, "contents commit");
     }
 }
@@ -277,7 +291,7 @@ fn repository(instance: &Instance, person: &Token, sleep_seconds: u64) -> u64 {
         201,
     );
     request(instance, person, "PATCH", "/api/v1/repos/acme/widget", &json!({"has_actions":true}), 200);
-    // The hinted job sleeps 8 s, outlasting its overridden 3 s settle window
+    // The hinted job sleeps 5 s, outlasting its overridden 3 s settle window
     // (protocol/setup.md 13.4).
     let check = format!("test ! -e slow || sleep {sleep_seconds}\ntest -s README.md\n");
     for (path, content) in [("check.sh", check.as_str()), (".forgejo/workflows/check.yaml", WORKFLOW)] {
