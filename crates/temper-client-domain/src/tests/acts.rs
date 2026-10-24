@@ -14,7 +14,7 @@ fn accepting_sends_nothing_until_the_confirmation_is_confirmed() {
         f::sent(&mut f::act(&mut pages, Act::Confirm)).as_ref(),
         [c::Ask::Decide {
             project: fixtures::PROJECT,
-            on: c::DecideOn::Proposal { proposal: f::PROPOSAL, decision: c::Decision::Accepted }
+            on: c::DecideOn::Proposal { proposal: f::PROPOSAL, decision: c::Decision::Accepted, running: None }
         }]
     );
 }

@@ -23,13 +23,13 @@ fn turn(driver: &mut Driver, assignment: &engine::Assignment, number: u32, cumul
 /// Step a hub record through the root until its decision's commit is issued:
 /// its route crosses the fleet and the world's protocol first.
 fn until_pending(driver: &mut Driver) {
-    for _ in 0..10 {
+    for _ in 0..32 {
         if !driver.store.pending.is_empty() {
             return;
         }
         driver.advance(false);
     }
-    panic!("the record's commit is issued within ten steps");
+    panic!("the record's commit is issued within thirty-two steps");
 }
 
 /// A worker's hello with its own slots, stop bound and hosted runs.
@@ -238,7 +238,7 @@ fn people_roles_config(seed: u64) -> (engine::Config, engine::Limits) {
     limits.journal.held = 120;
     let mut config = config(seed);
     let mut authority =
-        authority::Domain::new(config.core.authority.rules().clone(), limits.authority).expect("larger policy room");
+        authority::Domain::new(config.core.defaults.rules.clone(), limits.authority).expect("larger policy room");
     let mut policy = config.core.seed_projects[0].policy.policy.clone();
     let owner = policy.roles[0].clone();
     let mut maintainer = owner.clone();
@@ -257,8 +257,7 @@ fn people_roles_config(seed: u64) -> (engine::Config, engine::Limits) {
     authority::step(&mut authority, authority::Event::Policy { project: 1, policy }, &mut out);
     assert_eq!(out.pop(), Some(authority::PolicyFact::Added { project: 1 }));
     config.core.seed_projects[0].policy.policy = authority.policy(1).expect("configured seed policy").clone();
-    config.core.authority = jig_domain_authority::Domain::new(authority.rules().clone(), *authority.limits())
-        .expect("configured authority");
+    config.core.defaults.rules = authority.rules().clone();
     (config, limits)
 }
 
@@ -472,10 +471,10 @@ fn a_requester_may_amend_and_cancel_without_role_control_bits() {
         let mut configuration = config(2045);
         let mut policy = configuration.core.seed_projects[0].policy.policy.clone();
         policy.roles[0].requests = authority::Requests(1 | 4);
-        let authority = authority::Domain::new(configuration.core.authority.rules().clone(), bounds.authority)
+        let authority = authority::Domain::new(configuration.core.defaults.rules.clone(), bounds.authority)
             .expect("valid authority");
         configuration.core.seed_projects[0].policy.policy = policy;
-        configuration.core.authority = authority;
+        configuration.core.defaults.rules = authority.rules().clone();
         configuration
     });
     let mut driver = Driver::configured(Store::new(), configuration, &bounds);
@@ -1146,16 +1145,17 @@ fn unavailable_call(driver: &mut Driver, assignment: &engine::Assignment, call: 
 fn delegate_fixture() -> (Driver, engine::Assignment) {
     let configuration = std::array::from_fn(|_| {
         let mut configuration = config(91);
-        let mut rules = configuration.core.authority.rules().clone();
+        let mut rules = configuration.core.defaults.rules.clone();
         rules.maximum_run_spend = 60;
         rules.ceiling.delegation.depth = 2;
         let mut policy = configuration.core.seed_projects[0].policy.policy.clone();
         policy.ceiling.delegation.depth = 2;
         policy.roles[0].authority.delegation.depth = 2;
-        let authority = jig_domain_authority::Domain::new(rules, *configuration.core.authority.limits())
-            .expect("expanded fixture authority");
+        let authority =
+            jig_domain_authority::Domain::new(rules, temper_engine_domain_world::walking::limits().authority)
+                .expect("expanded fixture authority");
         configuration.core.seed_projects[0].policy.policy = policy;
-        configuration.core.authority = authority;
+        configuration.core.defaults.rules = authority.rules().clone();
         configuration
     });
     let mut driver = Driver::configured(Store::new(), configuration, &limits());
@@ -1270,8 +1270,9 @@ fn batch_settings(
         // fixtures do, the charter's price unit keeps a run budget of 5 fundable.
         let mut cheaper = charter();
         cheaper.policy.model.price_unit = 2000;
-        configuration.core.settings.charters = Box::new([cheaper]);
-        let mut rules = configuration.core.authority.rules().clone();
+        configuration.core.settings.models = Box::new([cheaper.policy.model.clone()]);
+        configuration.core.defaults.charters = Box::new([cheaper]);
+        let mut rules = configuration.core.defaults.rules.clone();
         // Each claimed run leaves room in its task allotment for delegates made during the run.
         rules.maximum_run_spend = 5;
         if procedure || person {
@@ -1299,7 +1300,7 @@ fn batch_settings(
         policy.roles[0].period_spend = pool_budget;
         let authority = jig_domain_authority::Domain::new(rules, bounds.authority).expect("larger fixture authority");
         configuration.core.seed_projects[0].policy.policy = policy;
-        configuration.core.authority = authority;
+        configuration.core.defaults.rules = authority.rules().clone();
         configuration
     });
     (configuration, bounds)
@@ -1308,14 +1309,15 @@ fn batch_settings(
 // A chat's note scopes are its role's (jig a2616181).
 fn note_config() -> engine::Config {
     let mut configuration = config(3100);
-    let mut rules = configuration.core.authority.rules().clone();
+    let mut rules = configuration.core.defaults.rules.clone();
     rules.ceiling.notes = authority::Scopes(7);
     let mut policy = configuration.core.seed_projects[0].policy.policy.clone();
     policy.ceiling.notes = authority::Scopes(7);
     policy.roles[0].authority.notes = authority::Scopes(7);
-    let checked = authority::Domain::new(rules, *configuration.core.authority.limits()).expect("note policy");
+    let checked =
+        authority::Domain::new(rules, temper_engine_domain_world::walking::limits().authority).expect("note policy");
     configuration.core.seed_projects[0].policy.policy = policy;
-    configuration.core.authority = checked;
+    configuration.core.defaults.rules = checked.rules().clone();
     configuration
 }
 
@@ -3342,10 +3344,15 @@ fn a_policy_change_applies_to_later_decisions_only() {
     assert_eq!(live(&driver, 1).authority, first, "existing task keeps its grant");
     let mut restarted =
         Driver::configured(driver.store, [administration_config(9401), administration_config(9401)], &limits());
-    for _ in 0..30 {
-        restarted.advance(true);
-    }
+    restarted.pump();
     restarted.send(engine::Event::Party(engine::PartyInput::Period { project: 1, period: 2, budget: 50, next: None }));
+    restarted.pump();
+    assert!(matches!(
+        restarted.store.rows.get(&Key::Core(jig_domain_core::Key::Tasks(tasks::Key::Ledger(
+            tasks::Funder::Period { project: 1, period: 2 },
+        )))),
+        Some(Record::Core(jig_domain_core::Record::Tasks(tasks::Stored::Ledger(row)))) if row.numbers.budget == 50
+    ));
     restarted.send(start(&restarted, 43, 9404, b"later"));
     for _ in 0..30 {
         restarted.advance(true);
@@ -3573,7 +3580,7 @@ fn multiple_waiting_recipients_preflight_together_and_a_full_journal_hands_the_a
                 {
                     Some(actual)
                 }
-                Write::Save(_) | Write::Erase(_) => None,
+                Write::CopySettingsRevision(_) | Write::Save(_) | Write::Erase(_) => None,
             })
             .expect("each exact affected task belongs to the same cohort");
         // Rerouting keeps the hold's revision (jig 00de0b8c).

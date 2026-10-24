@@ -39,6 +39,9 @@ fn reconciliation_can_start_once_the_connectors_restore_and_stays_open() {
                 assert!(domain.connectors_restored() && domain.ready());
                 return;
             }
+            RestartRequest::Settings { failure, changed } => {
+                panic!("empty settings restore: {failure:?}, changed {changed}")
+            }
             RestartRequest::Refused { step } => panic!("empty restore: {step:?}"),
         }
     }

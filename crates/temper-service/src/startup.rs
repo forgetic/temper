@@ -788,7 +788,7 @@ fn checked_start(
     })
 }
 fn read_instructions(core: &mut jig_domain_core::Config, files: &settings::Files) {
-    for charter in &mut core.settings.charters {
+    for charter in &mut core.defaults.charters {
         if let Some(contents) = files.contents(&charter.policy.instructions) {
             charter.policy.instructions = Box::from(contents);
         }

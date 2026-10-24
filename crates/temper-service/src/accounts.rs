@@ -720,7 +720,9 @@ impl Accounts {
                 let _unkept = self.moves.adopted(source, false);
                 events.push(root::Event::Account(domain::Event::Adopted { source, kept: false }));
             }
-            store::Event::Opened { .. }
+            store::Event::Site { .. }
+            | store::Event::Patched { .. }
+            | store::Event::Opened { .. }
             | store::Event::OpenRefused { .. }
             | store::Event::Committed { .. }
             | store::Event::Failed { .. }
@@ -925,7 +927,9 @@ impl Accounts {
                 store::Event::Carried { .. } => {
                     unreachable!("the accounts only load and replace their records")
                 }
-                store::Event::Opened { .. }
+                store::Event::Site { .. }
+                | store::Event::Patched { .. }
+                | store::Event::Opened { .. }
                 | store::Event::OpenRefused { .. }
                 | store::Event::Committed { .. }
                 | store::Event::Failed { .. }
@@ -1180,6 +1184,7 @@ fn event_account(event: &driver::Event) -> Option<u32> {
         | driver::Event::Failed { account, .. }
         | driver::Event::Refused { account, .. }
         | driver::Event::Visit { account, .. }
+        | driver::Event::Taken { account }
         | driver::Event::SignedIn { account, .. }
         | driver::Event::Keep { account, .. }
         | driver::Event::Removed { account }

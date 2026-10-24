@@ -288,7 +288,9 @@ pub(crate) fn send_end_act(domain: &mut Domain, row: forge::DemoAct) {
     let act = match row.act {
         forge::DemoActKind::Close { project, task } => {
             let mut grace = None;
-            for template in &domain.core.settings.templates {
+            for setting in &domain.core.current.offered() {
+                let jig_domain_core::settings::Setting::Template(number) = setting else { continue };
+                let template = domain.core.current.template(*number).expect("offered template");
                 if template.flags.conversation {
                     grace = template.grace;
                     break;
@@ -333,7 +335,8 @@ pub(crate) fn end_acted(
         people::Outcome::Refused(why) | people::Outcome::CompoundRefused { why, .. } => {
             (false, Some(refusal_name(why)))
         }
-        people::Outcome::Renamed { .. }
+        people::Outcome::SettingsChanged { .. }
+        | people::Outcome::Renamed { .. }
         | people::Outcome::ProjectMade { .. }
         | people::Outcome::Created { .. }
         | people::Outcome::MarkedSeen { .. }
@@ -360,6 +363,7 @@ pub(crate) fn end_acted(
         | people::Outcome::PoolSet { .. }
         | people::Outcome::EscalationDecided { .. }
         | people::Outcome::AccountSignInStarted { .. }
+        | people::Outcome::AccountFinishing { .. }
         | people::Outcome::AccountSignedOut { .. }
         | people::Outcome::AccountKeyKept { .. }
         | people::Outcome::AccountProgramDeclared { .. }
@@ -377,6 +381,8 @@ pub(crate) fn end_acted(
 fn refusal_name(why: &people::Refusal) -> &'static str {
     use people::Refusal;
     match why {
+        Refusal::Stale { .. } => "Stale",
+        Refusal::Full { .. } => "Full",
         Refusal::NameTaken => "NameTaken",
         Refusal::NotWellFormed { why: people::Malformed::Name(_), .. } => "Name",
         Refusal::Circle { .. } => "Circle",
@@ -395,6 +401,7 @@ fn refusal_name(why: &people::Refusal) -> &'static str {
         Refusal::Unknown => "Unknown",
         Refusal::NotOffered => "NotOffered",
         Refusal::Provider => "Provider",
+        Refusal::SignInRedirect { .. } => "SignInRedirect",
         Refusal::KeyConflict => "KeyConflict",
         Refusal::NoEscalationHolder => "NoEscalationHolder",
         Refusal::Llm { .. } => "Llm",

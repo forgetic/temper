@@ -175,9 +175,11 @@ struct StoreHost {
 }
 impl StoreHost {
     fn new(limits: skein_kv::Limits) -> Self {
+        let mut io = FileIo::new(FILES, limits.chunk, ENTRIES, limits.deadline);
+        io.seed_randomness(0);
         Self {
             store: Store::new(&limits),
-            io: FileIo::new(FILES, limits.chunk, ENTRIES, limits.deadline),
+            io,
             limits,
             above: Queue::with_capacity(ROOM),
             below: Queue::with_capacity(ROOM),

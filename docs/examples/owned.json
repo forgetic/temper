@@ -212,7 +212,7 @@
     "connectors": [
       1
     ],
-    "memory_bytes": 720000000000000,
+    "memory_bytes": 860000000000000,
     "rules": {
       "ceiling": {
         "tools": 1,
@@ -962,9 +962,9 @@
       "overrides": {
         "checkout.message_bytes": 4098,
         "root.journal.transcript_bytes": 1590050,
-        "root.loads.bytes": 1590286,
+        "root.loads.bytes": 1590302,
         "root.loads.read_bytes": 3180092,
-        "root.loads.reply_bytes": 1590286,
+        "root.loads.reply_bytes": 1590302,
         "root.loads.transcript_bytes": 1590046,
         "routes.query_bytes": 2048
       }

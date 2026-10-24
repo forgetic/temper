@@ -33,14 +33,33 @@ pub fn check(acknowledged: &Records, uncertain: Option<&Records>, recovered: &Re
 pub(crate) fn next(rows: &BTreeMap<root::Key, root::Record>, writes: &[root::Write]) -> Records {
     let mut next = rows.clone();
     for write in writes {
-        match write {
-            root::Write::Save(row) => {
-                next.insert(row.key(), row.clone());
-            }
-            root::Write::Erase(key) => {
-                next.remove(key);
-            }
-        }
+        apply(&mut next, write);
     }
     forge(&next)
+}
+
+/// Apply ordered writes to the referee's durable mirror, including store-side copies.
+pub(crate) fn apply(rows: &mut BTreeMap<root::Key, root::Record>, write: &root::Write) {
+    use jig_domain_core::{CoreKey, CoreRecord, Key, Record, settings};
+    match write {
+        root::Write::Save(row) => {
+            rows.insert(row.key(), row.clone());
+        }
+        root::Write::Erase(key) => {
+            rows.remove(key);
+        }
+        root::Write::CopySettingsRevision(number) => {
+            let held = root::Key::Core(Key::Core(CoreKey::Settings(settings::Key::Held(*number))));
+            let root::Record::Core(Record::Core(CoreRecord::Settings(settings::Record::Revision { revision, .. }))) =
+                rows.get(&held).expect("held revision exists before copy")
+            else {
+                panic!("held revision shape")
+            };
+            let row = root::Record::Core(Record::Core(CoreRecord::Settings(settings::Record::Revision {
+                history: true,
+                revision: revision.clone(),
+            })));
+            rows.insert(row.key(), row);
+        }
+    }
 }

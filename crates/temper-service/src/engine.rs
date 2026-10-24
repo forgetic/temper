@@ -374,7 +374,10 @@ pub(crate) fn answer(engine: &mut Engine) {
         return;
     }
     for _ in 0..engine.store.above.len() {
-        if !engine.setup.room() || engine.store.routed.room() < jig_protocol_store::MAX_OUT_DOWN {
+        if !engine.setup.room()
+            || engine.store.routed.room() < jig_protocol_store::MAX_OUT_DOWN
+            || engine.notes.room() == 0
+        {
             break;
         }
         let event = engine.store.above.pop().expect("store terminals");
@@ -383,10 +386,13 @@ pub(crate) fn answer(engine: &mut Engine) {
                 engine.store.opened = true;
                 engine.store.installation = installation;
             }
-            jig_protocol_store::Event::OpenRefused { why: jig_protocol_store::OpenRefusal::Format { .. }, .. } => {
-                stop::version(engine);
+            jig_protocol_store::Event::OpenRefused { why, .. } => open_refused(engine, why),
+            jig_protocol_store::Event::Patched { of, patch, counts, .. } => {
+                engine.notes.try_push(crate::Note::Patched { of, patch, counts }).expect("patch progress note room");
             }
-            jig_protocol_store::Event::OpenRefused { .. } => stop::unavailable(engine, b"deployment"),
+            event @ jig_protocol_store::Event::Site { .. } => {
+                crate::store::route::up(&mut engine.store.routes, event, &mut engine.store.routed);
+            }
             event @ (jig_protocol_store::Event::Kept { owner }
             | jig_protocol_store::Event::Stale { owner }
             | jig_protocol_store::Event::Erased { owner }
@@ -435,6 +441,10 @@ pub(crate) fn answer(engine: &mut Engine) {
             return;
         }
     }
+    answer_routed(engine);
+}
+
+fn answer_routed(engine: &mut Engine) {
     for _ in 0..engine.store.routed.len() {
         match engine.store.routed.pop().expect("store routing") {
             Up::Root(event) => {
@@ -462,6 +472,23 @@ pub(crate) fn answer(engine: &mut Engine) {
         if engine.end.is_some() {
             break;
         }
+    }
+}
+
+fn open_refused(engine: &mut Engine, why: jig_protocol_store::OpenRefusal) {
+    use jig_protocol_store::OpenRefusal;
+    #[expect(clippy::match_same_arms, reason = "each store refusal keeps its own startup stop line")]
+    match why {
+        why @ OpenRefusal::Format { .. } => stop::open(engine, &why),
+        why @ OpenRefusal::Deployment => stop::open(engine, &why),
+        why @ OpenRefusal::Numbers { .. } => stop::open(engine, &why),
+        why @ OpenRefusal::Failed => stop::open(engine, &why),
+        why @ OpenRefusal::OlderBuild { .. } => stop::open(engine, &why),
+        why @ OpenRefusal::Generations { .. } => stop::open(engine, &why),
+        why @ OpenRefusal::Ahead { .. } => stop::open(engine, &why),
+        why @ OpenRefusal::Patch { .. } => stop::open(engine, &why),
+        why @ OpenRefusal::Set { .. } => stop::open(engine, &why),
+        why @ OpenRefusal::Check { .. } => stop::open(engine, &why),
     }
 }
 

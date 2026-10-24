@@ -390,8 +390,8 @@ fn no_token(bytes: &[u8], token: &[u8]) {
     assert!(!bytes.windows(token.len()).any(|part| part == token), "disposable credential escaped (redacted)");
 }
 fn inspect(root: &Path, token: &[u8]) {
-    // jig-protocol-store's directory.rs opens DATA/secrets separately from DATA/store.
-    let excluded = root.join("data/secrets");
+    // jig's initial generation keeps its secrets separately from its store.
+    let excluded = root.join("data/generations/1/secrets");
     let mut pending = vec![root.join("config"), root.join("data"), root.join("cache")];
     while let Some(path) = pending.pop() {
         if path == excluded {
@@ -404,7 +404,7 @@ fn inspect(root: &Path, token: &[u8]) {
             no_token(&fs::read(path).expect("deployment file"), token);
         }
     }
-    let mut pending = vec![root.join("data/store")];
+    let mut pending = vec![root.join("data/generations/1/store")];
     let mut files = 0;
     while let Some(path) = pending.pop() {
         let metadata = fs::symlink_metadata(&path).expect("store metadata");

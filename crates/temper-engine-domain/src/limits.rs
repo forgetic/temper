@@ -55,6 +55,8 @@ pub struct Limits {
     pub documents: jig_domain_core::documents::DocumentLimits,
     /// Maximum configured templates accepted by the core.
     pub templates: u32,
+    /// Settings history and value bounds parsed by jig.
+    pub settings: jig_domain_core::settings::Limits,
     /// Forge connector subtree and its bounded outbox.
     pub forge: forge::Limits,
 }
@@ -118,6 +120,7 @@ pub(crate) fn core_limits(limits: &Limits) -> jig_domain_core::Limits {
         load_bytes: limits.loads.read_bytes,
         documents: limits.documents,
         templates: limits.templates,
+        settings: limits.settings,
         connectors: 1,
         resume_bytes: limits.journal.transcript_bytes,
         run_bytes: limits.journal.run_bytes,
@@ -169,7 +172,7 @@ pub(crate) fn payload_slots(limits: &Limits) -> Option<u32> {
 }
 
 pub(crate) fn route_bound(limits: &Limits) -> Option<u32> {
-    tasks::max_out(&limits.tasks)
+    let routes = tasks::max_out(&limits.tasks)
         .checked_mul(8)?
         .checked_add(people::max_out(&limits.people).checked_mul(4)?)?
         // Every in-flight historical decision may complete under journal pressure:
@@ -178,7 +181,8 @@ pub(crate) fn route_bound(limits: &Limits) -> Option<u32> {
         .checked_add(fleet::max_out(&limits.fleet).checked_mul(4)?)?
         .checked_add(forge::max_out(&limits.forge))?
         // One serialized role cohort revisits each Waiting task, then answers.
-        .checked_add(limits.tasks.tasks.checked_add(4)?)
+        .checked_add(limits.tasks.tasks.checked_add(4)?)?;
+    Some(routes.max(jig_domain_core::settings::writes_worst_case(&core_limits(limits))?))
 }
 
 // The walking root drains its pending callbacks in the same decision as a newly
@@ -226,6 +230,13 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         return None;
     }
     let core_bytes = jig_domain_core::worst_case(&core_limits(limits))?;
+    // A saved settings revision owns a whole set. Both journal write cohorts and
+    // the synchronous work queue may retain one per slot, independently of Current.
+    let settings_row = jig_domain_core::settings::revision_worst_case(&core_limits(limits))?;
+    let settings_writes = u64::from(limits.journal.writes)
+        .checked_mul(2)?
+        .checked_add(u64::from(route_bound(limits)?))?
+        .checked_mul(settings_row)?;
     let forge_bytes = forge::worst_case(&limits.forge)?;
     let landing_bytes = Map::<u32, Box<[LandingRule]>>::worst_case(limits.authority.projects)?.checked_add(
         u64::from(limits.authority.projects).checked_add(1)?.checked_mul(u64::from(limits.journal.transcript_bytes))?,
@@ -275,6 +286,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
             )?,
         )?
         .checked_add(forge_bytes)?
+        .checked_add(settings_writes)?
         .checked_add(crate::journal_worst_case(&limits.journal)?)?
         .checked_add(load_bytes)?
         .checked_add(landing_bytes)?

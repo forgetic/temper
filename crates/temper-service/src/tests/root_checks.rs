@@ -44,7 +44,7 @@ fn root(limits: &temper_engine_domain::Limits) -> Box<[u8]> {
     let mut found = Problems::empty();
     let seeds = fixtures::seeds();
     let mut core = jig_protocol_config::core(&engine.jig, seeds.deployment, seeds.seed);
-    for charter in &mut core.settings.charters {
+    for charter in &mut core.defaults.charters {
         if let Some(contents) = engine.files.contents(&charter.policy.instructions) {
             charter.policy.instructions = Box::from(contents);
         }

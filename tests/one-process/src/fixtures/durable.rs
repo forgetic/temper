@@ -12,7 +12,7 @@ const COMMIT: Token = Token::new(2);
 pub(crate) const WRITE: Token = Token::new(3);
 pub(crate) const SYNC: Token = Token::new(4);
 pub(crate) const READ: Token = Token::new(5);
-pub(crate) const LOG: &[u8] = b"store/log-00000000000000000001";
+pub(crate) const LOG: &[u8] = b"generations/1/store/log-00000000000000000001";
 
 pub(crate) fn row() -> temper_engine_domain::Record {
     temper_engine_domain::Record::Core(jig_domain_core::Record::Core(jig_domain_core::CoreRecord::Terminal(

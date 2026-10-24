@@ -40,8 +40,9 @@ fn limits() -> engine::Limits {
 
 fn configuration() -> engine::Config {
     let mut config = walking::config(92);
-    config.core.settings.charters[0].policy.model.price_unit = 2000;
-    let mut rules = config.core.authority.rules().clone();
+    config.core.defaults.charters[0].policy.model.price_unit = 2000;
+    config.core.settings.models[0] = config.core.defaults.charters[0].policy.model.clone();
+    let mut rules = config.core.defaults.rules.clone();
     rules.maximum_run_spend = 5;
     rules.ceiling.delegation.tasks = TASKS;
     rules.ceiling.delegation.depth = 3;
@@ -56,8 +57,7 @@ fn configuration() -> engine::Config {
     let mut out = skein_lib::Queue::with_capacity(jig_domain_authority::POLICY_MAX_OUT);
     jig_domain_authority::step(&mut authority, jig_domain_authority::Event::Policy { project: 1, policy }, &mut out);
     config.core.seed_projects[0].policy.policy = authority.policy(1).expect("configured seed policy").clone();
-    config.core.authority = jig_domain_authority::Domain::new(authority.rules().clone(), *authority.limits())
-        .expect("configured authority");
+    config.core.defaults.rules = authority.rules().clone();
     config
 }
 

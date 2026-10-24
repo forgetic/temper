@@ -258,8 +258,8 @@ fn available_client_pages_context_and_nonsecret_store_have_no_token() {
             }
         }
     }
-    assert!(ran.path().join("state/store").is_dir());
-    assert!(scan(&ran.path().join("state/store")) > 0, "persisted store scan exercised");
+    assert!(ran.path().join("state/generations/1/store").is_dir());
+    assert!(scan(&ran.path().join("state/generations/1/store")) > 0, "persisted store scan exercised");
     assert!(scan(&ran.path().join("state/transcripts")) > 0, "transcript scan exercised");
     scan(&ran.path().join("worker-root"));
 }

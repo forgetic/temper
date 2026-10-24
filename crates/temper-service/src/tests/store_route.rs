@@ -533,7 +533,7 @@ fn loaded_tail(transcript: Box<[u8]>) -> Box<[u8]> {
     assert_eq!(rows.len(), texts.len(), "one rendering per stored turn");
     let settings = fixtures::engine();
     let mut config = jig_protocol_config::core(&settings.jig, [7; 16], 7);
-    config.settings.charters.get_mut(0).unwrap().policy.resume = false;
+    config.defaults.charters.get_mut(0).unwrap().policy.resume = false;
     let mut core = core::Core::new(config, &settings.jig.limits.core).unwrap();
     core.begin_transcript(7, 1);
     core.transcripts.get_mut(&7).unwrap().window = Some((1, 1));
@@ -572,4 +572,41 @@ fn a_loaded_turn_larger_than_the_tail_budget_keeps_its_texts_end() {
     assert!(tail.starts_with(b"[earlier text cut]\n"), "the cut is marked");
     assert!(tail.ends_with(b"\n"), "the rendering's own line end");
     assert!(tail[..tail.len() - 1].ends_with(&words[4000..]), "the newest words are kept");
+}
+
+#[test]
+fn patch_sites_return_the_machine_with_the_missing_site_and_progress_is_not_a_root_event() {
+    use skein_codec::{
+        patch::{Capacity, Halt, Patcher, Site},
+        value::Value,
+    };
+    let schema = skein_codec::schema::parse(b"family fixture 1\nrecord Row {} ").unwrap();
+    let mut value = Value::with_room(1);
+    let at = value.decode(&schema, schema.find(b"Row").unwrap(), Box::new([])).unwrap();
+    let mut routes = fixtures::routes();
+    let mut out = Queue::with_capacity(4);
+    for of in [store::Owner::Skein, store::Owner::Smith, store::Owner::Jig, store::Owner::Application] {
+        let site = Site::new(2, 0);
+        route::up(
+            &mut routes,
+            store::Event::Site {
+                owner: fixtures::OWNER,
+                of,
+                key: Box::new([]),
+                site,
+                at,
+                patcher: Box::new(Patcher::new(Capacity { versions: 0, patches: 0, text: 0, bytes: 0, nodes: 0 })),
+            },
+            &mut out,
+        );
+        let Some(Up::Ask(store::Request::Site { owner, result, .. })) = out.pop() else { panic!("site reply") };
+        assert_eq!(owner, fixtures::OWNER);
+        assert_eq!(result, Err(Halt::NoSite(site)));
+        route::up(
+            &mut routes,
+            store::Event::Patched { owner, of, patch: 2, counts: store::Counts { records: 3, commits: 1 } },
+            &mut out,
+        );
+        assert!(out.is_empty());
+    }
 }

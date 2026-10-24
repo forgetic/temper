@@ -106,6 +106,9 @@ pub(crate) fn step_routed(domain: &mut Domain, env: &Env<Limits>, event: Event, 
         Event::Party(crate::PartyInput::Whose { reply_to, sign_in }) => {
             domain.work.push(Work::People(people::Event::Whose { reply_to, sign_in }));
         }
+        Event::Party(crate::PartyInput::ChangeSettings { reply_to, sign_in, key, digest, change }) => {
+            domain.work.push(Work::Core(core::Event::ChangeSettings { reply_to, sign_in, key, digest, change }));
+        }
         Event::Party(crate::PartyInput::SignOut { reply_to, sign_in }) => {
             domain.work.push(Work::People(people::Event::SignOut { reply_to, sign_in }));
         }
@@ -223,6 +226,9 @@ pub(crate) fn route_core_requests(
                     save_connector_answer(domain, &env.limits, decision, row.key);
                 }
                 save(decision, &env.limits, Write::Save(Record::Core(record)));
+            }
+            core::Request::Write(core::Write::CopySettingsRevision(number)) => {
+                save(decision, &env.limits, Write::CopySettingsRevision(number));
             }
             core::Request::Write(core::Write::Erase(key)) => {
                 if let core::Key::Core(core::CoreKey::Call(call)) = key

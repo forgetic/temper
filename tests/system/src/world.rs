@@ -67,7 +67,7 @@ pub fn config(seed: u64) -> engine::Config {
     config.core.settings.models = Box::new([charter.policy.model.clone()]);
     config.core.settings.llm_providers.providers.first_mut().expect("walking fixture's provider").models =
         Box::new([charter.policy.model.name.clone()]);
-    config.core.settings.charters = Box::new([charter]);
+    config.core.defaults.charters = Box::new([charter]);
     config.core.settings.resume_bytes = 8192;
     config
 }
@@ -76,7 +76,7 @@ pub fn config(seed: u64) -> engine::Config {
 #[must_use]
 pub fn open_config(seed: u64) -> engine::Config {
     let mut config = config(seed);
-    config.core.settings.templates =
+    config.core.defaults.templates =
         temper_engine_domain_world::fixtures::templates_ending(jig_domain_tasks::EndedBy::Requester);
     config
 }

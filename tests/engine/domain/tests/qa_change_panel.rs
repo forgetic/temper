@@ -12,7 +12,7 @@ fn config() -> engine::Config {
     for role in &mut config.core.seed_projects[0].policy.permissions {
         role.connector = 1;
     }
-    let mut rules = config.core.authority.rules().clone();
+    let mut rules = config.core.defaults.rules.clone();
     for grant in &mut rules.ceiling.grants {
         grant.connector = 1;
     }
@@ -28,13 +28,13 @@ fn config() -> engine::Config {
             grant.connector = 1;
         }
     }
-    let mut authority = a::Domain::new(rules, *config.core.authority.limits()).expect("forge-number policy");
+    let mut authority =
+        a::Domain::new(rules, temper_engine_domain_world::walking::limits().authority).expect("forge-number policy");
     let mut out = skein_lib::Queue::with_capacity(a::POLICY_MAX_OUT);
     a::step(&mut authority, a::Event::Policy { project: 1, policy }, &mut out);
     assert_eq!(out.pop(), Some(a::PolicyFact::Added { project: 1 }));
     config.core.seed_projects[0].policy.policy = authority.policy(1).expect("configured seed policy").clone();
-    config.core.authority = jig_domain_authority::Domain::new(authority.rules().clone(), *authority.limits())
-        .expect("configured authority");
+    config.core.defaults.rules = authority.rules().clone();
     config
 }
 

@@ -100,7 +100,7 @@ impl World {
                 limits.authority.executors = 2;
                 limits.authority.batch = 2;
                 limits.authority.grants = 10;
-                limits.authority.segments = 9;
+                limits.authority.segments = 8;
                 limits.authority.segment_bytes = 64;
                 limits.authority.writes = 2;
                 limits.journal.writes += 64;
@@ -121,7 +121,7 @@ impl World {
                 if !with_change {
                     limits.authority.grants = 4;
                 }
-                limits.authority.segments = 9;
+                limits.authority.segments = 8;
                 limits.authority.segment_bytes = 64;
                 if !with_change {
                     limits.tasks.authority_grants = 2;
@@ -143,7 +143,7 @@ impl World {
                     },
                 };
                 let effect_grant = authority::Grant { kind: 8, ..grant.clone() };
-                let mut rules = config.core.authority.rules().clone();
+                let mut rules = config.core.defaults.rules.clone();
                 if with_change {
                     rules.maximum_run_spend = 60;
                 }
@@ -221,8 +221,7 @@ impl World {
                 assert_eq!(facts.pop(), Some(authority::PolicyFact::Added { project: 1 }));
                 // A chat's authority is its role's, one level shallower (jig a2616181).
                 config.core.seed_projects[0].policy.policy = domain.policy(1).expect("configured seed policy").clone();
-                config.core.authority = jig_domain_authority::Domain::new(domain.rules().clone(), *domain.limits())
-                    .expect("configured authority");
+                config.core.defaults.rules = domain.rules().clone();
             }
             limits.notes.scopes = 3 + limits.authority.grants;
             (config, limits)

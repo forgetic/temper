@@ -276,6 +276,7 @@ pub fn refusal(why: &Refusal, book: &Phrasebook, out: &mut Text) {
         | Refusal::Kept { .. }
         | Refusal::NameTaken
         | Refusal::AccountMove { .. }
+        | Refusal::SignInRedirect { .. }
         | Refusal::Provider => book.say(0, word.id(), &[]),
     }
     .expect("checked refusal phrase")

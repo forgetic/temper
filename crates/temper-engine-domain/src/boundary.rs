@@ -388,6 +388,14 @@ pub enum PartyInput {
         reply_to: ReplyTo,
         sign_in: u64,
     },
+    /// A direct owner settings change, decided by jig.
+    ChangeSettings {
+        reply_to: ReplyTo,
+        sign_in: u64,
+        key: [u8; 16],
+        digest: [u8; 32],
+        change: Box<core::settings::Change>,
+    },
     /// End one authenticated sign-in through the people child (ruling 116).
     SignOut {
         reply_to: ReplyTo,

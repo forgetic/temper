@@ -94,6 +94,7 @@ fn decide_sends_its_two_forms() {
         (
             fixtures::DECIDE_TASK_CALL,
             c::DecideOn::Proposal {
+                running: None,
                 proposal: c::ProposalKey { proposer: c::Proposer::Task(fixtures::TASK), number: fixtures::PROPOSAL },
                 decision: c::Decision::Accepted,
             },
@@ -294,6 +295,7 @@ fn proposal_names_preserve_task_or_party() {
             &c::Ask::Decide {
                 project: fixtures::PROJECT,
                 on: c::DecideOn::Proposal {
+                    running: None,
                     proposal: c::ProposalKey { proposer, number: fixtures::PROPOSAL },
                     decision: c::Decision::Accepted,
                 }
@@ -400,4 +402,33 @@ fn dependency_refusals_print_jigs_words_and_integer_facts() {
             assert!(skein_lib::bytes::find(&printed.stderr, expected).is_some(), "{printed:?}");
         }
     }
+}
+
+#[test]
+fn sign_in_redirect_refusals_keep_each_reason_in_json() {
+    for (why, expected) in [
+        (c::SignInRedirectWhy::NotWaiting, br#""sign_in_redirect":{"why":"not_waiting"}"#.as_slice()),
+        (c::SignInRedirectWhy::Address, br#""sign_in_redirect":{"why":"address"}"#),
+        (c::SignInRedirectWhy::State, br#""sign_in_redirect":{"why":"state"}"#),
+        (c::SignInRedirectWhy::TooMany, br#""sign_in_redirect":{"why":"too_many"}"#),
+    ] {
+        let mut root = fixtures::signed_in(fixtures::PARTY);
+        let call = root.submit(&["message", "41", "hello", "--key", "words", "--json"]);
+        root.serve(call, fixtures::task_result(fixtures::offered(&[c::ActKind::Message])));
+        root.answered(call, c::Answer::Refused { refusal: c::Refusal::SignInRedirect { why }, at: None });
+        let printed = root.answer(call).expect("refused");
+        assert_eq!(printed.status, 2);
+        assert!(skein_lib::bytes::find(&printed.stderr, expected).is_some(), "{printed:?}");
+    }
+}
+
+#[test]
+fn an_account_finishing_outcome_keeps_its_source_in_json() {
+    let mut root = fixtures::signed_in(fixtures::PARTY);
+    let call = root.submit(&["message", "41", "hello", "--key", "words", "--json"]);
+    root.serve(call, fixtures::task_result(fixtures::offered(&[c::ActKind::Message])));
+    root.done(call, c::Outcome::Owner(c::OwnerOutcome::AccountFinishing { source: 23 }));
+    let printed = root.answer(call).expect("answered");
+    assert_eq!(printed.status, 0);
+    assert!(skein_lib::bytes::find(&printed.stdout, br#""account_finishing":{"source":23}"#).is_some(), "{printed:?}");
 }

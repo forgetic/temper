@@ -180,7 +180,7 @@ fn open_config(seed: u64) -> engine::Config {
 fn configure(mut config: engine::Config) -> engine::Config {
     let charter = crate::world::charter();
     config.core.settings.models = Box::new([charter.policy.model.clone()]);
-    config.core.settings.charters = Box::new([charter]);
+    config.core.defaults.charters = Box::new([charter]);
     config.core.settings.resume_bytes = 32768;
     config.core.hub_turns = 2;
     config
@@ -385,7 +385,7 @@ impl World {
             creating: jig_core_world::fixtures::Creating::new(&config.core, limits.tasks.tree_tasks),
             chat_ending: config
                 .core
-                .settings
+                .defaults
                 .templates
                 .iter()
                 .find(|template| template.number == 1)
@@ -1044,12 +1044,12 @@ fn grant_read(config: &mut engine::Config, limits: &mut engine::Limits) {
     limits.people.holdings = 4;
     limits.authority.roles = 4;
     limits.journal.writes += 128;
-    limits.authority.segments = 9;
+    limits.authority.segments = 8;
     limits.authority.segment_bytes = 64;
     limits.tasks.authority_segments = 9;
     limits.tasks.authority_bytes = 128;
     limits.notes.scopes = 4;
-    let mut authority_rules = config.core.authority.rules().clone();
+    let mut authority_rules = config.core.defaults.rules.clone();
     authority_rules.ceiling.grants = Box::new([grant.clone()]);
     authority_rules.ceiling.tools = authority::Tools(1);
     let mut policy = config.core.seed_projects[0].policy.policy.clone();
@@ -1071,8 +1071,7 @@ fn grant_read(config: &mut engine::Config, limits: &mut engine::Limits) {
     authority::step(&mut domain, authority::Event::Policy { project: 1, policy }, &mut out);
     assert_eq!(out.pop(), Some(authority::PolicyFact::Added { project: 1 }));
     config.core.seed_projects[0].policy.policy = domain.policy(1).expect("configured seed policy").clone();
-    config.core.authority =
-        jig_domain_authority::Domain::new(domain.rules().clone(), *domain.limits()).expect("configured authority");
+    config.core.defaults.rules = domain.rules().clone();
 }
 
 fn say(project: u32, task: u64, words: Box<[u8]>, release: Option<u64>) -> people::Ask {

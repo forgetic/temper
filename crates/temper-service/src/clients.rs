@@ -709,7 +709,7 @@ impl Clients {
                         endings.push(number).expect("bounded commit writes");
                     }
                 }
-                root::Write::Save(_) => {}
+                root::Write::CopySettingsRevision(_) | root::Write::Save(_) => {}
             }
         }
         if !endings.is_empty() {
@@ -869,6 +869,8 @@ impl Clients {
                 kit::SecretsAnswer::Got { owner, value }
             }
             Event::SecretsLoaded { .. }
+            | Event::Site { .. }
+            | Event::Patched { .. }
             | Event::Opened { .. }
             | Event::OpenRefused { .. }
             | Event::Committed { .. }
@@ -915,6 +917,7 @@ fn secret_request(request: kit::SecretsRequest) -> (Asked, jig_protocol_store::S
             (Asked::Owner(owner), Secrets::Get { owner: kind, number })
         }
         kit::SecretsRequest::Carry { exchange, value } => (Asked::Carry(exchange), Secrets::Carry { value }),
+        kit::SecretsRequest::Hold { exchange, value } => (Asked::Carry(exchange), Secrets::Hold { value }),
     }
 }
 /// Where the store keeps an owner's value; a carried value is the
@@ -984,6 +987,7 @@ fn client_settings(
         stream: seeds.seed,
         models: config::clients::models(&config.llm),
         key_bytes: config.limits.driver.client.document.token_bytes.min(config.limits.clients.wire.keyed_value_some),
+        redirect_bytes: config.limits.driver.client.uri_bytes,
         moved_bytes: moved_bytes(&config.limits),
     }
 }

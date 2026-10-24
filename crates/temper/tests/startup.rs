@@ -1620,7 +1620,7 @@ fn turn_bounds() {
         turn_bound_document(&root.join(deployment), turn, false);
         eprintln!("{deployment}: T={turn}");
     }
-    for lab in ["cluster", "cluster-web", "look-live", "chat-change-smoke"] {
+    for lab in ["cluster", "cluster-web", "look-live", "chat-change-smoke", "chat-change", "chat-change-killed"] {
         let directory = root.join("lab").join(lab);
         let agent = fs::read_to_string(directory.join("agent.json")).expect("lab agent");
         let agent: serde_json::Value =

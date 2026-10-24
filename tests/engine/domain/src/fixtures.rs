@@ -95,14 +95,14 @@ pub fn revision_delegate() -> (Driver, engine::Assignment, u64) {
     bounds.brief.sections = 5;
     let configuration = std::array::from_fn(|_| {
         let mut configuration = config(92);
-        let mut rules = configuration.core.authority.rules().clone();
+        let mut rules = configuration.core.defaults.rules.clone();
         rules.ceiling.delegation.depth = 2;
         let mut policy = configuration.core.seed_projects[0].policy.policy.clone();
         policy.ceiling.delegation.depth = 2;
         policy.roles[0].authority.delegation.depth = 2;
         let authority = jig_domain_authority::Domain::new(rules, bounds.authority).expect("fixture authority");
         configuration.core.seed_projects[0].policy.policy = policy;
-        configuration.core.authority = authority;
+        configuration.core.defaults.rules = authority.rules().clone();
         configuration
     });
     let (mut driver, parent) = Driver::configured_chat(configuration, &bounds);

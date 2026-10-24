@@ -2057,6 +2057,7 @@ fn base_frame(person: &str, project: &str) -> c::Me {
         providers: List::with_capacity(0),
         providers_cut: false,
         key_bytes: 4096,
+        redirect_bytes: 4096,
     }
 }
 fn base_task(number: u64, title: &str) -> c::Task {

@@ -651,7 +651,12 @@ pub fn task_budget(front: &mut Joint, task: u64) -> jig_domain_core::documents::
                         None
                     }
                 }
-                reads::Answer::Tasks(_) | reads::Answer::Page(_) | reads::Answer::None(_) => None,
+                reads::Answer::Setting(_)
+                | reads::Answer::Revision(_)
+                | reads::Answer::Revisions(_)
+                | reads::Answer::Tasks(_)
+                | reads::Answer::Page(_)
+                | reads::Answer::None(_) => None,
             }
         })
         .expect("goal budget document")
@@ -998,10 +1003,6 @@ pub fn done_task(printed: &temper_client_tools::jig::Printed) -> u64 {
 
 /// tools.md, 12: two 16 KiB parts within the tools' 32 KiB text bound.
 pub const LARGE_TURN_TEXT: usize = 24_576;
-/// The encoded turn's single row fits the world's configured `loads.read_bytes`; its activity row crosses it.
-// Jig e5140872 adds another 8 B to the owner row; trim only opaque padding
-// so the single row still fits and the activity join still crosses the bound.
-pub const LARGE_TURN_OPAQUE: usize = 38_550;
 #[must_use]
 pub fn codec_for(limits: &jig_client::DomainLimits) -> jig_protocol_transcript::Limits {
     let bytes = limits.document_bytes.min(u64::from(jig_client_protocol_wire::CEILINGS.turn_carried_bytes));
@@ -1012,25 +1013,49 @@ pub fn codec_for(limits: &jig_client::DomainLimits) -> jig_protocol_transcript::
 }
 /// Commit smith's session turn through the worker's real turn boundary.
 pub fn large_turn(front: &mut Joint, task: u64) -> (u64, u32) {
-    large_turn_with_opaque(front, task, LARGE_TURN_OPAQUE)
+    use jig_domain_core::{CoreRecord, Record, TurnRecord};
+    let empty = large_turn_body(0);
+    let per_byte = large_turn_body(1).len().checked_sub(empty.len()).expect("opaque padding grows the encoding");
+    let mut row = turn_read_row(
+        front,
+        task,
+        Record::Core(CoreRecord::Turn(TurnRecord {
+            opens_window: true,
+            task,
+            attempt: front.engine.last_assignment().attempt,
+            turn: FIRST_REPLY_TURN,
+            spent: REPLY_SPEND,
+            read: None,
+            at: NOW,
+            transcript: empty,
+        })),
+    );
+    // The first committed turn also adds its retained reply hint to the owner.
+    let owner = row.owner.as_mut().expect("turn owner");
+    assert!(owner.replies.is_empty(), "the fixture commits its first reply");
+    owner.replies = Box::new([tasks::ReplyHint {
+        number: owner.last_reply.checked_add(1).expect("reply ordinal"),
+        activity: owner.activity.checked_add(1).expect("reply activity"),
+        attempt: front.engine.last_assignment().attempt,
+        turn: FIRST_REPLY_TURN,
+        at: NOW,
+    }]);
+    // Keep all visible text; only opaque padding fills the remaining whole-row budget.
+    let room = front
+        .engine
+        .env
+        .limits
+        .loads
+        .read_bytes
+        .checked_sub(row.owned_bytes().expect("zero-padding row ownership"))
+        .expect("visible turn and its owner fit the read");
+    let padding = usize::try_from(room).expect("fixture read fits usize") / per_byte;
+    large_turn_with_opaque(front, task, padding)
 }
 /// Commit a turn with a separately sized opaque reasoning item.
 pub fn large_turn_with_opaque(front: &mut Joint, task: u64, opaque: usize) -> (u64, u32) {
-    use smith_domain_session::llm;
     let assignment = front.engine.last_assignment();
-    let mut turn =
-        temper_worker_domain_world::protocol::session_turn(FIRST_REPLY_TURN, REPLY_SPEND, LARGE_TURN_TEXT, true);
-    for message in &mut turn.messages {
-        let mut blocks = message.content.to_vec();
-        blocks.push(llm::Block::Opaque { bytes: vec![0; opaque].into_boxed_slice() });
-        message.content = blocks.into_boxed_slice();
-    }
-    let body = smith_protocol_channel::encode_turn(
-        &turn,
-        &smith_transcript::CEILINGS,
-        &temper_worker_domain_world::protocol::endpoints(),
-    )
-    .expect("large turn encodes");
+    let body = large_turn_body(opaque);
     front.engine.send(temper_engine_domain_world::protocol::turn(
         QUESTION_WORKER,
         task,
@@ -1043,11 +1068,26 @@ pub fn large_turn_with_opaque(front: &mut Joint, task: u64, opaque: usize) -> (u
     front.engine.settle();
     (assignment.attempt, FIRST_REPLY_TURN)
 }
+fn large_turn_body(opaque: usize) -> Box<[u8]> {
+    use smith_domain_session::llm;
+    let mut turn =
+        temper_worker_domain_world::protocol::session_turn(FIRST_REPLY_TURN, REPLY_SPEND, LARGE_TURN_TEXT, true);
+    for message in &mut turn.messages {
+        let mut blocks = message.content.to_vec();
+        blocks.push(llm::Block::Opaque { bytes: vec![0; opaque].into_boxed_slice() });
+        message.content = blocks.into_boxed_slice();
+    }
+    smith_protocol_channel::encode_turn(
+        &turn,
+        &smith_transcript::CEILINGS,
+        &temper_worker_domain_world::protocol::endpoints(),
+    )
+    .expect("large turn encodes")
+}
 /// Complete ownership of a turn alone and joined to its activity row.
 #[must_use]
 pub fn turn_row_costs(front: &Joint, task: u64) -> (u64, u64) {
-    use jig_domain_core::{self as core, reads};
-    let owner = front.engine.task(task).expect("live turn owner").clone();
+    use jig_domain_core as core;
     let turn = front
         .engine
         .store
@@ -1063,16 +1103,7 @@ pub fn turn_row_costs(front: &Joint, task: u64) -> (u64, u64) {
             }
         })
         .expect("durable turn");
-    let mut row = reads::Row {
-        value: turn,
-        owner: Some(Box::new(owner)),
-        ancestors: Box::new([]),
-        related: None,
-        unjoined: None,
-        ended_read: None,
-        linked: Box::new([]),
-        inbox: None,
-    };
+    let mut row = turn_read_row(front, task, turn);
     let single = row.owned_bytes().expect("single row cost");
     let line = front
         .engine
@@ -1093,6 +1124,18 @@ pub fn turn_row_costs(front: &Joint, task: u64) -> (u64, u64) {
     row.related = Some(row.value);
     row.value = core::Record::Tasks(tasks::Stored::Activity(line));
     (single, row.owned_bytes().expect("activity row cost"))
+}
+fn turn_read_row(front: &Joint, task: u64, value: jig_domain_core::Record) -> jig_domain_core::reads::Row {
+    jig_domain_core::reads::Row {
+        value,
+        owner: Some(Box::new(front.engine.task(task).expect("live turn owner").clone())),
+        ancestors: Box::new([]),
+        related: None,
+        unjoined: None,
+        ended_read: None,
+        linked: Box::new([]),
+        inbox: None,
+    }
 }
 /// Follow the printed continuation calls, retaining the turn's text alone.
 pub fn read_whole(

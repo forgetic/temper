@@ -182,7 +182,7 @@ pub(super) fn changed(runner: &mut Runner, client: &Client, env: &Env<Limits>, h
     let bit = 1u8.checked_shl(local).expect("fixed watch slot");
     if reading.pending & bit != 0
         && let Some(document) = client.document(handle)
-        && document.state == jig_client::State::Live
+        && (document.state == jig_client::State::Live || document.state == jig_client::State::Ended)
         && let Some(Latest::Jig(delivery)) = document.latest
     {
         reading.pending &= !bit;
@@ -201,7 +201,14 @@ pub(super) fn changed(runner: &mut Runner, client: &Client, env: &Env<Limits>, h
 }
 pub(super) fn ended(runner: &mut Runner, handle: Handle, why: Why, out: &mut Queue<Out>) {
     let prefix = u32::try_from(handle.number >> 32u32).expect("high half");
+    let local = u32::try_from(handle.number & u64::from(u32::MAX)).expect("low half");
     let Some(reading) = runner.active.remove(&prefix) else { return };
+    // A first delivery already filled this slot; its closure cannot cancel
+    // the other documents still needed by the call.
+    if reading.documents.contains_key(&local) {
+        runner.active.insert(prefix, reading);
+        return;
+    }
     let status = match why {
         Why::Unknown | Why::NotAllowed | Why::SubjectEnded => 2,
         Why::NotServed | Why::SignedOut | Why::Limit => 1,

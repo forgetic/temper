@@ -27,6 +27,7 @@ pub fn refusal(b: &mut Builder, words: &Words, value: &c::Refusal) {
         c::Refusal::Stale(_)
         | c::Refusal::Full(_)
         | c::Refusal::AccountMove { .. }
+        | c::Refusal::SignInRedirect { .. }
         | c::Refusal::NoEscalationHolder
         | c::Refusal::NameTaken
         | c::Refusal::Malformed { .. }
@@ -136,6 +137,7 @@ fn owner_outcome(b: &mut Builder, words: &Words, value: &c::OwnerOutcome) {
         | O::PolicyChanged { .. }
         | O::PoolSet { .. }
         | O::AccountKeyKept { .. }
+        | O::AccountFinishing { .. }
         | O::AccountChanged
         | O::AccountRemoved { .. } => P::Applied,
         O::AccountProgramDeclared { name: declared, .. } => {

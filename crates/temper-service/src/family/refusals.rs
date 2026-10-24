@@ -9,6 +9,14 @@ use skein_lib::Writer;
 )]
 pub(crate) fn refusal(value: p::Refusal, limits: &w::Limits) -> Result<w::Refusal, w::Problem> {
     Ok(match value {
+        // Only ChangeSettings emits Stale; forge applications never carry that ask.
+        p::Refusal::Stale { .. }
+        // Only settings admission emits Full; a forge application carries no settings value.
+        | p::Refusal::Full { .. }
+        // Only finishing an account sign-in emits SignInRedirect.
+        | p::Refusal::SignInRedirect { .. } => {
+            return Err(w::Problem { path: w::Path::RefusalTag, reason: skein_codec::Reason::Bound });
+        }
         p::Refusal::Account { account, why } => w::Refusal::Account(w::RefusalAccount::new(
             limits,
             w::RefusalAccountParts {
@@ -26,6 +34,12 @@ pub(crate) fn refusal(value: p::Refusal, limits: &w::Limits) -> Result<w::Refusa
             w::RefusalMalformedParts {
                 at,
                 why: match why {
+                    // Forge application values contain no settings for the core to check.
+                    p::Malformed::Settings { .. }
+                    // Only a settings change can leave the effective settings unchanged.
+                    | p::Malformed::SettingsUnchanged => {
+                        return Err(w::Problem { path: w::Path::MalformedTag, reason: skein_codec::Reason::Bound });
+                    }
                     p::Malformed::AsAllowedTwice => w::Malformed::TwoAsAllowed,
                     p::Malformed::Conversation => w::Malformed::ConversationNotAgent,
                     p::Malformed::Name(rule) => w::Malformed::Name(w::MalformedName::new(

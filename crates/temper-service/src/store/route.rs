@@ -97,6 +97,7 @@ pub fn down(routes: &mut Routes, request: engine::StoreRequest) -> Option<store:
             let mut out = List::with_capacity(u32::try_from(writes.len()).ok()?);
             for write in writes {
                 let translated = match write {
+                    engine::Write::CopySettingsRevision(number) => store::Write::CopySettingsRevision(number),
                     engine::Write::Save(engine::Record::Core(row)) => store::Write::Save(row),
                     engine::Write::Erase(engine::Key::Core(key)) => store::Write::Erase(key),
                     engine::Write::Save(engine::Record::Forge { row }) => store::Write::Put {
@@ -190,8 +191,12 @@ pub fn up(routes: &mut Routes, event: store::Event, into: &mut Queue<Up>) {
             routes.pending.remove(&owner);
             stop(routes, into);
         }
+        store::Event::Site { owner, of, site, patcher, .. } => {
+            into.push(Up::Ask(dispatch(owner, of, site, patcher)));
+        }
         store::Event::OpenRefused { .. } => stop(routes, into),
-        store::Event::Opened { .. }
+        store::Event::Patched { .. }
+        | store::Event::Opened { .. }
         | store::Event::Kept { .. }
         | store::Event::Carried { .. }
         | store::Event::Stale { .. }
@@ -328,12 +333,24 @@ fn page_bytes(record: &engine::Record, kept: u64) -> Option<(u64, u64)> {
     Some((payload, kept.checked_add(slot)?))
 }
 
-pub(crate) fn worst_case(limits: &engine::Limits, key: u32) -> Option<u64> {
+pub(crate) fn worst_case(limits: &engine::Limits, key: u32, payload: u64) -> Option<u64> {
     Map::<Token, Flight>::worst_case(limits.loads.loads)?
         .checked_add(Map::<Token, Token>::worst_case(limits.loads.loads)?)?
-        .checked_add(
-            engine::payload_worst_case(limits)?
-                .checked_add(u64::from(key))?
-                .checked_mul(u64::from(limits.loads.loads))?,
-        )
+        .checked_add(payload.checked_add(u64::from(key))?.checked_mul(u64::from(limits.loads.loads))?)
+}
+
+/// No owner has registered a written patch site in this build. Hand the
+/// machine back with the named refusal, so the active generation is preserved.
+fn dispatch(
+    owner: Token,
+    of: store::Owner,
+    site: skein_codec::patch::Site,
+    patcher: Box<skein_codec::patch::Patcher>,
+) -> store::Request {
+    let result = match of {
+        store::Owner::Skein | store::Owner::Smith | store::Owner::Jig | store::Owner::Application => {
+            Err(skein_codec::patch::Halt::NoSite(site))
+        }
+    };
+    store::Request::Site { owner, patcher, result }
 }

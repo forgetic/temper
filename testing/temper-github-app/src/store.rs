@@ -52,8 +52,10 @@ pub(super) fn run(data: &Path, records: &[(u64, Box<[u8]>)], load: bool) -> Resu
         assert_eq!(cloned_token, token);
         driver.handles.insert(cloned_token);
     }
+    let [store, secrets, transcripts] = &mut drivers;
+    let seeded = protocol::seed([&mut store.io, &mut secrets.io, &mut transcripts.io], 0);
     let mut host = StoreHost {
-        store: protocol::Store::on_directory(&limits, application, &[]),
+        store: protocol::Store::on_directory(&limits, application, &[], seeded),
         limits,
         drivers,
         above: Queue::with_capacity(ROOM),

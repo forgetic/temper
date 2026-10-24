@@ -330,14 +330,7 @@ impl skein_world::Referee<Proc> for Referee {
                 continue;
             }
             for write in &commit.writes {
-                match write {
-                    root::Write::Save(row) => {
-                        self.committed.rows.insert(row.key(), row.clone());
-                    }
-                    root::Write::Erase(key) => {
-                        self.committed.rows.remove(key);
-                    }
-                }
+                restart::apply(&mut self.committed.rows, write);
             }
             self.rules
                 .borrow_mut()

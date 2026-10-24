@@ -120,6 +120,7 @@ pub(super) fn encode_owner_message_proposal_kind(
 ) {
     let value = &value;
     match value {
+        jig_client::contract::OwnerMessageProposalKind::Settings => out.string(b"settings"),
         jig_client::contract::OwnerMessageProposalKind::Batch => out.string(b"batch"),
         jig_client::contract::OwnerMessageProposalKind::Effect => out.string(b"effect"),
         jig_client::contract::OwnerMessageProposalKind::Amend => out.string(b"amend"),

@@ -1,3 +1,4 @@
+mod pre_settings;
 use super::fixtures;
 use crate::{End, Stop};
 use jig_protocol_store::{Family, OpenRefusal};
@@ -41,7 +42,8 @@ fn signals_routed_from_io_drain_then_abort() {
     assert!(service.is_empty());
 }
 
-fn refused(why: OpenRefusal, expected: Stop) {
+fn refused(why: OpenRefusal) {
+    let expected = Stop::StoreOpen { why: why.clone() };
     let mut service = fixtures::started();
     service
         .engine
@@ -49,7 +51,7 @@ fn refused(why: OpenRefusal, expected: Stop) {
         .expect("engine")
         .store
         .above
-        .push(jig_protocol_store::Event::OpenRefused { owner: skein_lib::Token::new(1), why });
+        .push(jig_protocol_store::Event::OpenRefused { owner: skein_lib::Token::new(1), why: why.clone() });
     crate::engine::iterate(
         service.engine.as_mut().expect("engine"),
         skein_lib::Time::from_nanos(1),
@@ -61,6 +63,7 @@ fn version(family: Family) {
     let current =
         jig_protocol_store::format::current(temper_protocol_store::STORE_VERSION, fixtures::seeds().deployment);
     let wanted = match family {
+        Family::Settings => u32::from(current.settings),
         Family::Component => u32::from(current.component),
         Family::Core => u32::from(current.core),
         Family::Tasks => u32::from(current.tasks),
@@ -69,10 +72,7 @@ fn version(family: Family) {
         Family::Accounts => u32::from(current.accounts),
         Family::Application => current.application,
     };
-    refused(
-        OpenRefusal::Format { family, found: wanted.checked_add(1).expect("next format version"), wanted },
-        Stop::StoreVersion,
-    );
+    refused(OpenRefusal::Format { family, found: wanted.checked_add(1).expect("next format version"), wanted });
 }
 
 #[test]
@@ -111,11 +111,28 @@ fn another_application_version_stops_startup() {
 }
 
 #[test]
-fn non_format_open_refusals_keep_the_deployment_problem() {
-    for why in [OpenRefusal::Deployment, OpenRefusal::Numbers { store: 9, header: 8 }, OpenRefusal::Failed] {
-        let mut problems = jig_protocol_config::Problems::empty();
-        problems.push(jig_protocol_config::Path::root().member(b"deployment"), jig_protocol_config::What::Refers);
-        refused(why, Stop::Start(problems));
+fn non_format_open_refusals_preserve_their_own_reason() {
+    use jig_protocol_store::{Check, Generations, Older, Owner};
+    for why in [
+        OpenRefusal::Deployment,
+        OpenRefusal::Numbers { store: 9, header: 8 },
+        OpenRefusal::Failed,
+        OpenRefusal::OlderBuild { why: Older::Unleveled },
+        OpenRefusal::OlderBuild { why: Older::Unrecorded },
+        OpenRefusal::OlderBuild { why: Older::Layout(Family::Application) },
+        OpenRefusal::OlderBuild { why: Older::Directory },
+        OpenRefusal::Generations { why: Generations::Busy },
+        OpenRefusal::Ahead { owner: Owner::Jig, found: Some(2), wanted: Some(1) },
+        OpenRefusal::Patch {
+            owner: Owner::Application,
+            patch: 2,
+            key: b"record".as_slice().into(),
+            halt: skein_codec::patch::Halt::NoSite(skein_codec::patch::Site::new(2, 0)),
+        },
+        OpenRefusal::Set { owner: Owner::Jig, patch: 2 },
+        OpenRefusal::Check { why: Check::Load { key: b"record".as_slice().into() } },
+    ] {
+        refused(why);
     }
 }
 
@@ -126,7 +143,7 @@ fn stores_before_embedded_people_v13_refuse_at_startup() {
     let wanted = temper_protocol_store::STORE_VERSION;
     assert_eq!(wanted, 10);
     for found in [6, 7, 8] {
-        refused(OpenRefusal::Format { family: Family::Application, found, wanted }, Stop::StoreVersion);
+        refused(OpenRefusal::Format { family: Family::Application, found, wanted });
     }
 }
 
@@ -134,5 +151,5 @@ fn stores_before_embedded_people_v13_refuse_at_startup() {
 fn a_store_without_demo_acts_refuses_at_startup() {
     let wanted = temper_protocol_store::STORE_VERSION;
     assert_eq!(wanted, 10);
-    refused(OpenRefusal::Format { family: Family::Application, found: 9, wanted }, Stop::StoreVersion);
+    refused(OpenRefusal::Format { family: Family::Application, found: 9, wanted });
 }
