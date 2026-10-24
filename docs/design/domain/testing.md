@@ -838,7 +838,7 @@ and 10).
   `wait forges --until settled`, the box's group run on the real Forgejo
   and runner; forge 3's row goes through "Setting up" and "Connecting"
   to "Connected as temper", with no restart, its first repository
-  `work/hello` made and adopted into project 1. The owner's first task
+  `work/hello` made and adopted into project 2. The owner's first task
   there, on the fake LLM, is cloned by its worker, its pull's run of the
   starter workflow passes on the owned runner, and it lands, all read
   through temper's own reads, with no credential. The handover file is gone,
@@ -847,6 +847,11 @@ and 10).
   group by its record; preparation makes a new handover, and serve takes
   it over, connects forge 3 from its records and finds the task landed. Plaintext throughout:
   no TLS and no call off the machine.
+- **The first run whole,** a test of its own (../protocol/setup.md,
+  13.4, "The first run whole"): one box, with no restart, plays the
+  playground's chat, then sets a Forgejo up from the client; its
+  connect ends the playground at runtime, and the owner's first task
+  lands on `work/hello`.
 - **A first run,** a test of its own (../protocol/setup.md, 13.4):
   `temper box` on three empty scratch directories writes the
   configuration (../protocol/setup.md, 8.2), says so on stderr, and
