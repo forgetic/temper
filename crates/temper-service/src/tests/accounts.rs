@@ -8,8 +8,14 @@ const TOKEN: &[u8] = b"test-token";
 
 #[test]
 fn a_restored_key_is_durable_before_its_value_is_lent() {
-    let mut service = fixtures::started();
-    let mut rows = skein_lib::List::with_capacity(3);
+    let mut bootstrap = fixtures::ready();
+    let mut header = bootstrap.engine.as_ref().expect("engine").domain.deployment();
+    header.commits = header.commits.checked_add(1).unwrap();
+    let mut rows = skein_lib::List::with_capacity(4);
+    rows.push(Write::Save(Record::Core(jig_domain_core::Record::Core(jig_domain_core::CoreRecord::Deployment(
+        header,
+    )))))
+    .unwrap();
     for row in [
         Stored::Account {
             number: 0,
@@ -25,8 +31,15 @@ fn a_restored_key_is_durable_before_its_value_is_lent() {
     ] {
         rows.push(Write::Save(Record::Core(jig_domain_core::Record::Accounts(row)))).unwrap();
     }
-    fixtures::commit(&mut service.engine.as_mut().expect("engine").store, 1, rows.into_boxed());
-    let _kept = service.engine.as_mut().expect("engine").store.secrets(
+    assert!(
+        bootstrap
+            .engine
+            .as_mut()
+            .expect("engine")
+            .store
+            .down(temper_engine_domain::StoreRequest::Commit { number: header.commits, writes: rows.into_boxed() })
+    );
+    let _kept = bootstrap.engine.as_mut().expect("engine").store.secrets(
         Token::new(crate::tokens::ACCOUNTS | 1),
         Secrets::Replace {
             owner: SecretOwner::Source,
@@ -35,8 +48,9 @@ fn a_restored_key_is_durable_before_its_value_is_lent() {
             replaces: None,
         },
     );
-    while service.engine.as_mut().expect("engine").store.above.pop().is_some() {}
-    for _ in 0_u32..24 {
+    while bootstrap.engine.as_mut().expect("engine").store.above.pop().is_some() {}
+    let mut service = fixtures::start_with_store(&[(1, 100)], Some(bootstrap.engine.expect("engine").store));
+    for _ in 0_u32..256 {
         fixtures::turn(&mut service);
         let lent = service.engine.as_mut().expect("engine").values.accounts.value(1, 1, Time::from_nanos(1)).is_some();
         let Some(StoreEvent::Secret { value, .. }) = service
@@ -49,6 +63,9 @@ fn a_restored_key_is_durable_before_its_value_is_lent() {
             panic!("a get is answered at once");
         };
         assert!(!lent || value.is_some(), "no value is lent before its record is kept");
+        if lent {
+            break;
+        }
     }
     let value = service
         .engine

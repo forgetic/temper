@@ -93,7 +93,7 @@ struct World {
 impl World {
     fn new(under_box: bool) -> Self {
         let mut limits = temper_engine_domain_world::fixtures::forge_limits();
-        limits.authority = *config(under_box).core.authority.limits();
+        limits.authority = temper_engine_domain_world::walking::limits().authority;
         limits.people.projects = 3;
         limits.people.holdings = 3;
         // Four configured forges distinguish both ineligible modes from the two asked ones.

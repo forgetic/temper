@@ -7,7 +7,8 @@ fn batch(page: &c::ReadValue) -> Option<&skein_lib::List<c::ProposedTask>> {
     match page {
         c::ReadValue::OwnerProposal(proposal) => match &proposal.action {
             c::OwnerProposalAction::Batch(tasks) => Some(tasks),
-            c::OwnerProposalAction::Effect { .. }
+            c::OwnerProposalAction::Settings(_)
+            | c::OwnerProposalAction::Effect { .. }
             | c::OwnerProposalAction::ProcedureEffect { .. }
             | c::OwnerProposalAction::Amend { .. }
             | c::OwnerProposalAction::Widen { .. }
@@ -122,6 +123,7 @@ pub(super) fn facts(b: &mut Builder, page: &c::ReadValue, words: &Words, rows: u
     match page {
         c::ReadValue::OwnerProposal(proposal) => match &proposal.action {
             c::OwnerProposalAction::Batch(tasks) => proposed(b, tasks, words, rows),
+            c::OwnerProposalAction::Settings(_) => {}
             c::OwnerProposalAction::Effect { part, authority: value, .. }
             | c::OwnerProposalAction::ProcedureEffect { part, authority: value, .. } => {
                 crate::forge::owner_part(b, part, words);

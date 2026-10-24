@@ -29,6 +29,7 @@ impl Operation {
         let (word, task): (&[u8], Option<u64>) = match ask {
             Ask::Family { .. } => (b"adopt", None),
             Ask::Jig(ask) => match ask.as_ref() {
+                c::Ask::Propose { action: c::ProposeAction::Settings(_), .. } => (b"propose_settings", None),
                 c::Ask::ChangeSettings(_) => unreachable!("the tools do not request settings"),
                 c::Ask::Create { .. } | c::Ask::Propose { action: c::ProposeAction::Batch { .. }, .. } => {
                     (b"chat", None)
@@ -90,7 +91,7 @@ impl Operation {
                         c::AccountChange::Resume { .. } => b"retry",
                         c::AccountChange::MoveAccount { .. } | c::AccountChange::MoveSource { .. } => b"rank",
                         c::AccountChange::Remove { .. } | c::AccountChange::RemoveKey { .. } => b"forget",
-                        c::AccountChange::SetUses { .. } => b"account-change",
+                        c::AccountChange::SetUses { .. } | c::AccountChange::FinishSignIn { .. } => b"account-change",
                     },
                     None,
                 ),

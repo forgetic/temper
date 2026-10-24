@@ -869,7 +869,11 @@ fn kept_record(store: &mut crate::store::Store, forge: u16, item: Item, bytes: &
 }
 fn local_store(token: bool) -> crate::store::Store {
     use temper_engine_domain_forge::Stored;
-    let mut store = fixtures::records_store();
+    // Persist the real first-start settings before constructing a restart fixture.
+    let mut bootstrap = fixtures::ready();
+    let mut header = bootstrap.engine.as_ref().unwrap().domain.deployment();
+    header.commits = header.commits.checked_add(1).unwrap();
+    let mut store = bootstrap.engine.take().unwrap().store;
     if token {
         kept_record(&mut store, 1, Item::AdminToken, b"test-admin");
     }
@@ -879,14 +883,19 @@ fn local_store(token: bool) -> crate::store::Store {
         kept_record(&mut store, 1, item, value);
     }
     let row = local_repository();
-    fixtures::commit(
-        &mut store,
-        1,
-        Box::new([root::Write::Save(root::Record::Forge { row: Box::new(Stored::Repository(row)) })]),
-    );
-    let Some(StoreEvent::Committed { number: 1, .. }) = store.above.pop() else {
+    assert!(store.down(root::StoreRequest::Commit {
+        number: header.commits,
+        writes: Box::new([
+            root::Write::Save(root::Record::Core(jig_domain_core::Record::Core(
+                jig_domain_core::CoreRecord::Deployment(header),
+            ))),
+            root::Write::Save(root::Record::Forge { row: Box::new(Stored::Repository(row)) }),
+        ]),
+    }));
+    let Some(StoreEvent::Committed { number, .. }) = store.above.pop() else {
         panic!("durable repository");
     };
+    assert_eq!(number, header.commits);
     store
 }
 fn local_repository() -> domain::Repository {
@@ -950,7 +959,14 @@ fn restore_local(service: &mut crate::Service) {
             return;
         }
     }
-    panic!("root restore completes");
+    let engine = service.engine.as_ref().unwrap();
+    panic!(
+        "root restore completes: end={:?}, step={:?}, settings={:?}, header={:?}",
+        service.end(),
+        engine.domain.restart_failure(),
+        engine.domain.settings_failure(),
+        engine.domain.deployment(),
+    );
 }
 fn local_sent(service: &mut crate::Service, face: &mut Face, path: &[u8]) {
     face.sent(service);

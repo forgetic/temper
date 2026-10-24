@@ -9,13 +9,12 @@ use temper_engine_domain_world::{direct::Driver, fixtures, forge_stand::ForgeSta
 fn config(under_box: bool) -> engine::Config {
     let mut config = walking::config(71);
     config.under_box = under_box;
-    config.core.settings.templates[0].budget = people::TemplateBudget::AsAllowed { cap: Some(200) };
-    let mut rules = config.core.authority.rules().clone();
+    config.core.defaults.templates[0].budget = people::TemplateBudget::AsAllowed { cap: Some(200) };
+    let mut rules = config.core.defaults.rules.clone();
     rules.ceiling.delegation.depth = 2;
     config.core.seed_projects[0].policy.policy.ceiling.delegation.depth = 2;
     config.core.seed_projects[0].policy.policy.roles[0].authority.delegation.depth = 2;
-    config.core.authority =
-        jig_domain_authority::Domain::new(rules, fixtures::forge_limits().authority).expect("demo authority");
+    config.core.defaults.rules = rules;
     config.core.grants = Box::new([people::ActGrant {
         connector: config.core.connectors[0],
         may: Box::new([
@@ -523,12 +522,15 @@ fn restart(d: &mut Driver, granted: bool) {
     restart_with(d, configuration);
 }
 fn restart_with(d: &mut Driver, configuration: engine::Config) {
+    reopen(d, configuration);
+    assert!(d.root.ready() && !d.stopped);
+}
+fn reopen(d: &mut Driver, configuration: engine::Config) {
     d.root = engine::Domain::new(configuration, &d.env.limits).expect("restart config");
     d.events.clear();
     d.delivered.clear();
     d.send(engine::Event::Restart);
     d.pump();
-    assert!(d.root.ready() && !d.stopped);
 }
 fn assert_erased(d: &Driver, rows: &[forge::DemoAct]) {
     assert!(kept_acts(d).is_empty());
@@ -757,33 +759,67 @@ fn demo_end_does_not_act_on_a_chat_already_closing() {
     assert!(acted(&d).is_empty());
 }
 
+fn pending_demo_end() -> (Driver, forge::DemoAct) {
+    let (mut d, task, _sign_in) = live_demo(false);
+    let row = forge::DemoAct { key: [210; 16], act: forge::DemoActKind::Close { project: 1, task } };
+    d.store.seed(Box::new([engine::Record::Forge { row: Box::new(forge::Stored::DemoAct(row)) }]), Box::new([]));
+    (d, row)
+}
+
 #[test]
-fn demo_end_saved_refusal_is_named_and_erased_but_no_owner_is_named_and_kept() {
-    for no_owner in [false, true] {
-        let (mut d, task, _sign_in) = live_demo(false);
-        let row = forge::DemoAct { key: [210; 16], act: forge::DemoActKind::Close { project: 1, task } };
-        d.store.seed(Box::new([engine::Record::Forge { row: Box::new(forge::Stored::DemoAct(row)) }]), Box::new([]));
-        let mut configuration = config(false);
-        if no_owner {
-            configuration.core.owners = Box::new([]);
-        } else {
-            configuration.core.settings.templates[0].grace = Some(Duration::from_secs(6));
-        }
-        restart_with(&mut d, configuration);
-        assert_eq!(kept_acts(&d), if no_owner { vec![row] } else { vec![] });
-        let expected = if no_owner { b"no first owner configured".as_slice() } else { b"Limit".as_slice() };
-        assert!(d.delivered.iter().any(
-            |delivery| matches!(delivery, Delivery::DemoNote { line } if line.ends_with(expected) && line.len() <= 256)
-        ));
-        if !no_owner {
-            assert_erased(&d, &[row]);
-            assert!(acted(&d).iter().any(|(_, answer)| matches!(
-                answer,
-                people::Outcome::CompoundRefused {
-                    why: people::Refusal::Limit { which: people::LimitKind::Grace },
-                    ..
-                }
-            )));
-        }
-    }
+fn demo_end_without_a_first_owner_keeps_and_names_the_act() {
+    let (mut d, row) = pending_demo_end();
+    let mut configuration = config(false);
+    configuration.core.owners = Box::new([]);
+    restart_with(&mut d, configuration);
+    assert_eq!(kept_acts(&d), vec![row]);
+    assert!(d.delivered.iter().any(|delivery| matches!(delivery, Delivery::DemoNote { line } if line.ends_with(b"no first owner configured") && line.len() <= 256)));
+}
+
+#[test]
+fn a_bad_release_template_stops_before_a_demo_end_is_replayed() {
+    let (mut d, row) = pending_demo_end();
+    let mut configuration = config(false);
+    configuration.core.defaults.templates[0].grace = Some(Duration::from_secs(6));
+    reopen(&mut d, configuration);
+    assert!(d.stopped);
+    assert_eq!(
+        d.root.settings_failure(),
+        Some(core::RestartRequest::Settings {
+            failure: core::settings::Failure {
+                setting: core::settings::Setting::Template(1),
+                fault: core::settings::Fault::Grace
+            },
+            changed: false,
+        })
+    );
+    assert_eq!(kept_acts(&d), vec![row]);
+}
+
+#[test]
+fn demo_end_reads_the_owners_changed_conversation_grace() {
+    let (mut d, task, sign_in) = live_demo(false);
+    let mut template = config(false).core.defaults.templates[0].clone();
+    template.grace = Some(Duration::from_secs(1));
+    d.send(engine::Event::Party(engine::PartyInput::ChangeSettings {
+        reply_to: ReplyTo::new(Token::new(211)),
+        sign_in,
+        key: [211; 16],
+        digest: [211; 32],
+        change: Box::new(core::settings::Change {
+            against: 1,
+            items: Box::new([core::settings::Item {
+                setting: core::settings::Setting::Template(1),
+                edit: core::settings::Edit::Set(core::settings::Value::Template(Box::new(template))),
+            }]),
+            running: core::settings::Running::Stays,
+        }),
+    }));
+    d.settle();
+    end(&mut d);
+    d.settle();
+    assert_eq!(
+        d.task(task).expect("live chat").grace.as_ref().expect("changed grace").until,
+        skein_lib::Wall::from_nanos(Duration::from_secs(1).as_nanos())
+    );
 }

@@ -123,7 +123,7 @@ fn no_git_writes_or_key_leaks(ran: &Ran) {
     let mut pending = vec![ran.path().join("state"), ran.path().join("clients")];
     let mut files = 0;
     while let Some(path) = pending.pop() {
-        if path == ran.path().join("state/secrets") {
+        if path == ran.path().join("state/generations/1/secrets") {
             continue;
         }
         if path.is_dir() {

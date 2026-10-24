@@ -131,7 +131,7 @@ impl Domain {
         );
         assert!(config.core.connectors.len() == 1, "the forge is the deployment's one connector");
         let forge_connector = *config.core.connectors.first().expect("one connector");
-        for charter in &config.core.settings.charters {
+        for charter in &config.core.defaults.charters {
             assert!(
                 match run_policy_bound(&charter.policy, limits) {
                     Some(bytes) => bytes <= u64::from(limits.journal.run_bytes),
@@ -141,7 +141,7 @@ impl Domain {
             );
         }
         let mut forge_charter = false;
-        for charter in &config.core.settings.charters {
+        for charter in &config.core.defaults.charters {
             forge_charter |= charter.number == config.forge_charter;
         }
         assert!(forge_charter, "the forge's agent work runs under a configured charter");
@@ -150,7 +150,6 @@ impl Domain {
                 && config.core.settings.resume_bytes <= limits.journal.transcript_bytes,
             "configured task transcript bound fits the root's owned-byte limit"
         );
-        assert!(*config.core.authority.limits() == limits.authority, "root prices its exact authority limits");
         assert!(
             limits.forge.judge_projects >= limits.authority.projects
                 && limits.forge.judge_criteria >= limits.authority.requirements,
@@ -223,7 +222,7 @@ impl Domain {
         )
         .expect("deployment landing requirements bounded");
         assert!(
-            config.core.authority.add_configured_requirements(&built.requirements),
+            add_configured_requirements(&mut config.core.defaults.rules, &built.requirements, &limits.authority),
             "deployment landing requirements fit authority configuration"
         );
         assert!(forge.deployment_judges(built.criteria), "deployment judge table bounded");
@@ -347,6 +346,12 @@ impl Domain {
             config: root_config,
             limits: *limits,
         })
+    }
+
+    /// A settings refusal retains the named value, fault and provenance for startup diagnostics.
+    #[must_use]
+    pub fn settings_failure(&self) -> Option<jig_domain_core::RestartRequest> {
+        self.core.settings_failure()
     }
 
     /// Identify the core's refused restart step, including a live range that
@@ -939,7 +944,7 @@ pub enum Refused {
 #[must_use]
 #[expect(clippy::too_many_lines, reason = "one pass mirrors the root's construction step by step")]
 pub fn refused(mut config: Config, limits: &Limits) -> Box<[Refused]> {
-    let room = u32::try_from(config.core.settings.charters.len().saturating_add(config.core.owners.len()))
+    let room = u32::try_from(config.core.defaults.charters.len().saturating_add(config.core.owners.len()))
         .expect("bounded configuration")
         .saturating_add(u32::try_from(config.core.seed_projects.len()).expect("bounded projects"))
         .saturating_add(config.landing.projects.len())
@@ -952,7 +957,7 @@ pub fn refused(mut config: Config, limits: &Limits) -> Box<[Refused]> {
     ) {
         refused.push(Refused::Workers(problem)).expect("counted refusals");
     }
-    for (charter, configured) in config.core.settings.charters.iter().enumerate() {
+    for (charter, configured) in config.core.defaults.charters.iter().enumerate() {
         let bytes = run_policy_bound(&configured.policy, limits);
         let fits = match bytes {
             Some(bytes) => bytes <= u64::from(limits.journal.run_bytes),
@@ -1038,7 +1043,7 @@ pub fn refused(mut config: Config, limits: &Limits) -> Box<[Refused]> {
     ) {
         Some(built) => {
             landing_within(&config.landing.deployment, limits.journal.transcript_bytes)
-                && config.core.authority.add_configured_requirements(&built.requirements)
+                && add_configured_requirements(&mut config.core.defaults.rules, &built.requirements, &limits.authority)
                 && forge.deployment_judges(built.criteria)
                 && gates_fit(&mut forge, &config.landing.deployment, false, limits)
         }
@@ -1139,4 +1144,18 @@ fn seed_policy_mut(seeds: &mut [jig_domain_core::SeedProject], project: u32) -> 
         }
     }
     None
+}
+
+// Augment the binary's defaults before jig constructs authority from Current.
+fn add_configured_requirements(
+    rules: &mut authority::Rules,
+    additions: &[authority::Requirement],
+    limits: &authority::Limits,
+) -> bool {
+    let Some(combined) = policy_translate::combine_requirements(&rules.requirements, additions, limits.requirements)
+    else {
+        return false;
+    };
+    rules.requirements = combined;
+    authority::valid_rules(rules, limits)
 }

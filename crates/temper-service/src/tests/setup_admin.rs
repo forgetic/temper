@@ -490,7 +490,7 @@ fn admin_record_files_and_directories_are_owner_only() {
     }
     assert!(kept);
     let mut paths = Queue::with_capacity(64);
-    paths.push(scratch.path().join("secrets"));
+    paths.push(scratch.path().join("generations/1/secrets"));
     let mut files = 0_u32;
     while let Some(path) = paths.pop() {
         let metadata = std::fs::symlink_metadata(&path).unwrap();

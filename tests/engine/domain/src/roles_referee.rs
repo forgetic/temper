@@ -83,6 +83,9 @@ impl Referee {
             let key = match write {
                 Write::Save(record) => record.key(),
                 Write::Erase(key) => key.clone(),
+                Write::CopySettingsRevision(number) => Key::Core(jig_domain_core::Key::Core(
+                    jig_domain_core::CoreKey::Settings(jig_domain_core::settings::Key::History(*number)),
+                )),
             };
             if !keys.insert(key) {
                 return Err("same key twice in role transaction");
@@ -109,7 +112,8 @@ impl Referee {
                         )
                         | jig_domain_core::Record::Tasks(_)
                         | jig_domain_core::Record::Core(
-                            jig_domain_core::CoreRecord::Projection(_)
+                            jig_domain_core::CoreRecord::Settings(_)
+                            | jig_domain_core::CoreRecord::Projection(_)
                             | jig_domain_core::CoreRecord::Call(_)
                             | jig_domain_core::CoreRecord::Deployment(_)
                             | jig_domain_core::CoreRecord::Turn(_)
@@ -123,7 +127,8 @@ impl Referee {
                     )
                     | Record::Forge { .. },
                 )
-                | Write::Erase(_) => None,
+                | Write::Erase(_)
+                | Write::CopySettingsRevision(_) => None,
             })
             .collect();
         let answers: Vec<_> = writes
@@ -155,7 +160,8 @@ impl Referee {
                         )
                         | jig_domain_core::Record::Tasks(_)
                         | jig_domain_core::Record::Core(
-                            jig_domain_core::CoreRecord::Projection(_)
+                            jig_domain_core::CoreRecord::Settings(_)
+                            | jig_domain_core::CoreRecord::Projection(_)
                             | jig_domain_core::CoreRecord::Call(_)
                             | jig_domain_core::CoreRecord::Deployment(_)
                             | jig_domain_core::CoreRecord::Turn(_)
@@ -169,7 +175,8 @@ impl Referee {
                     )
                     | Record::Forge { .. },
                 )
-                | Write::Erase(_) => None,
+                | Write::Erase(_)
+                | Write::CopySettingsRevision(_) => None,
             })
             .collect();
         let expected = answers.iter().find_map(|(key, ask, outcome)| {
@@ -225,7 +232,8 @@ impl Referee {
                             )
                             | jig_domain_core::Record::People(_)
                             | jig_domain_core::Record::Core(
-                                jig_domain_core::CoreRecord::Projection(_)
+                                jig_domain_core::CoreRecord::Settings(_)
+                                | jig_domain_core::CoreRecord::Projection(_)
                                 | jig_domain_core::CoreRecord::Call(_)
                                 | jig_domain_core::CoreRecord::Deployment(_)
                                 | jig_domain_core::CoreRecord::Turn(_)
@@ -239,7 +247,8 @@ impl Referee {
                         )
                         | Record::Forge { .. },
                     )
-                    | Write::Erase(_) => None,
+                    | Write::Erase(_)
+                    | Write::CopySettingsRevision(_) => None,
                 });
                 if found.is_none() {
                     return Err("roles and changed waiting rows are not atomic");
@@ -280,6 +289,7 @@ impl Referee {
         }
         for write in writes {
             match write {
+                Write::CopySettingsRevision(_) => return Err("role administration changed settings"),
                 Write::Save(Record::Core(jig_domain_core::Record::Tasks(tasks::Stored::Live(record)))) => {
                     if replacement.is_none_or(|replacement| !replacement.tasks.contains_key(&record.number)) {
                         return Err("unchanged or rejected task was rewritten");
@@ -288,7 +298,8 @@ impl Referee {
                 Write::Save(Record::Core(
                     jig_domain_core::Record::Tasks(_)
                     | jig_domain_core::Record::Core(
-                        jig_domain_core::CoreRecord::Projection(_)
+                        jig_domain_core::CoreRecord::Settings(_)
+                        | jig_domain_core::CoreRecord::Projection(_)
                         | jig_domain_core::CoreRecord::Call(_)
                         | jig_domain_core::CoreRecord::RunProof(_)
                         | jig_domain_core::CoreRecord::Terminal(_)
@@ -300,7 +311,8 @@ impl Referee {
                 ))
                 | Write::Erase(Key::Core(
                     jig_domain_core::Key::Core(
-                        jig_domain_core::CoreKey::Projection(_)
+                        jig_domain_core::CoreKey::Settings(_)
+                        | jig_domain_core::CoreKey::Projection(_)
                         | jig_domain_core::CoreKey::Call(_)
                         | jig_domain_core::CoreKey::RunProof(..)
                         | jig_domain_core::CoreKey::Terminal { .. }
@@ -333,6 +345,7 @@ impl Referee {
         }
         for write in writes {
             match write {
+                Write::CopySettingsRevision(_) => unreachable!("role administration settings write refused above"),
                 Write::Save(record) => {
                     self.rows.insert(record.key(), record.clone());
                 }

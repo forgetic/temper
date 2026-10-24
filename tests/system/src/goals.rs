@@ -72,7 +72,7 @@ fn configured() -> Driver {
     limits.journal.result_bytes = 1024;
     let config = std::array::from_fn(|_| {
         let mut config = world::config(903);
-        let mut rules = config.core.authority.rules().clone();
+        let mut rules = config.core.defaults.rules.clone();
         // Leave the standing goal and chat room to fund their planned delegates.
         rules.maximum_run_spend = 10;
         rules.ceiling.tools = authority::Tools(3);
@@ -99,8 +99,7 @@ fn configured() -> Driver {
         authority::step(&mut domain, authority::Event::Policy { project: 1, policy }, &mut out);
         assert_eq!(out.pop(), Some(authority::PolicyFact::Added { project: 1 }));
         config.core.seed_projects[0].policy.policy = domain.policy(1).expect("configured seed policy").clone();
-        config.core.authority =
-            jig_domain_authority::Domain::new(domain.rules().clone(), *domain.limits()).expect("configured authority");
+        config.core.defaults.rules = domain.rules().clone();
         config
     });
     Driver::configured(Store::new(), config, &limits)

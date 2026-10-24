@@ -195,7 +195,7 @@ fn no_installation_token_pattern_or_app_key_outside_the_secrets_store(ran: &Ran,
 
 // Walk once for both checks, never following a symlink into the secrets store.
 fn files_outside_the_secrets_store(ran: &Ran) -> Vec<std::path::PathBuf> {
-    let secrets = ran.path().join("state/secrets");
+    let secrets = ran.path().join("state/generations/1/secrets");
     assert!(secrets.is_dir(), "the excluded directory is jig's secrets store");
     assert!(!ran.path().join("github-app.pem").exists(), "manifest flow has no downloaded paste input");
     let mut files = Vec::new();

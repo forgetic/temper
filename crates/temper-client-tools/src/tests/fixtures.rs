@@ -240,6 +240,7 @@ pub(crate) fn me(party: u64) -> c::Me {
         providers: List::with_capacity(0),
         providers_cut: false,
         key_bytes: 256,
+        redirect_bytes: 256,
         party: c::MeParty {
             number: party,
             kind: c::PartyKind::Service,

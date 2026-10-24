@@ -9,12 +9,7 @@ impl Joint {
         bounds.authority.accounts = 4;
         bounds.fleet.grants = 6;
         bounds.journal.writes = bounds.journal.writes.checked_add(16).expect("four grant cohorts fit");
-        let configs = std::array::from_fn(|_| {
-            let mut config = walking::config(seed);
-            let rules = config.core.authority.rules().clone();
-            config.core.authority = jig_domain_authority::Domain::new(rules, bounds.authority).expect("account bounds");
-            config
-        });
+        let configs = std::array::from_fn(|_| walking::config(seed));
         Self::with_engine(seed, &limits, Store::new(), configs, &bounds, 1)
     }
 

@@ -300,8 +300,8 @@ fn git_secrets_stay_out_of_files_client_answers_and_agent_context() {
         }
     }
     let mut files = 0;
-    assert!(ran.path().join("state/store").is_dir(), "main store is part of the scan");
+    assert!(ran.path().join("state/generations/1/store").is_dir(), "main store is part of the scan");
     assert!(ran.path().join("state/transcripts").is_dir(), "agent transcripts are part of the scan");
-    scan_files(ran.path(), &ran.path().join("state/secrets"), &mut files);
+    scan_files(ran.path(), &ran.path().join("state/generations/1/secrets"), &mut files);
     assert!(files > 0, "the scan must inspect persisted files");
 }

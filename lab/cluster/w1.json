@@ -64,9 +64,9 @@
         "forge.resources_per_task": 2,
         "git_component.stdout_bytes": 2048,
         "root.journal.transcript_bytes": 1328160,
-        "root.loads.bytes": 1328396,
+        "root.loads.bytes": 1328412,
         "root.loads.read_bytes": 2656312,
-        "root.loads.reply_bytes": 1328396,
+        "root.loads.reply_bytes": 1328412,
         "root.loads.transcript_bytes": 1328156
       }}
     }}

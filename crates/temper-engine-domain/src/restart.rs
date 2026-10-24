@@ -56,6 +56,7 @@ pub(crate) fn request_load(
         Range::Core(
             crate::CoreRange::Calls
             | crate::CoreRange::Tasks
+            | crate::CoreRange::Settings
             | crate::CoreRange::Accounts
             | crate::CoreRange::People
             | crate::CoreRange::RunProofs
@@ -82,6 +83,7 @@ pub(crate) fn request_load(
                 | crate::CoreRange::Deployment
                 | crate::CoreRange::Tasks
                 | crate::CoreRange::RunProofs
+                | crate::CoreRange::Settings
                 | crate::CoreRange::Accounts
                 | crate::CoreRange::People
                 | crate::CoreRange::TaskResult { .. }
@@ -108,6 +110,7 @@ pub(crate) fn request_load(
                 crate::CoreRange::Calls
                 | crate::CoreRange::Deployment
                 | crate::CoreRange::Tasks
+                | crate::CoreRange::Settings
                 | crate::CoreRange::Accounts
                 | crate::CoreRange::People
                 | crate::CoreRange::RunProofs
@@ -223,7 +226,7 @@ pub(crate) fn startup_page(
         close(domain, env, decision, out);
         let following = match next {
             Some(after) => (range, Some(after)),
-            None => (Range::Core(crate::CoreRange::Accounts), None),
+            None => (Range::Core(crate::CoreRange::Settings), None),
         };
         domain.startup_range = Some(following.0.clone());
         request_load(domain, Token::new(u64::MAX), following.0, following.1, out);
@@ -234,8 +237,13 @@ pub(crate) fn startup_page(
         close(domain, env, decision, out);
         return;
     }
+    if range == Range::Core(crate::CoreRange::Settings) && !domain.core.settings_restored(&environment_core(env)) {
+        out.push(Request::Stop);
+        return;
+    }
     let following = match range {
-        Range::Core(crate::CoreRange::Deployment) => Some(Range::Core(crate::CoreRange::Accounts)),
+        Range::Core(crate::CoreRange::Deployment) => Some(Range::Core(crate::CoreRange::Settings)),
+        Range::Core(crate::CoreRange::Settings) => Some(Range::Core(crate::CoreRange::Accounts)),
         Range::Core(crate::CoreRange::Accounts) => Some(Range::Core(crate::CoreRange::People)),
         Range::Core(crate::CoreRange::People) => Some(Range::Core(crate::CoreRange::Tasks)),
         Range::Core(crate::CoreRange::Tasks) => Some(Range::Core(crate::CoreRange::RunProofs)),
@@ -271,6 +279,13 @@ pub(crate) fn startup_page(
         return;
     }
     domain.startup_range = None;
+    if range != Range::Forge {
+        domain.work.push(Work::Core(jig_domain_core::Event::SettingsCommit {
+            // Leave the rest of the root route's room for restart callbacks.
+            room: jig_domain_core::settings::writes_worst_case(&core_limits(&env.limits))
+                .expect("validated settings write room"),
+        }));
+    }
     let request = if range == Range::Forge {
         // The connector confirms that its restored rows have been reconciled.
         domain.work.push(Work::Forge(forge::Event::Restored { clock: skein_forge_client::RecoveryClock::Wall }));
@@ -293,7 +308,9 @@ pub(crate) fn restart_request(
 ) {
     match request {
         jig_domain_core::RestartRequest::Idle => {}
-        jig_domain_core::RestartRequest::Refused { .. } => domain.stop_pending = true,
+        jig_domain_core::RestartRequest::Settings { .. } | jig_domain_core::RestartRequest::Refused { .. } => {
+            domain.stop_pending = true;
+        }
         jig_domain_core::RestartRequest::Step(step) => match step {
             jig_domain_core::RestartStep::LoadCore => {
                 domain.startup_range = Some(Range::Core(crate::CoreRange::Deployment));
@@ -404,6 +421,13 @@ fn restore_account(domain: &mut Domain, env: &Env<Limits>, record: jig_domain_ac
 /// history into the live map.
 pub(crate) fn restore_page_row(domain: &mut Domain, env: &Env<Limits>, row: Record) {
     match row {
+        Record::Core(jig_domain_core::Record::Core(jig_domain_core::CoreRecord::Settings(row))) => {
+            if domain.core.restore_core(jig_domain_core::CoreRecord::Settings(row), &core_limits(&env.limits))
+                != jig_domain_core::Restored::Live
+            {
+                let _refused = domain.core.restart_refuse();
+            }
+        }
         Record::Core(jig_domain_core::Record::Core(jig_domain_core::CoreRecord::Call(record))) => {
             if domain.core.restore_core(jig_domain_core::CoreRecord::Call(record), &core_limits(&env.limits))
                 != jig_domain_core::Restored::Live

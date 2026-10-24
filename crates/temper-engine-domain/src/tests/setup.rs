@@ -430,7 +430,7 @@ fn a_new_binding_answers_only_after_its_commit_is_durable() {
             };
             assert!(writes.iter().any(|write| match write {
                 crate::Write::Save(crate::Record::Forge { row }) => row.as_ref() == &binding,
-                crate::Write::Save(_) | crate::Write::Erase(_) => false,
+                crate::Write::CopySettingsRevision(_) | crate::Write::Save(_) | crate::Write::Erase(_) => false,
             }));
             committed = Some(number);
         }
@@ -451,7 +451,7 @@ fn runtime_project_root() -> (Domain, Env<Limits>) {
         permissions: seed.permissions.clone(),
         templates: seed.templates.clone(),
     };
-    configured.core.policies.insert(1, policy).unwrap();
+    configured.core.defaults.policies.insert(1, policy).unwrap();
     let mut limits = super::resume_fixture::limits();
     limits.authority.projects = 2;
     limits.people.projects = 3;

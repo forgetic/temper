@@ -311,6 +311,8 @@ pub enum CoreRange {
     Calls,
     /// Singleton header read by the root at startup; at most one row and no continuation.
     Deployment,
+    /// Restored and checked before accounts and every other child.
+    Settings,
     /// The accounts' counter, accounts and sources, after the header and before the children
     /// (jig's `RestoreRange::Accounts`).
     Accounts,
@@ -417,6 +419,7 @@ impl CoreRange {
                 let Core::Core(CoreKey::Deployment) = key else { return false };
                 true
             }
+            CoreRange::Settings => jig_domain_core::RestoreRange::Settings.admits(key),
             CoreRange::Accounts => {
                 let Core::Accounts(_) = key else { return false };
                 true
@@ -499,6 +502,8 @@ impl Record {
 /// (domain/root.md, 8).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Write {
+    /// Copy a held revision to its history destination before its held row is erased.
+    CopySettingsRevision(u32),
     /// Replace the row at its own key.
     Save(/** Owned typed row, byte-bounded by journal admission. */ Record),
     /// Remove the named row, with no owned payload.
@@ -511,6 +516,9 @@ impl Write {
     #[must_use]
     pub fn key(&self) -> Key {
         match self {
+            Write::CopySettingsRevision(number) => Key::Core(jig_domain_core::Key::Core(
+                jig_domain_core::CoreKey::Settings(jig_domain_core::settings::Key::History(*number)),
+            )),
             Write::Save(row) => row.key(),
             Write::Erase(key) => key.clone(),
         }
@@ -526,6 +534,9 @@ impl Write {
 #[expect(clippy::too_many_lines, reason = "the record byte projection covers each stored variant")]
 pub fn record_bytes(record: &Record) -> Option<u64> {
     match record {
+        Record::Core(jig_domain_core::Record::Core(jig_domain_core::CoreRecord::Settings(row))) => {
+            settings_bytes::record(row)
+        }
         Record::Core(jig_domain_core::Record::Core(jig_domain_core::CoreRecord::Projection(row))) => {
             jig_domain_core::projection_record_bytes(row)
         }
@@ -596,6 +607,7 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                                     .checked_mul(u64::try_from(size_of::<jig_domain_people::Use>()).ok()?)
                             }
                             AccountChange::CheckProgram { .. }
+                            | AccountChange::FinishSignIn { .. }
                             | AccountChange::AddKey { .. }
                             | AccountChange::ReplaceKey { .. }
                             | AccountChange::RemoveKey { .. }
@@ -666,7 +678,8 @@ pub fn record_bytes(record: &Record) -> Option<u64> {
                     jig_domain_people::Ask::Move { reason, .. } | jig_domain_people::Ask::Cancel { reason, .. } => {
                         u64::try_from(reason.len()).ok()
                     }
-                    jig_domain_people::Ask::Withdraw { .. }
+                    jig_domain_people::Ask::ChangeSettings { .. }
+                    | jig_domain_people::Ask::Withdraw { .. }
                     | jig_domain_people::Ask::MarkSeen { .. }
                     | jig_domain_people::Ask::Application { .. }
                     | jig_domain_people::Ask::TakePerson { .. }
@@ -746,6 +759,7 @@ fn note_entry_bytes(entry: &jig_domain_notes::Entry) -> Option<u64> {
 /// Checked deep-byte projection for journal admission, including scoped erase keys.
 pub(crate) fn owned_bytes(write: &Write) -> Option<u64> {
     match write {
+        Write::CopySettingsRevision(_) => u64::try_from(size_of::<u32>()).ok(), // The store copies the payload; only the number crosses this boundary.
         Write::Save(record) => record_bytes(record),
         Write::Erase(Key::Core(jig_domain_core::Key::Notes(jig_domain_notes::Key::Line { scope, .. }))) => {
             note_scope_bytes(scope)
@@ -755,6 +769,7 @@ pub(crate) fn owned_bytes(write: &Write) -> Option<u64> {
                 jig_domain_core::Key::Notes(jig_domain_notes::Key::Entry { .. })
                 | jig_domain_core::Key::Core(
                     jig_domain_core::CoreKey::Deployment
+                    | jig_domain_core::CoreKey::Settings(_)
                     | jig_domain_core::CoreKey::Call(_)
                     | jig_domain_core::CoreKey::EscalationDecision { .. }
                     | jig_domain_core::CoreKey::ProposalDecision { .. }
@@ -849,6 +864,7 @@ pub(crate) fn call_answer_bytes(answer: &CallAnswer) -> Option<u64> {
 }
 
 mod people_bytes;
+mod settings_bytes;
 
 fn model_context_bytes(models: &[Box<[u8]>]) -> Option<u64> {
     let mut bytes = u64::try_from(models.len()).ok()?.checked_mul(u64::try_from(size_of::<Box<[u8]>>()).ok()?)?;
@@ -862,6 +878,9 @@ fn model_context_bytes(models: &[Box<[u8]>]) -> Option<u64> {
 pub(crate) fn program_answer_bytes(outcome: &jig_domain_people::Outcome) -> Option<u64> {
     use jig_domain_people::Outcome;
     match outcome {
+        Outcome::Refused(jig_domain_people::Refusal::Full { tasks, .. }) => {
+            u64::try_from(tasks.len()).ok()?.checked_mul(u64::try_from(size_of::<u64>()).ok()?)
+        }
         Outcome::AccountProgramDeclared { name, .. } => u64::try_from(name.len()).ok(),
         Outcome::AccountRemoved { failed_hosts, .. } | Outcome::AccountSignedOut { failed_hosts, .. } => {
             let mut bytes = u64::try_from(failed_hosts.len())
@@ -872,7 +891,8 @@ pub(crate) fn program_answer_bytes(outcome: &jig_domain_people::Outcome) -> Opti
             }
             Some(bytes)
         }
-        Outcome::Compound { .. }
+        Outcome::SettingsChanged { .. }
+        | Outcome::Compound { .. }
         | Outcome::CompoundRefused { .. }
         | Outcome::ProjectMade { .. }
         | Outcome::Renamed { .. }
@@ -902,6 +922,7 @@ pub(crate) fn program_answer_bytes(outcome: &jig_domain_people::Outcome) -> Opti
         | Outcome::PoolSet { .. }
         | Outcome::EscalationDecided { .. }
         | Outcome::AccountSignInStarted { .. }
+        | Outcome::AccountFinishing { .. }
         | Outcome::AccountKeyKept { .. }
         | Outcome::AccountChanged
         | Outcome::AccountMovingOut { .. }

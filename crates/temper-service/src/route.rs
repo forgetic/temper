@@ -105,7 +105,7 @@ pub(crate) fn request(engine: &mut Engine, request: root::Request) {
             }
         }
         root::Request::Drained => stop::drained(engine),
-        root::Request::Stop => stop::unavailable(engine, b"deployment"),
+        root::Request::Stop => stop::root(engine),
         root::Request::Worker(request) => worker(engine, request),
         root::Request::Party(request) => {
             if let root::PartyRequest::WatchRefused { watcher, .. } = &request

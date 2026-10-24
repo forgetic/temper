@@ -85,7 +85,7 @@ pub fn policy(
     story: Option<super::stories::Story>,
 ) -> r::Policy {
     let (config, _) = super::config::root(seed, scenario, story);
-    let rules = config.core.authority.rules();
+    let rules = &config.core.defaults.rules;
     let project = &config.core.seed_projects[0].policy.policy;
     r::Policy {
         deployment: jig_core_world::observations::scope(&rules.ceiling),

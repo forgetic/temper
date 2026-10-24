@@ -624,8 +624,8 @@ pub enum Word {
 // The owned row's Runs and first-password lines add two words and three phrases.
 // A failed setup's step adds five phrases.
 // Ready's refused read and exhausted busy rereads add three phrases.
-const PHRASES: u32 = 1113;
-const SEGMENTS: u32 = 1962;
+const PHRASES: u32 = 1117;
+const SEGMENTS: u32 = 1966;
 const ALL: [Word; 565] = [
     Word::NoProjectYet,
     Word::AdminTitle,

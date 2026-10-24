@@ -44,7 +44,8 @@ impl Frame {
             w::AccountChange::Written(_) => "written",
             w::AccountChange::MoveOut(_) => "move-out",
             w::AccountChange::MoveIn(_) => "move-in",
-            w::AccountChange::AddKey(_)
+            w::AccountChange::FinishSignIn(_)
+            | w::AccountChange::AddKey(_)
             | w::AccountChange::ReplaceKey(_)
             | w::AccountChange::RemoveKey(_)
             | w::AccountChange::Resume(_)

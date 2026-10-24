@@ -1,4 +1,4 @@
-//! Jig's complete refusal facts at its pinned people-store version.
+//! Forge application refusals at the family's embedded people-store version.
 use jig_domain_people as p;
 use jig_protocol_store::people_v13 as w;
 use skein_lib::Wall;
@@ -317,6 +317,14 @@ pub(super) fn decode_limit_kind(value: w::LimitKind) -> p::LimitKind {
 )]
 pub(super) fn encode_refusal(value: &p::Refusal, l: &w::Limits) -> Result<w::Refusal, w::Problem> {
     Ok(match value {
+        // Only ChangeSettings emits Stale; forge applications never carry that ask.
+        p::Refusal::Stale { .. }
+        // Only settings admission emits Full; a forge application carries no settings value.
+        | p::Refusal::Full { .. }
+        // Only finishing an account sign-in emits SignInRedirect.
+        | p::Refusal::SignInRedirect { .. } => {
+            return Err(w::Problem { path: w::Path::RefusalTag, reason: skein_codec::Reason::Bound });
+        }
         p::Refusal::NameTaken => w::Refusal::NameTaken,
         p::Refusal::Account { account, why } => w::Refusal::Account(w::RefusalAccount::new(
             l,
@@ -335,6 +343,12 @@ pub(super) fn encode_refusal(value: &p::Refusal, l: &w::Limits) -> Result<w::Ref
             w::RefusalNotWellFormedParts {
                 at: *at,
                 why: match why {
+                    // Forge application values contain no settings for the core to check.
+                    p::Malformed::Settings { .. }
+                    // Only a settings change can leave the effective settings unchanged.
+                    | p::Malformed::SettingsUnchanged => {
+                        return Err(w::Problem { path: w::Path::MalformedTag, reason: skein_codec::Reason::Bound });
+                    }
                     p::Malformed::ProposedAsAllowed => w::Malformed::ProposedAsAllowed,
                     p::Malformed::Name(rule) => w::Malformed::Name(w::MalformedName::new(
                         l,
@@ -435,6 +449,11 @@ pub(super) fn encode_refusal(value: &p::Refusal, l: &w::Limits) -> Result<w::Ref
 }
 pub(super) fn decode_refusal(value: w::Refusal) -> p::Refusal {
     match value {
+        // Forge application records cannot contain a settings decision's stale revision.
+        w::Refusal::Stale(_) => unreachable!("forge applications cannot store a stale settings refusal"),
+        // Forge application requests never enter settings' held-revision admission.
+        w::Refusal::Full(_) => unreachable!("forge applications cannot store a full settings refusal"),
+        w::Refusal::SignInRedirect(_) => unreachable!("forge applications cannot finish an account sign-in"),
         w::Refusal::NameTaken => p::Refusal::NameTaken,
         w::Refusal::Account(value) => p::Refusal::Account {
             account: value.account(),
@@ -448,6 +467,10 @@ pub(super) fn decode_refusal(value: w::Refusal) -> p::Refusal {
         w::Refusal::NotWellFormed(value) => p::Refusal::NotWellFormed {
             at: value.at(),
             why: match value.why() {
+                // Forge application values contain no settings, in either direction.
+                w::Malformed::Settings(_) => unreachable!("forge applications cannot store malformed settings"),
+                // An application request cannot be an unchanged settings change.
+                w::Malformed::SettingsUnchanged => unreachable!("forge applications cannot store unchanged settings"),
                 w::Malformed::ProposedAsAllowed => p::Malformed::ProposedAsAllowed,
                 w::Malformed::Name(value) => p::Malformed::Name(match value.rule() {
                     w::NameRule::Empty => p::NameRule::Empty,
@@ -647,5 +670,31 @@ const fn decode_bound(value: w::Bound) -> p::Bound {
         w::Bound::History => p::Bound::History,
         w::Bound::Window => p::Bound::Window,
         w::Bound::Output => p::Bound::Output,
+    }
+}
+
+#[cfg(test)]
+mod settings_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn a_forge_application_role_refusal_keeps_its_facts() {
+        let refusal = p::Refusal::Role { held: None };
+        assert_eq!(decode_refusal(encode_refusal(&refusal, &w::CEILINGS).unwrap()), refusal);
+    }
+
+    #[test]
+    fn the_forge_encoder_explicitly_rejects_settings_refusals() {
+        for refusal in [
+            p::Refusal::Stale { newest: 2 },
+            p::Refusal::Full { revision: 1, tasks: Box::new([]), more: 0 },
+            p::Refusal::NotWellFormed {
+                at: 0,
+                why: p::Malformed::Settings { setting: p::Setting::Rules, fault: p::SettingFault::Shape },
+            },
+            p::Refusal::NotWellFormed { at: 0, why: p::Malformed::SettingsUnchanged },
+        ] {
+            assert!(encode_refusal(&refusal, &w::CEILINGS).is_err(), "{refusal:?}");
+        }
     }
 }

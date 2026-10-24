@@ -1099,6 +1099,7 @@ fn fixture_me(project_name: &[u8]) -> c::Me {
         providers: List::with_capacity(0),
         providers_cut: false,
         key_bytes: 256,
+        redirect_bytes: 256,
         party: MeParty {
             number: 73,
             kind: PartyKind::Person,

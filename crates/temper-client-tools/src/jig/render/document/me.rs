@@ -34,6 +34,7 @@ pub(super) fn encode_malformed(value: jig_client::contract::Malformed, out: &mut
             });
             out.object_end();
         }
+        jig_client::contract::Malformed::Running => out.string(b"running"),
         jig_client::contract::Malformed::Cycle => out.string(b"cycle"),
         jig_client::contract::Malformed::EndedBy => out.string(b"ended_by"),
         jig_client::contract::Malformed::ProposedAsAllowed => out.string(b"proposed_as_allowed"),

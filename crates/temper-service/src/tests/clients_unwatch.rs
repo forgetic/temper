@@ -40,6 +40,7 @@ impl Stand {
                 .token_bytes
                 .min(config.limits.clients.wire.keyed_value_some),
             moved_bytes: jig_protocol_accounts::moved::bound(&config.limits.driver.client.document),
+            redirect_bytes: config.limits.driver.client.uri_bytes,
             deployment_provider: 2,
             link: None,
             heartbeat: config.clients.heartbeat,

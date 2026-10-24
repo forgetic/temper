@@ -280,7 +280,7 @@ fn build(call: &Call, document: &c::ReadValue, me: &c::Me, limits: &Limits, proj
         12 => {
             let on = if call.form == 0 {
                 let Some(Value::Proposal(proposal)) = value(call, 0) else { unreachable!("proposal form") };
-                c::DecideOn::Proposal { proposal: *proposal, decision: decision(call, limits)? }
+                c::DecideOn::Proposal { proposal: *proposal, decision: decision(call, limits)?, running: None }
             } else {
                 c::DecideOn::Escalation {
                     task,

@@ -13,7 +13,10 @@ use jig_domain_authority as authority;
 use jig_domain_people as people;
 use jig_domain_tasks as tasks;
 use skein_lib::{Env, Queue, ReplyTo, Time, Token, Wall};
-use std::collections::{BTreeMap, VecDeque};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    fmt::Write as _,
+};
 use temper_engine_domain as engine;
 use temper_engine_domain::{Delivery, Key, Record, Write};
 
@@ -243,7 +246,8 @@ impl World {
                         | tasks::Stored::ClosedLedger(_),
                     )
                     | jig_domain_core::Record::Core(
-                        jig_domain_core::CoreRecord::Projection(_)
+                        jig_domain_core::CoreRecord::Settings(_)
+                        | jig_domain_core::CoreRecord::Projection(_)
                         | jig_domain_core::CoreRecord::Call(_)
                         | jig_domain_core::CoreRecord::Deployment(_)
                         | jig_domain_core::CoreRecord::Turn(_)
@@ -568,6 +572,7 @@ pub fn reroute_replayed(settings: Settings, winner: usize) -> World {
             winner == 1 && settings.base == Base::Requester,
         );
     }
+    let (mut first_state, mut replay_state) = (String::new(), String::new());
     for _ in 0..500 {
         if first.settled() {
             assert!(replay.settled(), "replay settles at identical cut");
@@ -575,7 +580,18 @@ pub fn reroute_replayed(settings: Settings, winner: usize) -> World {
         }
         first.iterate();
         replay.iterate();
-        assert_eq!(format!("{first:?}"), format!("{replay:?}"), "complete frozen role world: {settings:?}");
+        // Keep the complete comparison while avoiding repeated formatting of the
+        // growing trace, as the walking replay does.
+        let first_trace = std::mem::take(&mut first.trace);
+        let replay_trace = std::mem::take(&mut replay.trace);
+        assert_eq!(first_trace, replay_trace, "role trace: {settings:?}");
+        first_state.clear();
+        replay_state.clear();
+        write!(first_state, "{first:?}").expect("write to string");
+        write!(replay_state, "{replay:?}").expect("write to string");
+        assert_eq!(first_state, replay_state, "complete frozen role world: {settings:?}");
+        first.trace = first_trace;
+        replay.trace = replay_trace;
     }
     panic!("role replay did not settle: {:?}", first.trace);
 }

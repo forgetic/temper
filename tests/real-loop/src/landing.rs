@@ -97,10 +97,10 @@ pub fn configure(value: &mut Value, agent: &mut Value, forge: SocketAddr) {
         ("tasks.contract_choices", 2),
         ("tasks.authority_grants", 12),
         ("tasks.authority_segments", 9),
-        ("tasks.hold_segments", 9),
+        ("tasks.hold_segments", 8),
         ("tasks.saved_resources", 4),
         ("authority.grants", 12),
-        ("authority.segments", 9),
+        ("authority.segments", 8),
         ("authority.roles", 1),
         // CI, up-to-date and the review gate each produce one requirement.
         ("authority.requirements", 3),

@@ -79,7 +79,7 @@ impl Capture {
                     });
                     if is_log(&path) {
                         self.events.push(Observed::Recovered(path.clone()));
-                    } else if path == b"store/snapshot" {
+                    } else if path == b"generations/1/store/snapshot" {
                         self.events.push(Observed::Snapshot(path.clone()));
                     }
                 }
@@ -112,7 +112,7 @@ impl Store {
         self.rows.clear();
         self.applied = 0;
         self.lengths.clear();
-        self.files.retain(|path, _| !path.starts_with(b"store/"));
+        self.files.retain(|path, _| !path.starts_with(b"generations/1/store/"));
         self.validated.clear();
         self.pending.clear();
         self.recovered.clear();
@@ -123,7 +123,7 @@ impl Store {
         &mut self,
         events: &mut Vec<Observed>,
         limits: &codec::Limits,
-        names: &[Box<[u8]>],
+        names: &[core::settings::ModelName],
         connector: &temper_protocol_store::Bounds,
     ) -> Vec<Commit> {
         let mut committed = Vec::new();
@@ -133,7 +133,7 @@ impl Store {
                     // The secrets' store keeps a signed-in or handed-in source's
                     // record; the store, its snapshots and its logs hold none
                     // (jig's store.md, section 9).
-                    if !path.starts_with(b"secrets/") {
+                    if !path.starts_with(b"generations/1/secrets/") {
                         super::secrets::require(&bytes, "store bytes");
                     }
                     if let Some(validated) = self.validated.get_mut(&path)
@@ -172,7 +172,7 @@ impl Store {
                 Observed::Sync(path) if is_log(&path) => {
                     committed.extend(self.durable(&path, limits, names, connector));
                 }
-                Observed::Sync(path) if path == b"store" && self.restoring => {
+                Observed::Sync(path) if path == b"generations/1/store" && self.restoring => {
                     // KV announces its new segment only after replaying every old log.
                     // Capture this boundary before any new startup commit can join it.
                     self.restored = Some(self.rows.clone());
@@ -187,7 +187,7 @@ impl Store {
         &mut self,
         path: &[u8],
         limits: &codec::Limits,
-        names: &[Box<[u8]>],
+        names: &[core::settings::ModelName],
         connector: &temper_protocol_store::Bounds,
     ) -> Vec<Commit> {
         let mut committed = Vec::new();
@@ -209,6 +209,7 @@ impl Store {
     fn apply(&mut self, commit: &Commit, limits: &codec::Limits) {
         for write in &commit.writes {
             match write {
+                root::Write::CopySettingsRevision(_) => super::restart::apply(&mut self.rows, write),
                 root::Write::Save(row) => {
                     self.rows.insert(row.key(), row.clone());
                     if let root::Record::Core(core::Record::Core(core::CoreRecord::Turn(turn))) = row {
@@ -228,7 +229,7 @@ impl Store {
         number: u64,
         ops: Box<[skein_kv::Op]>,
         limits: &codec::Limits,
-        names: &[Box<[u8]>],
+        names: &[core::settings::ModelName],
         connector: &temper_protocol_store::Bounds,
     ) -> Commit {
         let mut writes = Vec::new();
@@ -237,7 +238,17 @@ impl Store {
                 skein_kv::Op::Put { key, value } => {
                     if let Some(key) = keys::decode(&key) {
                         let row = codec::decode(&key, &value, limits, names).expect("real stored row decodes");
-                        writes.push(root::Write::Save(root::Record::Core(row)));
+                        if let core::Record::Core(core::CoreRecord::Settings(core::settings::Record::Revision {
+                            history: true,
+                            revision,
+                        })) = &row
+                        {
+                            // Jig materializes a held-to-history copy as a KV Put. Retain the
+                            // operation in the oracle, so a dropped copy cannot go unnoticed.
+                            writes.push(root::Write::CopySettingsRevision(revision.head.number));
+                        } else {
+                            writes.push(root::Write::Save(root::Record::Core(row)));
+                        }
                     } else if let Some(keys::Own::Transcript { task }) = keys::decode_own(&key) {
                         let place = codec::component::Transcript::decode(&value).expect("real transcript place");
                         let name = format!("transcripts/{:016x}/{task:016x}", task >> 12).into_bytes();
@@ -322,5 +333,6 @@ fn frames(bytes: &[u8], after: u64) -> (Frames, usize) {
 }
 
 fn is_log(path: &[u8]) -> bool {
-    path.strip_prefix(b"store/log-").is_some_and(|number| number.len() == 20 && number.iter().all(u8::is_ascii_digit))
+    path.strip_prefix(b"generations/1/store/log-")
+        .is_some_and(|number| number.len() == 20 && number.iter().all(u8::is_ascii_digit))
 }

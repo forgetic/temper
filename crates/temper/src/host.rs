@@ -3,7 +3,6 @@ use crate::directories::Directories;
 use skein_io::kernel::{Complete, Exit, Submit};
 use skein_lib::{Queue, Time, Wall};
 use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
 use temper_service::{End, Service, Stop};
 
 pub struct Host {
@@ -113,45 +112,16 @@ fn remove_handover(remove: &temper_service::HandoverRemoval) -> Result<(), i32> 
     }
 }
 
-// Compare lexical components, without opening paths during an error report.
-fn lexical(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            component @ (Component::Prefix(_) | Component::RootDir | Component::Normal(_)) => {
-                normalized.push(component.as_os_str());
-            }
-        }
-    }
-    normalized
-}
-fn ending(end: Option<&End>, output_failed: bool, directories: &Directories, store: &[u8]) -> (String, u8) {
+fn ending(end: Option<&End>, output_failed: bool, _directories: &Directories, store: &[u8]) -> (String, u8) {
     let lines = match end {
         Some(End::Stopped(why)) => match why {
             Stop::Start(found) => crate::problems(&temper_service::startup::Problems::jig(
                 found.clone(),
                 &jig_protocol_config::Path::root(),
             )),
-            Stop::StoreVersion => {
-                let data = crate::path(&directories.data);
-                let store = crate::path(store);
-                if lexical(store).starts_with(lexical(data)) {
-                    format!(
-                        "temper serve: data directory {}: its store is at another version; move it aside\n",
-                        data.display()
-                    )
-                } else {
-                    format!(
-                        "temper serve: data directory {}: its store at {} is at another version; move the store {} aside\n",
-                        data.display(),
-                        store.display(),
-                        store.display()
-                    )
-                }
+            Stop::StoreOpen { why } => {
+                let deployment = crate::path(store);
+                format!("temper serve: {}\n", why.words().join(&deployment.display().to_string()))
             }
             Stop::CommitFailed { number } => format!("temper serve: commit {number} failed\n"),
             Stop::Hooks => "temper serve: webhooks listener failed\n".into(),
@@ -164,6 +134,9 @@ fn ending(end: Option<&End>, output_failed: bool, directories: &Directories, sto
 
 fn note_line(note: temper_service::Note) -> String {
     match note {
+        temper_service::Note::Patched { of, patch, counts } => {
+            format!("temper serve: {of:?} patch {patch}: {} records, {} commits\n", counts.records, counts.commits)
+        }
         temper_service::Note::Listening { listener, addr } => {
             let name = match listener {
                 temper_service::Listening::Clients => "clients",
@@ -337,43 +310,28 @@ fn records_and_installation_notes_name_the_forge_and_reason() {
 }
 
 #[test]
-fn a_store_version_refusal_names_what_to_move() {
+fn older_store_refusals_use_jigs_recovery_words_and_the_store_path() {
+    use jig_protocol_store::{Family, Older, OpenRefusal};
     let arguments =
         [b"--config".as_slice(), b"/configuration", b"--data", b"/data", b"--cache", b"/cache"].map(Box::from);
-    let (directories, rest) = crate::directories::resolve(&arguments, &[], b"/").expect("resolved directories");
-    assert!(rest.is_empty());
-    for (store, expected) in [
-        ("/data/deployment", "temper serve: data directory /data: its store is at another version; move it aside\n"),
-        ("/data", "temper serve: data directory /data: its store is at another version; move it aside\n"),
-        (
-            "/data/./child/../deployment",
-            "temper serve: data directory /data: its store is at another version; move it aside\n",
-        ),
-        (
-            "/elsewhere/store",
-            "temper serve: data directory /data: its store at /elsewhere/store is at another version; move the store /elsewhere/store aside\n",
-        ),
-        (
-            "/data2/store",
-            "temper serve: data directory /data: its store at /data2/store is at another version; move the store /data2/store aside\n",
-        ),
-        (
-            "/data/../other/store",
-            "temper serve: data directory /data: its store at /data/../other/store is at another version; move the store /data/../other/store aside\n",
-        ),
-    ] {
-        let (line, code) = ending(Some(&End::Stopped(Stop::StoreVersion)), false, &directories, store.as_bytes());
-        assert_eq!(line, expected, "{store}");
-        assert_eq!(code, 1, "{store}");
+    let (directories, _) = crate::directories::resolve(&arguments, &[], b"/").expect("resolved directories");
+    for older in [Older::Unleveled, Older::Unrecorded, Older::Layout(Family::Application), Older::Directory] {
+        let why = OpenRefusal::OlderBuild { why: older };
+        for store in ["/data/deployment", "/elsewhere/store"] {
+            let expected = format!("temper serve: {}\n", why.words().join(store));
+            let (line, code) = ending(
+                Some(&End::Stopped(Stop::StoreOpen { why: why.clone() })),
+                false,
+                &directories,
+                store.as_bytes(),
+            );
+            assert_eq!(line, expected);
+            assert!(line.contains("this start has changed nothing"));
+            assert!(line.contains("together"));
+            assert!(line.contains("every client signs in again"));
+            assert_eq!(code, 1);
+        }
     }
-    // Directory bytes follow the shell's existing Path::display convention.
-    let arguments =
-        [b"--config".as_slice(), b"/configuration", b"--data", b"/data/\xff", b"--cache", b"/cache"].map(Box::from);
-    let (directories, _) = crate::directories::resolve(&arguments, &[], b"/").expect("byte paths");
-    assert_eq!(
-        ending(Some(&End::Stopped(Stop::StoreVersion)), false, &directories, b"/data/\xff/store"),
-        ("temper serve: data directory /data/\u{fffd}: its store is at another version; move it aside\n".into(), 1)
-    );
 }
 
 #[test]

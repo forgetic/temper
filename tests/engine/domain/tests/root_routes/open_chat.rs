@@ -11,7 +11,7 @@ const DISCARDED_REPORT: &[u8] = b"This finish is not a result";
 const READ: Token = Token::new(1301);
 
 fn open_configuration(mut configuration: engine::Config) -> engine::Config {
-    configuration.core.settings.templates = fixtures::templates_ending(tasks::EndedBy::Requester);
+    configuration.core.defaults.templates = fixtures::templates_ending(tasks::EndedBy::Requester);
     configuration
 }
 

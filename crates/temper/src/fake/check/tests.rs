@@ -93,7 +93,10 @@ fn store() {
             "component",
             Copy::Store { format: Some(component), rows: Box::new([]) },
             page_rows,
-            Err("format check: Format { family: Component, found: 3, wanted: 2 }".to_owned()),
+            Err(format!(
+                "format check: Format {{ family: Component, found: {}, wanted: {} }}",
+                component.component, current.component,
+            )),
         ),
         ("tags", Copy::Store { format: Some(current), rows: mixed }, page_rows, Ok(rows(temper, None))),
         (

@@ -9,6 +9,9 @@ use temper_engine_domain as root;
 /// event on this boundary aborts the component instead of deciding root work.
 pub fn to_root(event: core::Event) -> Result<root::PartyInput, Box<kit::Event>> {
     let value = match event {
+        core::Event::ChangeSettings { reply_to, sign_in, key, digest, change } => {
+            root::PartyInput::ChangeSettings { reply_to, sign_in, key, digest, change }
+        }
         core::Event::SignIn { reply_to, identity, held } => root::PartyInput::SignedIn { reply_to, identity, held },
         core::Event::People(people::Event::Ask { reply_to, sign_in, key, ask, models }) => {
             root::PartyInput::Ask { reply_to, sign_in, key, ask, models }
@@ -32,7 +35,8 @@ pub fn to_root(event: core::Event) -> Result<root::PartyInput, Box<kit::Event>> 
         core::Event::Unwatch { watcher } => root::PartyInput::Unwatch { watcher },
         core::Event::Delivered { watcher } => root::PartyInput::Delivered { watcher },
         core::Event::StreamDelivered { watcher } => root::PartyInput::StreamDelivered { watcher },
-        core::Event::SubscribeTopic { .. }
+        core::Event::SettingsCommit { .. }
+        | core::Event::SubscribeTopic { .. }
         | core::Event::Fill { .. }
         | core::Event::Stopping
         | core::Event::Marked { .. }
@@ -156,6 +160,7 @@ pub fn not_ready(input: root::PartyInput) -> Option<kit::Event> {
         root::PartyInput::SignedIn { reply_to, .. }
         | root::PartyInput::SignOut { reply_to, .. }
         | root::PartyInput::Ask { reply_to, .. }
+        | root::PartyInput::ChangeSettings { reply_to, .. }
         | root::PartyInput::Key { reply_to, .. }
         | root::PartyInput::Application { reply_to, .. } => {
             Some(kit::Event::Reply { to: reply_to, reply: people::Reply::Again(people::Again::NotReady) })
@@ -172,5 +177,43 @@ pub fn not_ready(input: root::PartyInput) -> Option<kit::Event> {
         | root::PartyInput::StartRecurring { .. }
         | root::PartyInput::Period { .. }
         | root::PartyInput::ProcedureStep { .. } => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skein_lib::{ReplyTo, Token};
+
+    #[test]
+    fn an_owner_settings_request_crosses_the_clients_boundary() {
+        let event = core::Event::ChangeSettings {
+            reply_to: ReplyTo::new(Token::new(1)),
+            sign_in: 2,
+            key: [3; 16],
+            digest: [4; 32],
+            change: Box::new(core::settings::Change {
+                against: 5,
+                items: Box::new([]),
+                running: core::settings::Running::Stays,
+            }),
+        };
+        let input = to_root(event).expect("client settings request");
+        let root::PartyInput::ChangeSettings { sign_in, key, digest, change, .. } = &input else {
+            panic!("settings request")
+        };
+        assert_eq!((*sign_in, *key, *digest, change.against), (2, [3; 16], [4; 32], 5));
+        let Some(kit::Event::Reply { reply: people::Reply::Again(people::Again::NotReady), .. }) = not_ready(input)
+        else {
+            panic!("settings request must be retried until ready");
+        };
+    }
+
+    #[test]
+    fn a_client_cannot_send_the_internal_settings_commit() {
+        let Err(event) = to_root(core::Event::SettingsCommit { room: 1 }) else { panic!("internal commit admitted") };
+        let kit::Event::Abort = *event else {
+            panic!("internal settings commit must abort the client");
+        };
     }
 }

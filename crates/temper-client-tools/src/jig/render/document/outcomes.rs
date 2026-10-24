@@ -82,6 +82,21 @@ pub(super) fn encode_refusal(value: &jig_client::contract::Refusal, out: &mut En
             out.object_end();
             out.object_end();
         }
+        jig_client::contract::Refusal::SignInRedirect { why } => {
+            use jig_client::contract::SignInRedirectWhy;
+            out.object_start();
+            out.key(b"sign_in_redirect");
+            out.object_start();
+            out.key(b"why");
+            out.string(match why {
+                SignInRedirectWhy::NotWaiting => b"not_waiting",
+                SignInRedirectWhy::Address => b"address",
+                SignInRedirectWhy::State => b"state",
+                SignInRedirectWhy::TooMany => b"too_many",
+            });
+            out.object_end();
+            out.object_end();
+        }
         jig_client::contract::Refusal::NoEscalationHolder => out.string(b"no_escalation_holder"),
         jig_client::contract::Refusal::Malformed { at, why } => {
             out.object_start();

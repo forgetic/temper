@@ -313,6 +313,7 @@ impl Decision {
     pub fn write(&mut self, limits: &Limits, write: Write) -> Result<(), Write> {
         assert!(*limits == self.limits, "decision uses its configured limits");
         let within = match &write {
+            Write::CopySettingsRevision(number) => *number != 0,
             Write::Save(Record::Core(jig_domain_core::Record::Core(jig_domain_core::CoreRecord::Deployment(_))))
             | Write::Erase(Key::Core(jig_domain_core::Key::Core(
                 jig_domain_core::CoreKey::Deployment
@@ -331,7 +332,8 @@ impl Decision {
             Write::Erase(
                 Key::Core(
                     jig_domain_core::Key::Core(
-                        jig_domain_core::CoreKey::Call(_)
+                        jig_domain_core::CoreKey::Settings(_)
+                        | jig_domain_core::CoreKey::Call(_)
                         | jig_domain_core::CoreKey::Turn { .. }
                         | jig_domain_core::CoreKey::RunProof(..)
                         | jig_domain_core::CoreKey::Terminal { .. }
@@ -368,7 +370,8 @@ impl Decision {
                 Record::Core(
                     jig_domain_core::Record::Tasks(_)
                     | jig_domain_core::Record::Core(
-                        jig_domain_core::CoreRecord::Projection(_)
+                        jig_domain_core::CoreRecord::Settings(_)
+                        | jig_domain_core::CoreRecord::Projection(_)
                         | jig_domain_core::CoreRecord::RunProof(_)
                         | jig_domain_core::CoreRecord::Terminal(_),
                     )
@@ -753,7 +756,8 @@ fn fleet_delivery_within(event: &jig_domain_fleet::Event) -> bool {
         | Event::Acknowledge { .. }
         | Event::Cancel { .. }
         | Event::Relayed { .. } => true,
-        Event::CleanupPrograms { .. }
+        Event::Needs(_)
+        | Event::CleanupPrograms { .. }
         | Event::CheckProgram { .. }
         | Event::SignOutProgram { .. }
         | Event::Sources { .. }

@@ -363,6 +363,7 @@ pub fn engine(jig: &jig_protocol_config::Limits, limits: &Limits) -> Option<engi
         notes: jig.core.notes,
         documents: jig.core.documents,
         templates: jig.core.templates,
+        settings: jig.core.settings,
         call_records: jig.core.call_records,
         forge: limits.forge,
     };

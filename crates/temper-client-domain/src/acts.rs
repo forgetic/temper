@@ -190,6 +190,7 @@ fn send(pages: &mut Pages, open: Confirm, out: &mut Queue<Request>) {
             project,
             on: DecideOn::Proposal {
                 proposal,
+                running: None,
                 decision: if open.act == ActKind::Accept {
                     Decision::Accepted
                 } else {

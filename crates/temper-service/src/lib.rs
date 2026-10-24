@@ -53,8 +53,10 @@ pub enum Stop {
         number: u64,
     },
     Start(Problems),
-    /// The store uses another format version (jig's protocol/store.md, 5.3).
-    StoreVersion,
+    /// The store refuses this start (jig's protocol/store.md, 5.3 and 10).
+    StoreOpen {
+        why: jig_protocol_store::OpenRefusal,
+    },
     Listener,
     /// The webhooks listener failed.
     Hooks,
@@ -110,6 +112,12 @@ pub struct SetupStep {
 /// Operator diagnostics taken by the shell (protocol/forge.md, 2.3).
 #[derive(PartialEq, Eq, Debug)]
 pub enum Note {
+    /// One patch finished before the store opened (jig's protocol/store.md, 10.2).
+    Patched {
+        of: jig_protocol_store::Owner,
+        patch: u32,
+        counts: jig_protocol_store::Counts,
+    },
     /// A bounded diagnostic from the demo end (protocol/setup.md, 8.4).
     Demo {
         line: Box<[u8]>,

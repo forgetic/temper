@@ -111,6 +111,7 @@ pub fn limits() -> engine::Limits {
     };
     let deliveries = 20_u32.max(fleet::max_out(&fleet).checked_add(1).expect("fleet burst plus continuation"));
     let mut limits = engine::Limits {
+        settings: jig_domain_core::settings::Limits { history: 64, alternatives: 16, permissions: 32 },
         templates: 2,
         documents: jig_domain_core::documents::DocumentLimits {
             roles: 1,
@@ -243,7 +244,13 @@ pub fn config_with_project_room(seed: u64, projects: u32) -> engine::Config {
     };
     let mut policy_limits = authority_limits();
     policy_limits.projects = projects;
-    let domain = authority::Domain::new(rules, policy_limits).expect("valid authority configuration");
+    // Check the same fixture bounds without allocating a discarded live policy table.
+    assert!(
+        authority::max_out(&policy_limits).is_some()
+            && authority::worst_case(&policy_limits).is_some()
+            && authority::valid_rules(&rules, &policy_limits),
+        "valid authority configuration"
+    );
     let policy = authority::Policy {
         projections: ceiling.grants.clone(),
         escalation_role: Some(0),
@@ -271,12 +278,16 @@ pub fn config_with_project_room(seed: u64, projects: u32) -> engine::Config {
                 identity: people::IdentityKey { provider: 0, subject: 7_u64.to_be_bytes().into() },
             }]),
             grants: Box::new([]),
-            authority: domain,
+            defaults: jig_domain_core::settings::Defaults {
+                rules,
+                charters: Box::new([charter()]),
+                templates: Box::new([]),
+                policies: skein_lib::Map::with_capacity(authority_limits().projects),
+            },
             settings: jig_domain_core::Settings {
                 key_bytes: 256,
-                templates: Box::new([]),
+                redirect_bytes: 256,
                 deployment_provider: 1,
-                charters: Box::new([charter()]),
                 resume_bytes: 256,
                 tail_bytes: 2048,
                 tools: jig_domain_core::ToolFamilies::JIG,
@@ -301,7 +312,6 @@ pub fn config_with_project_room(seed: u64, projects: u32) -> engine::Config {
                     templates: Box::new([]),
                 },
             }]),
-            policies: skein_lib::Map::with_capacity(authority_limits().projects),
             // The forge is the deployment's one connector.
             connectors: Box::new([0]),
         },
@@ -512,6 +522,9 @@ pub fn root_with_config_and_limits(
         match request {
             jig_domain_core::RestartRequest::Step(step) => request = root.core.restart_done(step),
             jig_domain_core::RestartRequest::Idle => break,
+            jig_domain_core::RestartRequest::Settings { failure, changed } => {
+                panic!("fixture settings restore: {failure:?}, changed {changed}")
+            }
             jig_domain_core::RestartRequest::Refused { step } => panic!("fixture restore: {step:?}"),
         }
     }

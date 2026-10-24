@@ -70,7 +70,8 @@ pub(crate) fn input_loaded(
         Record::Core(jig_domain_core::Record::Tasks(tasks::Stored::Ended(row))) => row,
         Record::Core(
             jig_domain_core::Record::Core(
-                jig_domain_core::CoreRecord::Call(_)
+                jig_domain_core::CoreRecord::Settings(_)
+                | jig_domain_core::CoreRecord::Call(_)
                 | jig_domain_core::CoreRecord::Deployment(_)
                 | jig_domain_core::CoreRecord::EscalationDecision(_)
                 | jig_domain_core::CoreRecord::ProposalDecision(_)
@@ -160,7 +161,8 @@ pub(crate) fn note_loaded(
             }
             Record::Core(
                 jig_domain_core::Record::Core(
-                    jig_domain_core::CoreRecord::Call(_)
+                    jig_domain_core::CoreRecord::Settings(_)
+                    | jig_domain_core::CoreRecord::Call(_)
                     | jig_domain_core::CoreRecord::Deployment(_)
                     | jig_domain_core::CoreRecord::EscalationDecision(_)
                     | jig_domain_core::CoreRecord::ProposalDecision(_)
@@ -297,6 +299,7 @@ pub(crate) fn transcript_loaded(
             Record::Core(
                 jig_domain_core::Record::Core(
                     jig_domain_core::CoreRecord::ProposalDecision(_)
+                    | jig_domain_core::CoreRecord::Settings(_)
                     | jig_domain_core::CoreRecord::Call(_)
                     | jig_domain_core::CoreRecord::EscalationDecision(_)
                     | jig_domain_core::CoreRecord::Deployment(_)

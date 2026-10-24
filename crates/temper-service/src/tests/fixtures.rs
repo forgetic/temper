@@ -278,21 +278,51 @@ pub fn landed_row() -> temper_engine_domain_forge::Stored {
 }
 
 pub fn commit(store: &mut crate::store::Store, number: u64, writes: Box<[temper_engine_domain::Write]>) {
+    // Appending a fixture row must retain the real first-start counters, as well
+    // as its settings rows. Empty stores still receive the minimal test header.
+    let owner = Token::new(993);
+    store.ask(jig_protocol_store::Request::Get {
+        owner,
+        key: jig_protocol_store::Get::Jig(jig_domain_core::Key::Core(jig_domain_core::CoreKey::Deployment)),
+    });
+    let mut header = None;
+    for _ in 0..store.above.len() {
+        let event = store.above.pop().expect("store event");
+        if let jig_protocol_store::Event::Got { owner: found, .. } = &event
+            && *found == owner
+        {
+            let jig_protocol_store::Event::Got { row, .. } = event else { unreachable!("matched get") };
+            if let Some(jig_protocol_store::Row::Jig(jig_domain_core::Record::Core(
+                jig_domain_core::CoreRecord::Deployment(found),
+            ))) = row
+            {
+                header = Some(found);
+            }
+        } else {
+            store.above.push(event);
+        }
+    }
+    let number = match header {
+        Some(header) => number.max(header.commits.checked_add(1).unwrap()),
+        None => number,
+    };
+    let mut header = header.unwrap_or(jig_domain_core::Deployment {
+        id: [19; 16],
+        projects: 0,
+        tasks: 0,
+        people: 0,
+        sign_ins: 0,
+        messages: 0,
+        runs: 0,
+        calls: 0,
+        connector_rows: 0,
+        applications: 0,
+        commits: number,
+    });
+    header.commits = number;
     let mut all = skein_lib::List::with_capacity(u32::try_from(writes.len().checked_add(1).unwrap()).unwrap());
     all.push(temper_engine_domain::Write::Save(temper_engine_domain::Record::Core(jig_domain_core::Record::Core(
-        jig_domain_core::CoreRecord::Deployment(jig_domain_core::Deployment {
-            id: [19; 16],
-            projects: 0,
-            tasks: 0,
-            people: 0,
-            sign_ins: 0,
-            messages: 0,
-            runs: 0,
-            calls: 0,
-            connector_rows: 0,
-            applications: 0,
-            commits: number,
-        }),
+        jig_domain_core::CoreRecord::Deployment(header),
     ))))
     .unwrap();
     for write in writes {

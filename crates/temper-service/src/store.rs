@@ -78,6 +78,7 @@ pub fn limits(
         core: *core,
         store: kv,
         secrets: kv,
+        held: profile.held,
         journal: root::journal_limits(&root.journal),
         joins: profile.joins,
         queue: kv.queued,
@@ -105,6 +106,12 @@ impl Store {
             application,
             temper_protocol_store::bounds(&application.forge).expect("checked family bounds"),
         );
+        let mut drivers = [driver(limits, room), driver(limits, room), driver(limits, room)];
+        let [store, secrets, transcripts] = &mut drivers;
+        let seeded = protocol::seed(
+            [&mut store.io, &mut secrets.io, &mut transcripts.io],
+            u64::from_le_bytes(*installation.first_chunk::<8>().expect("installation seed")),
+        );
         Self {
             #[cfg(test)]
             forge_loads: skein_lib::List::with_capacity(128),
@@ -114,6 +121,7 @@ impl Store {
                 limits,
                 temper_protocol_store::application(&application.forge).expect("checked application sizes"),
                 models,
+                seeded,
             ),
             env: Env { now: Time::ZERO, wall: Wall::EPOCH, limits: *limits },
             routes,
@@ -126,7 +134,7 @@ impl Store {
                 secrets: Queue::with_capacity(room),
                 transcripts: Queue::with_capacity(room),
             },
-            drivers: [driver(limits, room), driver(limits, room), driver(limits, room)],
+            drivers,
             submitted: Queue::with_capacity(room),
             opened: false,
             installation,
@@ -183,7 +191,8 @@ impl Store {
             | protocol::Request::Load { .. }
             | protocol::Request::Read { .. }
             | protocol::Request::Get { .. }
-            | protocol::Request::Transcript { .. }) => {
+            | protocol::Request::Transcript { .. }
+            | protocol::Request::Site { .. }) => {
                 protocol::down(&mut self.component, &self.env, request, &mut self.above, &mut self.below);
             }
         }
@@ -215,6 +224,7 @@ impl Store {
             | protocol::Secrets::Keep { .. }
             | protocol::Secrets::Replace { .. }
             | protocol::Secrets::Erase { .. }
+            | protocol::Secrets::Hold { .. }
             | protocol::Secrets::Carry { .. } => false,
         };
         protocol::down(
@@ -510,6 +520,8 @@ fn idle_drivers(drivers: &[Driver; 3]) -> bool {
 
 pub(crate) fn worst_case(application: &root::Limits, limits: &protocol::Limits) -> Option<u64> {
     let room = root::max_out(application).max(protocol::MAX_OUT_DOWN).checked_mul(2)?;
+    // Queues and load flights price the same immutable payload envelope.
+    let payload = root::payload_worst_case(application)?;
     protocol::worst_case(limits)?
         .checked_add(u64::try_from(size_of::<Store>()).ok()?)?
         .checked_add(FileIo::worst_case(handles(limits), max_read(limits), 32, max_read(limits))?.checked_mul(3)?)?
@@ -519,7 +531,7 @@ pub(crate) fn worst_case(application: &root::Limits, limits: &protocol::Limits) 
         .checked_add(Queue::<Up>::worst_case(room)?)?
         .checked_add(Queue::<Submit>::worst_case(room)?)?
         .checked_add(Map::<Token, ()>::worst_case(handles(limits))?.checked_mul(3)?)?
-        .checked_add(route::worst_case(application, limits.store.key)?)?
+        .checked_add(route::worst_case(application, limits.store.key, payload)?)?
         .checked_add(u64::from(max_read(limits)).checked_mul(u64::from(room))?.checked_mul(6)?)?
-        .checked_add(root::payload_worst_case(application)?.checked_mul(u64::from(room))?)
+        .checked_add(payload.checked_mul(u64::from(room))?)
 }

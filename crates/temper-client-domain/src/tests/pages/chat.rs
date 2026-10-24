@@ -668,6 +668,7 @@ fn rejecting_a_proposal_in_place_is_said_before_it_is_sent() {
             project: fixtures::PROJECT,
             on: c::DecideOn::Proposal {
                 proposal: PROPOSAL,
+                running: None,
                 decision: c::Decision::Rejected { reason: fixtures::acts::text(b"Too costly") }
             }
         }]
